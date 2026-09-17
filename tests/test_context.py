@@ -1,6 +1,11 @@
 import json
+from io import StringIO
 from pathlib import Path
 
+import pytest
+
+from jev_reflex.adapters.generic import context_from_hook_payload, read_hook_payload
+from jev_reflex.config import ReflexConfig
 from jev_reflex.context import RepositoryContextProvider, bounded_text
 from jev_reflex.evaluator import compact_state
 from jev_reflex.models import EvaluationContext, ProposedAction
@@ -47,3 +52,19 @@ def test_compact_state_respects_total_size_limit() -> None:
     state = compact_state(context, 1_000)
     encoded = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
     assert len(encoded) <= 1_000
+
+
+def test_hook_payload_requires_a_nonempty_tool_call() -> None:
+    with pytest.raises(ValueError, match="tool name"):
+        context_from_hook_payload({}, config=ReflexConfig())
+    with pytest.raises(ValueError, match="tool arguments"):
+        context_from_hook_payload({"tool_name": "Bash", "tool_input": {}}, config=ReflexConfig())
+    with pytest.raises(ValueError, match="invalid command"):
+        context_from_hook_payload(
+            {"tool_name": "Bash", "tool_input": {"command": 123}}, config=ReflexConfig()
+        )
+
+
+def test_hook_payload_is_bounded_before_json_parsing() -> None:
+    with pytest.raises(ValueError, match="size limit"):
+        read_hook_payload(StringIO("x" * (1_048_576 + 1)))

@@ -5,12 +5,16 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from ..models import DeterministicFinding, EvaluationContext
 from .common import action_argv
 
-_URL_RE = re.compile(r"(?i)^(?:[a-z][a-z0-9+.-]*:)?//")
+# A leading ``//`` is an absolute POSIX path, not necessarily a URL. ``file://``
+# is also a local path form and must be canonicalized instead of skipped.
+_URL_RE = re.compile(r"(?i)^[a-z][a-z0-9+.-]*://")
 _PATHISH_RE = re.compile(r"(?:^~|^/|^\.\.?/|/|\\|\.{2}(?:$|/|\\))")
+_PATH_LITERAL_RE = re.compile(r"(?P<quote>['\"])(?P<value>[^'\"\r\n]+)(?P=quote)")
 _INPUT_PATH_KEYS = {
     "path",
     "file_path",
@@ -24,6 +28,18 @@ _INPUT_PATH_KEYS = {
     "destination",
     "output",
 }
+
+
+def _is_remote_url(value: str) -> bool:
+    return bool(_URL_RE.match(value)) and not value.lower().startswith("file://")
+
+
+def _embedded_path_literals(value: str) -> list[str]:
+    return [
+        match.group("value")
+        for match in _PATH_LITERAL_RE.finditer(value)
+        if _PATHISH_RE.search(match.group("value"))
+    ]
 
 
 def _clear() -> DeterministicFinding:
@@ -46,6 +62,11 @@ def _trigger(reason_code: str) -> DeterministicFinding:
 
 
 def _canonical(value: str, base: Path) -> Path:
+    parsed = urlparse(value)
+    if parsed.scheme.lower() == "file":
+        if parsed.netloc.lower() not in {"", "localhost"} or not parsed.path:
+            raise ValueError("non-local file URI")
+        value = unquote(parsed.path)
     path = Path(value).expanduser()
     if not path.is_absolute():
         path = base / path
@@ -75,11 +96,25 @@ def _candidate_paths(argv: list[str]) -> list[str]:
         "--git-dir",
         "-o",
         "--output",
+        "--rootdir",
+        "--confcutdir",
+        "--basetemp",
+        "--project",
+        "--prefix",
+        "--chdir",
+        "--workdir",
+        "--work-directory",
+        "--config-file",
+        "--output-dir",
+        "--cache-dir",
+        "--temp-dir",
     }
+    attached_path_value_flags = ("-C", "-o")
     for index, item in enumerate(argv[1:], start=1):
         if skip_next:
             skip_next = False
             continue
+        candidates.extend(_embedded_path_literals(item))
         if item in path_value_flags:
             if index + 1 < len(argv):
                 candidates.append(argv[index + 1])
@@ -88,10 +123,15 @@ def _candidate_paths(argv: list[str]) -> list[str]:
         if any(item.startswith(flag + "=") for flag in path_value_flags if flag.startswith("--")):
             candidates.append(item.split("=", 1)[1])
             continue
-        if item.startswith("-") or _URL_RE.match(item):
-            continue
-        if _PATHISH_RE.search(item):
-            candidates.append(item)
+        for flag in attached_path_value_flags:
+            if item.startswith(flag) and item != flag:
+                candidates.append(item[len(flag) :])
+                break
+        else:
+            if item.startswith("-") or _is_remote_url(item):
+                continue
+            if _PATHISH_RE.search(item):
+                candidates.append(item)
     return candidates
 
 
@@ -114,12 +154,15 @@ def _input_paths(value: object) -> list[str]:
 
 
 def evaluate(context: EvaluationContext) -> list[DeterministicFinding]:
-    working_directory = Path(context.working_directory or context.repository_root or ".").resolve(
-        strict=False
-    )
-    repository_root = Path(context.repository_root or context.working_directory or ".").resolve(
-        strict=False
-    )
+    try:
+        working_directory = Path(
+            context.working_directory or context.repository_root or "."
+        ).resolve(strict=False)
+        repository_root = Path(context.repository_root or context.working_directory or ".").resolve(
+            strict=False
+        )
+    except (OSError, RuntimeError):
+        return [_trigger("CWD_OUTSIDE_REPO")]
     if not _within(working_directory, repository_root):
         return [_trigger("CWD_OUTSIDE_REPO")]
 
@@ -128,8 +171,12 @@ def evaluate(context: EvaluationContext) -> list[DeterministicFinding]:
         *_input_paths(context.proposed_action.input),
     ]
     for value in candidates:
-        if _URL_RE.match(value):
+        if _is_remote_url(value):
             continue
-        if not _within(_canonical(value, working_directory), repository_root):
+        try:
+            canonical = _canonical(value, working_directory)
+        except (OSError, RuntimeError, ValueError):
+            return [_trigger("TARGET_OUTSIDE_REPO")]
+        if not _within(canonical, repository_root):
             return [_trigger("TARGET_OUTSIDE_REPO")]
     return [_clear()]

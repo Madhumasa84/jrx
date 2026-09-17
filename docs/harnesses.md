@@ -9,7 +9,7 @@ harness's native hook response.
 Install JEV Reflex in the environment that launches the harness:
 
 ```console
-$ pip install -e "[dev]"
+$ pip install -e ".[dev]"
 ```
 
 Use `advisory` while validating a setup. Use `review` to require an explicit

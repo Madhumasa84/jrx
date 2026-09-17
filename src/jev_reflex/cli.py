@@ -99,7 +99,7 @@ def benchmark_live(
         if summary["degraded_runs"]:
             typer.echo("Stopped on degraded evaluation; live benchmark is incomplete.", err=True)
             raise typer.Exit(2)
-    except (OSError, ValueError):
+    except (OSError, RuntimeError, ValueError):
         typer.echo("Benchmark input/output error; check case names and output path.", err=True)
         raise typer.Exit(2) from None
 
@@ -297,7 +297,7 @@ def check(
         )
     except typer.BadParameter:
         raise
-    except (OSError, ValueError):
+    except (OSError, RuntimeError, ValueError):
         if json_output:
             typer.echo(
                 json.dumps({"decision": "REVIEW", "error": "invalid input or configuration"})
@@ -377,7 +377,7 @@ def exec_action(
         )
     except typer.BadParameter:
         raise
-    except (OSError, ValueError):
+    except (OSError, RuntimeError, ValueError):
         typer.echo("Configuration, input, or command error. No action was executed.", err=True)
         raise typer.Exit(code=2) from None
 
@@ -448,7 +448,7 @@ def compare(
         )
     except typer.BadParameter:
         raise
-    except (OSError, ValueError):
+    except (OSError, RuntimeError, ValueError):
         if json_output:
             typer.echo(
                 json.dumps({"decision": "REVIEW", "error": "invalid input or configuration"})
@@ -504,7 +504,7 @@ def stability(
         report = StabilityRunner(evaluate_once, single_config).run(context, runs)
     except typer.BadParameter:
         raise
-    except (OSError, ValueError):
+    except (OSError, RuntimeError, ValueError):
         if json_output:
             typer.echo(json.dumps({"runs": runs, "error": "invalid input or configuration"}))
         else:
@@ -578,7 +578,7 @@ def benchmark_stability(
                     "report": report.to_dict(),
                 }
             )
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
         if json_output:
             typer.echo(json.dumps({"error": "invalid benchmark configuration or case"}))
         else:

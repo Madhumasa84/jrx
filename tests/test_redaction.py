@@ -1,5 +1,5 @@
 from jev_reflex.models import EvaluationResult, RiskInfo
-from jev_reflex.redaction import REDACTED_SECRET, redact_obj, redact_text
+from jev_reflex.redaction import REDACTED_SECRET, redact_argv, redact_obj, redact_text
 
 
 def test_common_secret_patterns_are_redacted() -> None:
@@ -43,6 +43,23 @@ def test_quoted_authorization_headers_keep_shell_boundaries() -> None:
     assert (
         redact_text(value) == "curl -H 'Authorization: <REDACTED_SECRET>' https://example.invalid"
     )
+
+
+def test_common_credential_flags_and_url_keys_are_redacted() -> None:
+    secret = "super-secret-basic-auth"
+    values = [
+        f"curl --user user:{secret} https://example.invalid",
+        f"curl -u user:{secret} https://example.invalid",
+        f"curl -uuser:{secret} https://example.invalid",
+        f"aws --secret-access-key {secret} s3 ls",
+        f"curl https://example.invalid/?key={secret}",
+    ]
+    for value in values:
+        result = redact_text(value)
+        assert secret not in result
+        assert REDACTED_SECRET in result
+
+    assert secret not in str(redact_argv(["curl", "--user", f"user:{secret}", "x"]))
 
 
 def test_authorization_schemes_and_camel_case_secret_keys_are_redacted() -> None:

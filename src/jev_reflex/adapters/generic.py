@@ -11,6 +11,8 @@ from ..config import ReflexConfig
 from ..context import ContextProvider, RepositoryContextProvider
 from ..models import EvaluationContext, EvaluationResult, ProposedAction
 
+MAX_HOOK_CHARS = 1_048_576
+
 
 class Adapter(Protocol):
     """Stable contract for translating a host event into a JEV result."""
@@ -28,7 +30,9 @@ def read_hook_payload(stream: TextIO | None = None) -> dict[str, Any]:
     """Read one JSON hook event without passing the raw payload onward."""
 
     source = stream or sys.stdin
-    raw = source.read()
+    raw = source.read(MAX_HOOK_CHARS + 1)
+    if len(raw) > MAX_HOOK_CHARS:
+        raise ValueError("hook input exceeds the size limit")
     payload = json.loads(raw)
     if not isinstance(payload, dict):
         raise ValueError("hook input must be a JSON object")
@@ -71,6 +75,9 @@ def _tool_call(payload: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
 
     name = _text(payload, "tool_name", "toolName", "name")
     return name, _arguments(payload, "tool_input", "toolInput", "input", "args")
+
+
+_COMMAND_FIELDS = ("command", "CommandLine", "commandLine", "cmd", "script")
 
 
 def _workspace_cwd(payload: Mapping[str, Any], tool_input: Mapping[str, Any]) -> str:
@@ -130,16 +137,25 @@ def context_from_hook_payload(
     """
 
     tool_name, tool_input = _tool_call(payload)
-    tool_name = tool_name or "tool_call"
-    command = _text(
-        tool_input,
-        "command",
-        "CommandLine",
-        "commandLine",
-        "cmd",
-        "script",
-    )
-    is_shell = isinstance(command, str)
+    if not tool_name.strip():
+        raise ValueError("hook input is missing a tool name")
+    if not tool_input or not any(
+        value is not None
+        and (not isinstance(value, str) or bool(value.strip()))
+        and (not isinstance(value, Mapping) or bool(value))
+        and (not isinstance(value, Sequence) or isinstance(value, str | bytes) or bool(value))
+        for value in tool_input.values()
+    ):
+        raise ValueError("hook input is missing tool arguments")
+    command = ""
+    for name in _COMMAND_FIELDS:
+        if name in tool_input:
+            value = tool_input[name]
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("hook input contains an invalid command")
+            command = value
+            break
+    is_shell = bool(command.strip())
     action = ProposedAction(
         type="shell_command" if is_shell else "tool_call",
         command=command if is_shell else None,

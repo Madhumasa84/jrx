@@ -41,10 +41,20 @@ _SECRET_ASSIGNMENT_RE = re.compile(
     r")\b\s*(?:=|:)\s*)"
     r"(?P<value>\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;}\"']*)"
 )
-_URL_SECRET_RE = re.compile(r"(?i)([?&](?:token|secret|api[_-]?key|password|access_token)=)[^&\s]+")
 _SECRET_FLAG_RE = re.compile(
-    r"(?i)(--?(?:password|passwd|passphrase|secret|token|api[_-]?key|access[_-]?token|"
-    r"private[_-]?key|authorization))(?:=|\s+)(\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;}]*)"
+    r"(?ix)(?P<flag>(?<!\S)--?"
+    r"(?:[a-z0-9]+[_-])*(?:password|passwd|passphrase|secret|token|api[_-]?key|"
+    r"access[_-]?token|private[_-]?key|authorization)(?:[_-][a-z0-9]+)*"
+    r")(?:=|\s+)(?P<value>\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;}]*)"
+)
+_USERPASS_FLAG_RE = re.compile(
+    r"(?ix)(?P<flag>(?<!\S)--?user(?:name)?|-u)(?:=|\s+)"
+    r"(?P<value>\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;}]*)"
+)
+_USERPASS_ATTACHED_RE = re.compile(r"(?i)(?P<flag>(?<!\S)-u)(?P<value>[^\s,;}]+)")
+_URL_SECRET_RE = re.compile(
+    r"(?i)([?&](?:token|secret|api[_-]?key|password|access[_-]?token|"
+    r"client[_-]?secret|private[_-]?key|auth|key)=)[^&\s]+"
 )
 
 
@@ -63,14 +73,14 @@ def _redact_assignment(match: re.Match[str]) -> str:
 
 
 def _redact_flag(match: re.Match[str]) -> str:
-    value = match.group(2)
+    value = match.group("value")
     if value.startswith("$") and len(value) > 1:
-        return f"{match.group(1)} {value}"
+        return f"{match.group('flag')} {value}"
     if value.startswith('"') and value.endswith('"'):
-        return f'{match.group(1)} "{REDACTED_SECRET}"'
+        return f'{match.group("flag")} "{REDACTED_SECRET}"'
     if value.startswith("'") and value.endswith("'"):
-        return f"{match.group(1)} '{REDACTED_SECRET}'"
-    return f"{match.group(1)} {REDACTED_SECRET}"
+        return f"{match.group('flag')} '{REDACTED_SECRET}'"
+    return f"{match.group('flag')} {REDACTED_SECRET}"
 
 
 def _redact_auth_header(match: re.Match[str]) -> str:
@@ -91,6 +101,8 @@ def redact_text(value: str | None) -> str:
     redacted = _KNOWN_TOKEN_RE.sub(REDACTED_SECRET, redacted)
     redacted = _SECRET_ASSIGNMENT_RE.sub(_redact_assignment, redacted)
     redacted = _SECRET_FLAG_RE.sub(_redact_flag, redacted)
+    redacted = _USERPASS_FLAG_RE.sub(_redact_flag, redacted)
+    redacted = _USERPASS_ATTACHED_RE.sub(_redact_flag, redacted)
     redacted = _URL_SECRET_RE.sub(rf"\1{REDACTED_SECRET}", redacted)
     return redacted
 
@@ -140,9 +152,10 @@ def redact_argv(argv: Sequence[str]) -> list[str]:
             awaiting_secret = False
             continue
         if re.fullmatch(
-            r"(?i)--?(?:password|passwd|passphrase|secret|token|api[_-]?key|access[_-]?token|private[_-]?key|authorization)",
+            r"(?i)--?(?:[a-z0-9]+[_-])*(?:password|passwd|passphrase|secret|token|api[_-]?key|"
+            r"access[_-]?token|private[_-]?key|authorization)(?:[_-][a-z0-9]+)*",
             text,
-        ):
+        ) or re.fullmatch(r"(?i)--?user(?:name)?|-u", text):
             result.append(text)
             awaiting_secret = True
             continue

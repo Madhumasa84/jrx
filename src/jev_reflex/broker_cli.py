@@ -51,7 +51,7 @@ def run(config: Path | None = None, socket: Path | None = None) -> None:
         loaded = configuration(config, socket)
         typer.echo(f"JEV Reflex Broker\nTransport: unix socket\nSocket: {socket_path(loaded)}")
         asyncio.run(BrokerServer(loaded).run())
-    except (OSError, ValueError):
+    except (OSError, RuntimeError, ValueError):
         typer.echo(
             "Broker could not start; check directory permissions and existing listener.", err=True
         )
@@ -100,7 +100,7 @@ def start(config: Path | None = None, socket: Path | None = None) -> None:
         if process.poll() is None:
             process.terminate()
             process.wait(timeout=2)
-    except (OSError, ValueError, subprocess.TimeoutExpired):
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired):
         pass
     typer.echo("Broker startup failed; use broker run for diagnostics.", err=True)
     raise typer.Exit(2)
@@ -117,6 +117,6 @@ def stop(config: Path | None = None, socket: Path | None = None) -> None:
         if response.get("status") != "ok":
             raise ValueError
         typer.echo("Broker stop requested.")
-    except (OSError, ValueError):
+    except (OSError, RuntimeError, ValueError):
         typer.echo("Broker stop failed.", err=True)
         raise typer.Exit(2) from None

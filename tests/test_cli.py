@@ -64,6 +64,17 @@ def test_enforce_exec_does_not_run_hold_action(tmp_path: Path) -> None:
     assert target.exists()
 
 
+def test_check_symlink_loop_fails_safely(tmp_path: Path) -> None:
+    (tmp_path / "a").symlink_to(tmp_path / "b")
+    (tmp_path / "b").symlink_to(tmp_path / "a")
+    result = runner.invoke(
+        app,
+        ["check", "--no-jev", "--cwd", str(tmp_path / "a"), "--command", "git status", "--json"],
+    )
+    assert result.exit_code == 2
+    assert json.loads(result.stdout)["decision"] == "REVIEW"
+
+
 def test_exec_preserves_argv_without_double_shell_parsing(tmp_path: Path) -> None:
     marker = tmp_path / "marker.txt"
     code = "import pathlib; pathlib.Path('marker.txt').write_text('ok')"
