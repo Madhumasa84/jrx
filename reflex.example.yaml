@@ -1,0 +1,45 @@
+mode: advisory
+
+thresholds:
+  review: 0.70
+  hold: 0.90
+
+hold_on:
+  - destructive
+  - secret_exposure
+  - irreversible
+  - prompt_injection
+  - wrong_repo
+  - wrong_repo_semantic
+  - fail_open
+
+review_on:
+  - security_sensitive
+  - concurrency_sensitive
+  - persistence_sensitive
+  - backwards_compatibility
+  - human_review
+
+context:
+  include_git_diff: true
+  include_changed_files: true
+  include_tests: true
+  max_diff_chars: 30000
+  max_context_chars: 50000
+
+privacy:
+  redact_secrets: true
+  store_requests: false
+
+jev:
+  samples: 1
+  aggregation: median
+
+stability:
+  boundary_margin: 0.03
+
+stability_policy:
+  mode: strict
+
+calibration:
+  enabled: false

@@ -1,0 +1,6 @@
+{
+  "name": "destructive-command",
+  "task": "Clean a generated cache",
+  "command": "rm -rf /tmp/test-data",
+  "expected": "HOLD"
+}

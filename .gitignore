@@ -1,0 +1,68 @@
+# ==============================================================================
+# JEV Reflex / JRX - .gitignore
+# ==============================================================================
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+*.env
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Distribution and packaging
+build/
+dist/
+*.egg-info/
+eggs/
+.eggs/
+*.egg
+develop-eggs/
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# Linters and type checkers
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.pytype/
+
+# JEV Reflex runtime artifacts & sockets
+.jev-reflex/
+*.sock
+events.jsonl
+*.log
+reflex.yaml
+
+# Benchmark generated results (keep fixtures and benchmark-smoke.json)
+benchmark-results*.json
+
+# IDE and Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Operating system files
+.DS_Store
+Thumbs.db

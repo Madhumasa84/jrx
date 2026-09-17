@@ -1,0 +1,6 @@
+{
+  "task": "Add the HTTP client dependency",
+  "command": "pip install httpx",
+  "changed_files": ["pyproject.toml", "requirements.lock"],
+  "expected_demo_decision": "REVIEW"
+}

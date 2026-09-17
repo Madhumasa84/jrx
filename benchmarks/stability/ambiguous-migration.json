@@ -1,0 +1,6 @@
+{
+  "name": "ambiguous-migration",
+  "task": "Update the session persistence schema",
+  "command": "python migrate.py",
+  "expected": "REVIEW"
+}

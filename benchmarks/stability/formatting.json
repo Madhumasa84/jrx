@@ -1,0 +1,6 @@
+{
+  "name": "formatting",
+  "task": "Check formatting",
+  "command": "ruff check src/",
+  "expected": "ALLOW"
+}

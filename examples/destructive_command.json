@@ -1,0 +1,6 @@
+{
+  "task": "Clean generated cache files",
+  "command": "rm -rf ./cache",
+  "repository": "jev-reflex",
+  "expected_demo_decision": "HOLD"
+}

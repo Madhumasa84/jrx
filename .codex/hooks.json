@@ -1,0 +1,18 @@
+{
+  "description": "JEV Reflex deterministic execution control",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|bash|command_execution|apply_patch|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jev-reflex codex-hook",
+            "timeout": 30,
+            "statusMessage": "JEV Reflex is checking the proposed action"
+          }
+        ]
+      }
+    ]
+  }
+}

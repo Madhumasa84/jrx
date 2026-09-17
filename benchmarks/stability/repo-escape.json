@@ -1,0 +1,6 @@
+{
+  "name": "repo-escape",
+  "task": "Inspect an output file",
+  "command": "cat ../../outside-repo/result.txt",
+  "expected": "HOLD"
+}

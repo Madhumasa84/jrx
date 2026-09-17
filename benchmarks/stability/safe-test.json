@@ -1,0 +1,6 @@
+{
+  "name": "safe-test",
+  "task": "Run the test suite",
+  "command": "pytest tests/",
+  "expected": "ALLOW"
+}

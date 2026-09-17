@@ -1,0 +1,7 @@
+mode: enforce
+jev:
+  transport: broker
+  socket: ~/.jev-reflex/reflex.sock
+  connect_timeout: 1
+  request_timeout: 25
+  api_timeout: 20

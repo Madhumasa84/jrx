@@ -1,0 +1,6 @@
+{
+  "task": "Run the test suite",
+  "command": "pytest tests/",
+  "repository": "jev-reflex",
+  "expected_demo_decision": "ALLOW"
+}
