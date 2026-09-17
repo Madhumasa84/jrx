@@ -1,0 +1,16 @@
+{
+  "jev-reflex": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jev-reflex antigravity-hook",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

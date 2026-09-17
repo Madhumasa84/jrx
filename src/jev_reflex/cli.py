@@ -11,6 +11,7 @@ from typing import Any
 
 import typer
 
+from .adapters.antigravity import antigravity_hook_error, evaluate_antigravity_hook
 from .adapters.claude_code import (
     _hook_error as claude_hook_error,
 )
@@ -19,7 +20,10 @@ from .adapters.claude_code import (
 )
 from .adapters.codex import _hook_error as codex_hook_error
 from .adapters.codex import evaluate_codex_hook
+from .adapters.deepseek import deepseek_hook_error, evaluate_deepseek_hook
 from .adapters.generic import read_hook_payload
+from .adapters.openrouter import evaluate_openrouter_hook, openrouter_hook_error
+from .adapters.pi import evaluate_pi_hook, pi_hook_error
 from .broker_cli import app as broker_app
 from .calibration import CalibrationStore
 from .config import JEVConfig, Mode, ReflexConfig, load_config
@@ -643,12 +647,27 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
         loaded = _load(config_path, mode)
         if kind == "codex":
             _result, output = evaluate_codex_hook(payload, config=loaded, demo=demo)
-        else:
+        elif kind == "claude":
             _result, output = evaluate_claude_code_hook(payload, config=loaded, demo=demo)
+        elif kind == "antigravity":
+            _result, output = evaluate_antigravity_hook(payload, config=loaded, demo=demo)
+        elif kind == "openrouter":
+            _result, output = evaluate_openrouter_hook(payload, config=loaded, demo=demo)
+        elif kind == "pi":
+            _result, output = evaluate_pi_hook(payload, config=loaded, demo=demo)
+        else:
+            _result, output = evaluate_deepseek_hook(payload, config=loaded, demo=demo)
     except Exception:
         # Hook hosts differ in how they treat non-zero hook exits. A valid deny response
         # is the most portable fail-safe for malformed input/configuration.
-        output = codex_hook_error() if kind == "codex" else claude_hook_error()
+        output = {
+            "codex": codex_hook_error,
+            "claude": claude_hook_error,
+            "antigravity": antigravity_hook_error,
+            "openrouter": openrouter_hook_error,
+            "pi": pi_hook_error,
+            "deepseek": deepseek_hook_error,
+        }[kind]()
     typer.echo(json.dumps(output, separators=(",", ":")))
 
 
@@ -672,6 +691,50 @@ def claude_code_hook(
     """Handle a Claude Code native PreToolUse event from JSON stdin."""
 
     _run_hook("claude", config, mode, demo)
+
+
+@app.command("antigravity-hook")
+def antigravity_hook(
+    config: Path | None = typer.Option(None, "--config", help="Path to reflex.yaml."),
+    mode: str | None = typer.Option(None, "--mode", help="Override mode."),
+    demo: bool = typer.Option(False, "--demo"),
+) -> None:
+    """Handle an Antigravity native PreToolUse event from JSON stdin."""
+
+    _run_hook("antigravity", config, mode, demo)
+
+
+@app.command("openrouter-hook")
+def openrouter_hook(
+    config: Path | None = typer.Option(None, "--config", help="Path to reflex.yaml."),
+    mode: str | None = typer.Option(None, "--mode", help="Override mode."),
+    demo: bool = typer.Option(False, "--demo"),
+) -> None:
+    """Handle an OpenRouter Agent SDK lifecycle event from JSON stdin."""
+
+    _run_hook("openrouter", config, mode, demo)
+
+
+@app.command("pi-hook")
+def pi_hook(
+    config: Path | None = typer.Option(None, "--config", help="Path to reflex.yaml."),
+    mode: str | None = typer.Option(None, "--mode", help="Override mode."),
+    demo: bool = typer.Option(False, "--demo"),
+) -> None:
+    """Handle a Pi tool_call extension event from JSON stdin."""
+
+    _run_hook("pi", config, mode, demo)
+
+
+@app.command("deepseek-hook")
+def deepseek_hook(
+    config: Path | None = typer.Option(None, "--config", help="Path to reflex.yaml."),
+    mode: str | None = typer.Option(None, "--mode", help="Override mode."),
+    demo: bool = typer.Option(False, "--demo"),
+) -> None:
+    """Handle a DeepSeek Harness Codex-bridge event from JSON stdin."""
+
+    _run_hook("deepseek", config, mode, demo)
 
 
 @app.command()

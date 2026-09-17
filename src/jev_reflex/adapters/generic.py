@@ -43,6 +43,70 @@ def _text(payload: Mapping[str, Any], *names: str) -> str:
     return ""
 
 
+def _mapping(payload: Mapping[str, Any], *names: str) -> Mapping[str, Any] | None:
+    for name in names:
+        value = payload.get(name)
+        if isinstance(value, Mapping):
+            return value
+    return None
+
+
+def _arguments(payload: Mapping[str, Any], *names: str) -> Mapping[str, Any]:
+    for name in names:
+        value = payload.get(name)
+        if isinstance(value, Mapping):
+            return value
+        if value is not None:
+            return {"value": value}
+    return {}
+
+
+def _tool_call(payload: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
+    """Extract tool name and arguments from the common harness payload shapes."""
+
+    nested = _mapping(payload, "toolCall", "tool_call", "tool")
+    if nested is not None:
+        name = _text(nested, "name", "tool_name", "toolName")
+        return name, _arguments(nested, "args", "input", "tool_input", "toolInput")
+
+    name = _text(payload, "tool_name", "toolName", "name")
+    return name, _arguments(payload, "tool_input", "toolInput", "input", "args")
+
+
+def _workspace_cwd(payload: Mapping[str, Any], tool_input: Mapping[str, Any]) -> str:
+    value = _text(
+        payload,
+        "cwd",
+        "working_directory",
+        "workingDirectory",
+    ) or _text(tool_input, "Cwd", "cwd", "working_directory", "workingDirectory")
+    if value:
+        return value
+
+    workspace_paths = payload.get("workspacePaths")
+    if isinstance(workspace_paths, Sequence) and not isinstance(workspace_paths, str | bytes):
+        for item in workspace_paths:
+            if isinstance(item, str) and item:
+                return item
+    return ""
+
+
+def _task_text(payload: Mapping[str, Any]) -> str:
+    return _text(
+        payload,
+        "user_task",
+        "original_task",
+        "task",
+        "user_prompt",
+        "userPrompt",
+        "prompt",
+    )
+
+
+def _context_text(payload: Mapping[str, Any], *names: str) -> str:
+    return _text(payload, *names)
+
+
 def _changed_files(payload: Mapping[str, Any]) -> list[str] | None:
     for name in ("changed_files", "changedFiles"):
         value = payload.get(name)
@@ -57,14 +121,25 @@ def context_from_hook_payload(
     config: ReflexConfig,
     provider: ContextProvider | None = None,
 ) -> EvaluationContext:
-    """Convert Codex/Claude's common PreToolUse shape into the public context contract."""
+    """Convert native agent hook payloads into the public context contract.
 
-    tool_name = _text(payload, "tool_name") or "tool_call"
-    tool_input = payload.get("tool_input")
-    if not isinstance(tool_input, Mapping):
-        tool_input = {} if tool_input is None else {"value": tool_input}
-    command = tool_input.get("command")
-    is_shell = tool_name in {"Bash", "PowerShell", "Shell", "shell"} and isinstance(command, str)
+    Codex and Claude Code use snake_case fields. Antigravity uses a nested
+    ``toolCall`` object with camelCase arguments, while OpenRouter and Pi use
+    camelCase tool fields. Keeping normalization here lets every adapter share
+    the same bounded context and deterministic checks.
+    """
+
+    tool_name, tool_input = _tool_call(payload)
+    tool_name = tool_name or "tool_call"
+    command = _text(
+        tool_input,
+        "command",
+        "CommandLine",
+        "commandLine",
+        "cmd",
+        "script",
+    )
+    is_shell = isinstance(command, str)
     action = ProposedAction(
         type="shell_command" if is_shell else "tool_call",
         command=command if is_shell else None,
@@ -74,7 +149,7 @@ def context_from_hook_payload(
         else None,
     )
     context_provider = provider or RepositoryContextProvider(
-        cwd=_path_or_none(_text(payload, "cwd", "working_directory")),
+        cwd=_path_or_none(_workspace_cwd(payload, tool_input)),
         include_git_diff=config.context.include_git_diff,
         include_changed_files=config.context.include_changed_files,
         include_tests=config.context.include_tests,
@@ -82,11 +157,15 @@ def context_from_hook_payload(
         max_context_chars=config.context.max_context_chars,
     )
     return context_provider.build(
-        user_task=_text(payload, "user_task", "original_task", "task", "user_prompt", "prompt"),
+        user_task=_task_text(payload),
         proposed_action=action,
-        recent_context=_text(payload, "recent_context", "recent_agent_context"),
-        external_content=_text(payload, "external_content", "retrieved_content"),
-        test_results=_text(payload, "test_results"),
+        recent_context=_context_text(
+            payload, "recent_context", "recent_agent_context", "recentContext"
+        ),
+        external_content=_context_text(
+            payload, "external_content", "retrieved_content", "retrievedContent"
+        ),
+        test_results=_context_text(payload, "test_results", "testResults"),
         changed_files=_changed_files(payload),
     )
 

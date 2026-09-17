@@ -162,7 +162,8 @@ The stable public contract is the JSON CLI:
 $ jev-reflex check --json --command "..."
 ```
 
-`exec`, Codex, and Claude Code adapters translate host actions into the same
-context/result types. The contracts are intentionally reusable for future MCP
-firewalls, research agents, browser agents, and CI/PR gates. The first product
-stays focused on coding-agent execution control.
+`exec`, Codex, Claude Code, Antigravity, OpenRouter, Pi, and DeepSeek Harness
+adapters translate host actions into the same context/result types. The
+contracts are intentionally reusable for future MCP firewalls, research
+agents, browser agents, and CI/PR gates. The first product stays focused on
+coding-agent execution control.

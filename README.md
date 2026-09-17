@@ -7,7 +7,9 @@
 
 > **Probabilistic judgment. Deterministic enforcement.**
 
-Deterministic execution control for autonomous coding agents (Codex CLI, Claude Code, and custom terminal agents).
+Deterministic execution control for autonomous coding agents (Codex CLI,
+Claude Code, Antigravity, OpenRouter Agent SDK, Pi, DeepSeek Harness, and
+custom terminal agents).
 
 ---
 
@@ -23,7 +25,7 @@ Coding agents are probabilistic. Semantic models are probabilistic too. **JEV Re
 ### The Solution: Hybrid Deterministic Enforcement
 ```mermaid
 flowchart TD
-    A["Autonomous Agent<br/>(Codex / Claude Code / Custom)"] --> B["Proposed Action<br/>(command, args, diff, context)"]
+    A["Autonomous Agent<br/>(Codex / Claude / Antigravity / OpenRouter / Pi / DSH)"] --> B["Proposed Action<br/>(command, args, diff, context)"]
     B --> C["JEV Reflex Gateway"]
     
     subgraph C ["JEV Reflex Gateway"]
@@ -284,6 +286,23 @@ Any terminal-based agent can incorporate execution control via:
 jrx exec --mode enforce -- <command>
 ```
 Or query policy as JSON via `jrx check --json --command "..."`. See [examples/AGENTS.md](examples/AGENTS.md).
+
+### Antigravity, OpenRouter, Pi, and DeepSeek Harness
+
+Native integrations are available for the other common harness surfaces:
+
+| Harness | Integration | Native entry point |
+| :--- | :--- | :--- |
+| Antigravity | `.agents/hooks.json` command hook | `jev-reflex antigravity-hook` |
+| OpenRouter Agent SDK | Python lifecycle hooks | `evaluate_openrouter_hook(...)` |
+| Pi | TypeScript `tool_call` extension | `jev-reflex pi-hook` |
+| DeepSeek Harness | Codex hook bridge | `jev-reflex deepseek-hook` |
+
+See [docs/harnesses.md](docs/harnesses.md) and the ready-to-copy files in
+[`examples/antigravity`](examples/antigravity), [`examples/openrouter`](examples/openrouter),
+[`examples/pi`](examples/pi), and [`examples/deepseek`](examples/deepseek). Each adapter preserves the same
+`advisory`, `review`, and `enforce` semantics; the host harness remains the
+owner of model authentication and its normal sandbox controls.
 
 ---
 
