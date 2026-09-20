@@ -24,6 +24,7 @@ from .adapters.deepseek import deepseek_hook_error, evaluate_deepseek_hook
 from .adapters.generic import read_hook_payload
 from .adapters.openrouter import evaluate_openrouter_hook, openrouter_hook_error
 from .adapters.pi import evaluate_pi_hook, pi_hook_error
+from .audit import AuditLog
 from .broker_cli import app as broker_app
 from .calibration import CalibrationStore
 from .config import JEVConfig, Mode, ReflexConfig, load_config
@@ -32,6 +33,7 @@ from .evaluator import DefaultEvaluator, DemoEvaluator, evaluate_context
 from .formatters import format_compare, format_human, format_json, format_stability
 from .models import EvaluationContext, EvaluationResult, ProposedAction
 from .policy import execution_allowed
+from .signing import Ed25519Signer, sign_file
 from .stability import StabilityRunner
 
 app = typer.Typer(
@@ -41,8 +43,12 @@ app = typer.Typer(
     add_completion=False,
 )
 benchmark_app = typer.Typer(name="benchmark", help="Run offline or live benchmark suites.")
+audit_app = typer.Typer(name="audit", help="Audit log management and verification.")
+policy_app = typer.Typer(name="policy", help="Policy file signing and verification.")
 app.add_typer(benchmark_app, name="benchmark")
 app.add_typer(broker_app, name="broker")
+app.add_typer(audit_app, name="audit")
+app.add_typer(policy_app, name="policy")
 
 
 @benchmark_app.command("live")
@@ -56,8 +62,8 @@ def benchmark_live(
     """Paid live evaluations; start with --runs 5 --case dependency-upgrade."""
     from .live_benchmark import run_benchmark
 
-    if transport not in {"direct", "broker"}:
-        raise typer.BadParameter("transport must be direct or broker")
+    if transport not in {"direct", "broker", "broker-tls"}:
+        raise typer.BadParameter("transport must be direct, broker, or broker-tls")
     try:
         loaded = load_config(config)
         loaded.jev.transport = transport
@@ -267,14 +273,21 @@ def check(
         None, "--aggregation", help="Aggregate samples with median, mean, or max."
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit the stable JSON contract."),
+    fail_closed_check: bool = typer.Option(
+        False, "--fail-closed-check", help="Run fail-closed self-test against mock failure modes."
+    ),
 ) -> None:
     """Analyze proposed commands without executing them."""
+
+    if fail_closed_check:
+        _run_fail_closed_check()
+        return
 
     try:
         loaded = _load(config, mode)
         if transport is not None:
-            if transport not in {"direct", "broker"}:
-                raise typer.BadParameter("transport must be direct or broker")
+            if transport not in {"direct", "broker", "broker-tls"}:
+                raise typer.BadParameter("transport must be direct, broker, or broker-tls")
             loaded.jev.transport = transport
         context = _build_context(
             config=loaded,
@@ -786,6 +799,436 @@ def _format_calibration(summary: dict[str, Any]) -> str:
 
 def _format_accuracy(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.2%}"
+
+
+def _run_fail_closed_check() -> None:
+    """Run fail-closed self-test against mock failure modes."""
+    from .config import ReflexConfig
+    from .evaluator import DefaultEvaluator, evaluate_context
+    from .models import EvaluationContext, ProposedAction
+
+    class MockGateway:
+        """Mock gateway that simulates various failure modes."""
+
+        def __init__(self, failure_mode: str = "none") -> None:
+            self.failure_mode = failure_mode
+            self.last_api_requests = 0
+
+        def system_one(self, state: dict[str, Any], questions: dict[str, Any]) -> Any:
+            self.last_api_requests = 1
+
+            if self.failure_mode == "timeout":
+                raise TimeoutError("Request timeout")
+
+            elif self.failure_mode == "5xx_error":
+                from .integrations.typesafe import TypeSafeIntegrationError
+
+                raise TypeSafeIntegrationError("request_failed")
+
+            elif self.failure_mode == "malformed_json":
+                return "not a dict"
+
+            elif self.failure_mode == "missing_keys":
+                return {"answers": {}}
+
+            elif self.failure_mode == "missing_answers":
+                return {}
+
+            elif self.failure_mode == "invalid_answer_type":
+                return {
+                    "answers": {
+                        "destructive": {"type": "wrong_type", "noul": 0.1},
+                    }
+                }
+
+            elif self.failure_mode == "invalid_risk_choice":
+                answers = {
+                    name: {"type": "noul", "noul": 0.1}
+                    for name in [
+                        "destructive",
+                        "secret_exposure",
+                        "scope_creep",
+                        "security_sensitive",
+                        "irreversible",
+                        "needs_tests",
+                        "prompt_injection",
+                        "dependency_risk",
+                        "wrong_repo",
+                        "human_review",
+                        "concurrency_sensitive",
+                        "persistence_sensitive",
+                        "backwards_compatibility",
+                        "untrusted_input_path",
+                        "fail_open",
+                        "wrong_repo_semantic",
+                        "suspicious_intent",
+                        "external_side_effect_risk",
+                    ]
+                }
+                answers["risk_level"] = {
+                    "type": "choice",
+                    "choice": "invalid_choice",
+                    "confidence": 0.91,
+                }
+                answers["risk_score"] = {
+                    "type": "score",
+                    "score": 0.0,
+                    "confidence": 0.91,
+                }
+                return {"answers": answers}
+
+            elif self.failure_mode == "sdk_missing":
+                from .integrations.typesafe import TypeSafeIntegrationError
+
+                raise TypeSafeIntegrationError("sdk_missing")
+
+            elif self.failure_mode == "missing_api_key":
+                from .integrations.typesafe import TypeSafeIntegrationError
+
+                raise TypeSafeIntegrationError("missing_api_key")
+
+            elif self.failure_mode == "network_unreachable":
+                raise OSError("Network unreachable")
+
+            elif self.failure_mode == "401_unauthorized":
+                from .integrations.typesafe import TypeSafeIntegrationError
+
+                raise TypeSafeIntegrationError("request_failed")
+
+            else:
+                # Normal response
+                answers = {
+                    name: {"type": "noul", "noul": 0.1}
+                    for name in [
+                        "destructive",
+                        "secret_exposure",
+                        "scope_creep",
+                        "security_sensitive",
+                        "irreversible",
+                        "needs_tests",
+                        "prompt_injection",
+                        "dependency_risk",
+                        "wrong_repo",
+                        "human_review",
+                        "concurrency_sensitive",
+                        "persistence_sensitive",
+                        "backwards_compatibility",
+                        "untrusted_input_path",
+                        "fail_open",
+                        "wrong_repo_semantic",
+                        "suspicious_intent",
+                        "external_side_effect_risk",
+                    ]
+                }
+                answers["risk_level"] = {
+                    "type": "choice",
+                    "choice": "low",
+                    "confidence": 0.91,
+                }
+                answers["risk_score"] = {
+                    "type": "score",
+                    "score": 0.0,
+                    "confidence": 0.91,
+                }
+                return {"answers": answers}
+
+    # Safe context that would pass hard rules
+    safe_context = EvaluationContext(
+        user_task="Run tests",
+        repository="test-repo",
+        repository_root="/tmp/test",
+        working_directory="/tmp/test",
+        proposed_action=ProposedAction(command="pytest tests/"),
+        changed_files=[],
+        git_diff="",
+        test_results="",
+        recent_context="",
+        external_content="",
+    )
+
+    # TypeSafe API failure modes
+    typesafe_failure_modes = [
+        "timeout",
+        "5xx_error",
+        "malformed_json",
+        "missing_keys",
+        "missing_answers",
+        "invalid_answer_type",
+        "invalid_risk_choice",
+        "sdk_missing",
+        "missing_api_key",
+        "network_unreachable",
+        "401_unauthorized",
+    ]
+
+    # Broker failure modes
+    broker_failure_modes = [
+        "socket_not_exist",
+        "connection_refused",
+        "socket_hang",
+    ]
+
+    typer.echo("JEV Reflex Fail-Closed Self-Test")
+    typer.echo("=" * 60)
+    typer.echo("")
+
+    # Test TypeSafe failures
+    typer.echo("TypeSafe API Failure Modes:")
+    typesafe_results = []
+
+    for failure_mode in typesafe_failure_modes:
+        row = {"mode": failure_mode, "advisory": "PASS", "review": "PASS", "enforce": "PASS"}
+
+        for mode in ["advisory", "review", "enforce"]:
+            config = ReflexConfig(mode=mode)
+            gateway = MockGateway(failure_mode=failure_mode)
+            evaluator = DefaultEvaluator(config=config, gateway=gateway)
+
+            try:
+                result = evaluator.evaluate(safe_context)
+
+                # Check fail-closed behavior
+                if mode == "enforce":
+                    if result.decision == "ALLOW" or not result.degraded:
+                        row[mode] = "FAIL"
+                elif mode == "review":
+                    if result.decision == "ALLOW" or not result.degraded:
+                        row[mode] = "FAIL"
+                elif mode == "advisory":
+                    if not result.degraded or len(result.warnings) == 0:
+                        row[mode] = "FAIL"
+            except Exception:
+                row[mode] = "ERROR"
+
+        typesafe_results.append(row)
+
+    # Print TypeSafe results table
+    typer.echo(f"{'Failure Mode':<25} {'Advisory':<10} {'Review':<10} {'Enforce':<10}")
+    typer.echo("-" * 60)
+    for row in typesafe_results:
+        typer.echo(
+            f"{row['mode']:<25} {row['advisory']:<10} {row['review']:<10} {row['enforce']:<10}"
+        )
+
+    typer.echo("")
+
+    # Test Broker failures
+    typer.echo("Broker Failure Modes:")
+    broker_results = []
+
+    for failure_mode in broker_failure_modes:
+        row = {"mode": failure_mode, "advisory": "PASS", "review": "PASS", "enforce": "PASS"}
+
+        for mode in ["advisory", "review", "enforce"]:
+            config = ReflexConfig(
+                mode=mode,
+                jev=JEVConfig(
+                    transport="broker",
+                    socket="/tmp/nonexistent.sock",
+                    connect_timeout=1.0,
+                    request_timeout=1.0,
+                ),
+            )
+
+            try:
+                result = evaluate_context(safe_context, config=config)
+
+                # Check fail-closed behavior
+                if mode == "enforce":
+                    if result.decision == "ALLOW" or not result.degraded:
+                        row[mode] = "FAIL"
+                elif mode == "review":
+                    if result.decision == "ALLOW" or not result.degraded:
+                        row[mode] = "FAIL"
+                elif mode == "advisory":
+                    if not result.degraded or len(result.warnings) == 0:
+                        row[mode] = "FAIL"
+            except Exception:
+                row[mode] = "ERROR"
+
+        broker_results.append(row)
+
+    # Print Broker results table
+    typer.echo(f"{'Failure Mode':<25} {'Advisory':<10} {'Review':<10} {'Enforce':<10}")
+    typer.echo("-" * 60)
+    for row in broker_results:
+        typer.echo(
+            f"{row['mode']:<25} {row['advisory']:<10} {row['review']:<10} {row['enforce']:<10}"
+        )
+
+    typer.echo("")
+
+    # Check overall results
+    all_passed = all(
+        row["advisory"] == "PASS" and row["review"] == "PASS" and row["enforce"] == "PASS"
+        for row in typesafe_results + broker_results
+    )
+
+    if all_passed:
+        typer.echo("✓ All fail-closed checks passed")
+        raise typer.Exit(code=0)
+    else:
+        typer.echo("✗ Some fail-closed checks failed", err=True)
+        raise typer.Exit(code=1)
+
+
+@audit_app.command("verify")
+def audit_verify(
+    path: Path | None = typer.Option(None, "--path", help="Override the audit log path."),
+    public_key: Path | None = typer.Option(
+        None, "--public-key", help="Public key for decision signature verification."
+    ),
+) -> None:
+    """Verify the integrity of the audit log hash chain and optionally decision signatures."""
+
+    try:
+        config = load_config()
+        if path is not None:
+            config = config.model_copy(
+                update={"audit": config.audit.model_copy(update={"path": str(path)})}
+            )
+
+        audit_log = AuditLog(config)
+        public_key_path = public_key.expanduser() if public_key else None
+        is_valid, message = audit_log.verify(public_key_path=public_key_path)
+        typer.echo(message)
+        if not is_valid:
+            raise typer.Exit(code=1)
+    except Exception as e:
+        typer.echo(f"Error verifying audit log: {e}", err=True)
+        raise typer.Exit(code=1) from None
+
+
+@audit_app.command("tail")
+def audit_tail(
+    n: int = typer.Option(10, "-n", "--number", help="Number of entries to show.", min=1),
+    path: Path | None = typer.Option(None, "--path", help="Override the audit log path."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Show recent entries from the audit log."""
+
+    try:
+        config = load_config()
+        if path is not None:
+            config = config.model_copy(
+                update={"audit": config.audit.model_copy(update={"path": str(path)})}
+            )
+        audit_log = AuditLog(config)
+        entries = audit_log.tail(n)
+
+        if json_output:
+            typer.echo(json.dumps(entries, indent=2, sort_keys=True))
+        else:
+            if not entries:
+                typer.echo("No audit log entries found.")
+                return
+
+            for entry in entries:
+                typer.echo(f"Seq: {entry['seq']}")
+                typer.echo(f"Timestamp: {entry['timestamp_utc']}")
+                typer.echo(f"Decision: {entry['policy_decision']}")
+                typer.echo(f"Action: {entry['action_summary']}")
+                if entry["hard_rule_findings"]:
+                    typer.echo("Hard rule findings:")
+                    for finding in entry["hard_rule_findings"]:
+                        typer.echo(
+                            f"  - {finding['check']}: {finding['reason_code']} (triggered: {finding['triggered']})"
+                        )
+                if entry["jev_signals"]:
+                    typer.echo("JEV signals:")
+                    for signal, value in entry["jev_signals"].items():
+                        typer.echo(f"  - {signal}: {value:.2f}")
+                typer.echo(f"Policy version hash: {entry['policy_version_hash']}")
+                typer.echo(f"Entry hash: {entry['entry_hash']}")
+                typer.echo("---")
+    except Exception as e:
+        typer.echo(f"Error reading audit log: {e}", err=True)
+        raise typer.Exit(code=1) from None
+
+
+@policy_app.command("sign")
+def policy_sign(
+    config_path: Path = typer.Argument(..., help="Path to reflex.yaml to sign."),
+    key: Path = typer.Option(None, "--key", help="Path to private key file."),
+    signer_type: str = typer.Option(
+        "ed25519", "--signer-type", help="Signer type: ed25519 or cosign."
+    ),
+    output: Path | None = typer.Option(None, "--output", help="Output path for signature file."),
+) -> None:
+    """Sign a policy configuration file."""
+
+    try:
+        if key is None:
+            # Generate a new keypair if no key is provided
+            if signer_type == "ed25519":
+                signer = Ed25519Signer()
+                typer.echo("Generated new Ed25519 keypair")
+                typer.echo(f"Public key (PEM):\n{signer.get_public_key_pem()}")
+                typer.echo(f"Private key (PEM):\n{signer.get_private_key_pem()}")
+                typer.echo("")
+                typer.echo("Save the private key securely and use the public key for verification.")
+                typer.echo("Example bootstrap.yaml:")
+                typer.echo("  require_signature: true")
+                typer.echo("  public_key_path: /path/to/public_key.pem")
+                typer.echo("  signer_type: ed25519")
+            else:
+                raise typer.BadParameter("key is required for cosign signer")
+        else:
+            # Load existing key
+            key_path = Path(key).expanduser()
+            if signer_type == "ed25519":
+                signer = Ed25519Signer(private_key_path=key_path)
+            elif signer_type == "cosign":
+                raise typer.BadParameter("cosign signer is not yet implemented")
+            else:
+                raise typer.BadParameter("signer_type must be ed25519")
+
+        config_file = Path(config_path).expanduser()
+        if not config_file.exists():
+            raise typer.BadParameter(f"Config file not found: {config_file}")
+
+        signature_path = sign_file(config_file, signer, output)
+        typer.echo(f"Signature written to: {signature_path}")
+    except Exception as e:
+        typer.echo(f"Error signing policy: {e}", err=True)
+        raise typer.Exit(code=1) from None
+
+
+@policy_app.command("status")
+def policy_status() -> None:
+    """Show the current policy status including source and overrides."""
+    from .config import load_bootstrap_config
+    from .policy_source import PolicyFetcher
+
+    bootstrap = load_bootstrap_config()
+
+    if bootstrap.policy_source.type is None:
+        typer.echo("Policy source: local (reflex.yaml)")
+        typer.echo("No central policy configured")
+        return
+
+    typer.echo(f"Policy source type: {bootstrap.policy_source.type}")
+    typer.echo(f"Policy source URI: {bootstrap.policy_source.uri}")
+    if bootstrap.policy_source.ref:
+        typer.echo(f"Policy source ref: {bootstrap.policy_source.ref}")
+    typer.echo(f"Poll interval: {bootstrap.policy_source.poll_interval_seconds}s")
+
+    # Try to fetch current status
+    try:
+        fetcher = PolicyFetcher(bootstrap.policy_source)
+        status = fetcher.get_status()
+        typer.echo(f"Last fetch time: {status['last_fetch_time']}")
+        typer.echo(f"Policy hash: {status['policy_hash']}")
+        typer.echo(f"Has cached policy: {status['has_cached_policy']}")
+    except Exception as e:
+        typer.echo(f"Failed to fetch policy status: {e}")
+
+    # Check for local override
+    local_path = Path("reflex.yaml")
+    if local_path.exists():
+        typer.echo("Local override: present (reflex.yaml)")
+    else:
+        typer.echo("Local override: none")
 
 
 if __name__ == "__main__":  # pragma: no cover

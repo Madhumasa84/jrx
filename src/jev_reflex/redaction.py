@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
+import warnings
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -161,3 +165,151 @@ def redact_argv(argv: Sequence[str]) -> list[str]:
             continue
         result.append(redact_text(text))
     return result
+
+
+# Gitleaks integration
+_GITLEAKS_AVAILABLE = None
+_GITLEAKS_WARNING_SHOWN = False
+
+
+def _check_gitleaks_available() -> bool:
+    """Check if gitleaks is available on PATH."""
+    global _GITLEAKS_AVAILABLE, _GITLEAKS_WARNING_SHOWN
+
+    if _GITLEAKS_AVAILABLE is not None:
+        return _GITLEAKS_AVAILABLE
+
+    _GITLEAKS_AVAILABLE = shutil.which("gitleaks") is not None
+
+    if not _GITLEAKS_AVAILABLE and not _GITLEAKS_WARNING_SHOWN:
+        _GITLEAKS_WARNING_SHOWN = True
+        warnings.warn(
+            "gitleaks not found, falling back to regex-only redaction — see docs/security.md",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    return _GITLEAKS_AVAILABLE
+
+
+class GitleaksRedactor:
+    """Redactor that uses gitleaks to detect secrets."""
+
+    def __init__(self, timeout: float = 10.0) -> None:
+        """Initialize the gitleaks redactor.
+
+        Args:
+            timeout: Maximum time in seconds to wait for gitleaks scan.
+        """
+        self.timeout = timeout
+        self._available = _check_gitleaks_available()
+
+    def redact(self, text: str) -> tuple[str, bool]:
+        """Redact secrets in text using gitleaks.
+
+        Args:
+            text: The text to redact.
+
+        Returns:
+            (redacted_text, failed) where failed is True if gitleaks failed.
+        """
+        if not self._available:
+            return redact_text(text), False
+
+        try:
+            # Run gitleaks detect on stdin
+            result = subprocess.run(
+                ["gitleaks", "detect", "--no-git", "--report-format", "json", "--source", "-"],
+                input=text,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+            )
+
+            if result.returncode != 0:
+                # Gitleaks failed - fail toward more redaction
+                return REDACTED_SECRET, True
+
+            # Parse JSON output
+            try:
+                findings = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                # Invalid JSON - fail toward more redaction
+                return REDACTED_SECRET, True
+
+            if not isinstance(findings, list):
+                return REDACTED_SECRET, True
+
+            # Apply redactions based on findings
+            redacted = text
+            offset = 0
+
+            # Sort findings by start position to apply in order
+            findings.sort(key=lambda f: f.get("startLine", 0) * 1000 + f.get("startColumn", 0))
+
+            for finding in findings:
+                start_line = finding.get("startLine", 0)
+                start_column = finding.get("startColumn", 0)
+                end_line = finding.get("endLine", 0)
+                end_column = finding.get("endColumn", 0)
+
+                # Convert line/column to character offsets
+                lines = redacted.split("\n")
+                if start_line >= len(lines) or end_line >= len(lines):
+                    continue
+
+                # Calculate start position
+                start_pos = sum(len(line) + 1 for line in lines[:start_line]) + start_column
+                # Calculate end position
+                end_pos = sum(len(line) + 1 for line in lines[:end_line]) + end_column
+
+                if start_pos >= len(redacted) or end_pos > len(redacted):
+                    continue
+
+                # Redact the span
+                redacted = redacted[:start_pos] + REDACTED_SECRET + redacted[end_pos:]
+                offset += len(REDACTED_SECRET) - (end_pos - start_pos)
+
+            return redacted, False
+
+        except subprocess.TimeoutExpired:
+            # Timeout - fail toward more redaction
+            return REDACTED_SECRET, True
+        except Exception:
+            # Any other error - fail toward more redaction
+            return REDACTED_SECRET, True
+
+
+_gitleaks_redactor: GitleaksRedactor | None = None
+
+
+def _get_gitleaks_redactor() -> GitleaksRedactor:
+    """Get or create the singleton gitleaks redactor."""
+    global _gitleaks_redactor
+    if _gitleaks_redactor is None:
+        _gitleaks_redactor = GitleaksRedactor()
+    return _gitleaks_redactor
+
+
+def redact_text_with_gitleaks(value: str | None) -> tuple[str, bool]:
+    """Redact text using both gitleaks and regex patterns.
+
+    Args:
+        value: The text to redact.
+
+    Returns:
+        (redacted_text, gitleaks_failed) where gitleaks_failed is True if gitleaks failed.
+    """
+    if not value:
+        return "" if value is None else value, False
+
+    # First apply regex redaction (always runs)
+    regex_redacted = redact_text(value)
+
+    # Then apply gitleaks if available
+    gitleaks_redactor = _get_gitleaks_redactor()
+    if gitleaks_redactor._available:
+        gitleaks_redacted, failed = gitleaks_redactor.redact(regex_redacted)
+        return gitleaks_redacted, failed
+
+    return regex_redacted, False

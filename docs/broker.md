@@ -6,6 +6,18 @@ Neither the broker's response nor external context can supply the local policy.
 The broker has no execution endpoint and never gathers files or runs commands
 specified in a request. Standalone direct evaluation remains supported.
 
+## Transport options
+
+The broker supports three transport modes:
+
+- **direct**: No broker, direct evaluation (default for standalone use)
+- **broker**: Unix domain socket for local host IPC (default for broker mode)
+- **broker-tls**: TCP socket with mutual TLS authentication for network deployment
+
+The Unix socket transport remains the zero-config default for local development and
+single-host deployments. The TLS transport enables shared team deployments across
+multiple machines.
+
 ## Start and configure
 
 In a trusted host terminal, supply `TYPESAFE_API_KEY` through your normal secret
@@ -52,6 +64,155 @@ jrx check --transport direct --command 'python migrate.py'
 Custom endpoints use `broker run --socket /absolute/private-directory/reflex.sock`
 and the same `jev.socket` in client configuration. Only Unix sockets are supported;
 the `BrokerClient` semantic interface is the extension point for future transports.
+
+## TLS transport configuration
+
+For network deployments with multiple clients, use TLS transport with mutual authentication:
+
+```yaml
+mode: enforce
+jev:
+  transport: broker-tls
+  broker_tls:
+    listen_addr: "0.0.0.0:8443"
+    cert_path: "/etc/jrx/server.crt"
+    key_path: "/etc/jrx/server.key"
+    client_ca_path: "/etc/jrx/client-ca.crt"
+  connect_timeout: 1
+  request_timeout: 25
+  api_timeout: 20
+```
+
+The broker requires:
+- `listen_addr`: TCP address and port for the TLS listener (default: `0.0.0.0:8443`)
+- `cert_path`: Path to the server certificate (PEM format)
+- `key_path`: Path to the server private key (PEM format)
+- `client_ca_path`: Path to the CA certificate that signed client certificates
+
+Clients use the same configuration (client certificates and CA path) to authenticate
+to the broker. Connections without a valid client certificate signed by the specified
+CA are rejected at the TLS handshake.
+
+### Certificate issuance (development/small team)
+
+For small team deployments, you can generate certificates using OpenSSL. This is
+suitable for development and small teams; production deployments should use a real
+internal CA or a PKI system like Vault.
+
+**Step 1: Create a CA for client certificates**
+
+```sh
+# Generate CA private key
+openssl genrsa -out jrx-ca.key 4096
+
+# Generate CA certificate
+openssl req -new -x509 -days 365 -key jrx-ca.key -out jrx-ca.crt \
+  -subj "/C=US/ST=State/L=City/O=Organization/OU=JRX/CN=JRX Client CA"
+```
+
+**Step 2: Generate server certificate**
+
+```sh
+# Generate server private key
+openssl genrsa -out server.key 4096
+
+# Generate server CSR
+openssl req -new -key server.key -out server.csr \
+  -subj "/C=US/ST=State/L=City/O=Organization/OU=JRX/CN=broker.example.com"
+
+# Sign server certificate with CA
+openssl x509 -req -days 365 -in server.csr -CA jrx-ca.crt -CAkey jrx-ca.key \
+  -CAcreateserial -out server.crt
+```
+
+**Step 3: Generate client certificate**
+
+```sh
+# Generate client private key
+openssl genrsa -out client.key 4096
+
+# Generate client CSR
+openssl req -new -key client.key -out client.csr \
+  -subj "/C=US/ST=State/L=City/O=Organization/OU=JRX/CN=client.example.com"
+
+# Sign client certificate with CA
+openssl x509 -req -days 365 -in client.csr -CA jrx-ca.crt -CAkey jrx-ca.key \
+  -CAcreateserial -out client.crt
+```
+
+**Step 4: Distribute certificates**
+
+- Server: `server.crt`, `server.key`, `jrx-ca.crt` (client CA)
+- Client: `client.crt`, `client.key`, `jrx-ca.crt` (client CA)
+
+**Security notes:**
+- Keep private keys (`*.key`) secure and never commit to version control
+- The CA private key (`jrx-ca.key`) should be kept offline in production
+- Rotate certificates before expiration
+- Use strong passphrases for private keys in production
+- Production deployments should use an internal CA or Vault for certificate management
+
+### Production PKI
+
+For production deployments, use your organization's internal CA or a PKI system
+like HashiCorp Vault. The broker accepts standard PEM-format certificates and
+CA bundles. Configure your PKI system to issue certificates with appropriate
+subject names and validity periods.
+
+## High availability pattern
+
+For HA deployments with multiple broker instances, use a simple pattern:
+
+1. **Multiple broker instances**: Run 2-3 broker instances on different hosts
+2. **TCP load balancer**: Place a TCP load balancer (HAProxy, nginx stream, or cloud LB) in front
+3. **Independent policy polling**: Each broker independently polls the central policy source
+
+```
+                ┌─────────────┐
+                │   TCP LB    │
+                │  (port 8443)│
+                └──────┬──────┘
+                       │
+        ┌──────────────┼──────────────┐
+        │              │              │
+   ┌────▼────┐   ┌────▼────┐   ┌────▼────┐
+   │ Broker 1│   │ Broker 2│   │ Broker 3│
+   └────┬────┘   └────┬────┘   └────┬────┘
+        │              │              │
+        └──────────────┼──────────────┘
+                       │
+               ┌───────▼────────┐
+               │ Central Policy │
+               │    Source      │
+               └────────────────┘
+```
+
+**Key points:**
+- No leader election or clustering is needed
+- Each broker independently loads policy from the central source
+- Policy changes propagate via the polling mechanism (from Prompt 2.1)
+- The load balancer distributes client connections across healthy brokers
+- Clients use the load balancer address as the broker endpoint
+
+**Load balancer configuration:**
+- Use TCP mode (pass-through TLS termination)
+- Health checks should verify broker health via the `health` operation
+- Configure timeouts matching broker request timeout (default: 25s)
+- Enable connection reuse for better performance
+
+**Client configuration for HA:**
+```yaml
+jev:
+  transport: broker-tls
+  broker_tls:
+    listen_addr: "broker-lb.example.com:8443"  # Load balancer address
+    cert_path: "/etc/jrx/client.crt"
+    key_path: "/etc/jrx/client.key"
+    client_ca_path: "/etc/jrx/server-ca.crt"
+```
+
+This pattern provides HA without complex clustering, leveraging the broker's
+stateless design and independent policy synchronization.
 
 ## Version 1 wire contract
 

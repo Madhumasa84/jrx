@@ -74,6 +74,66 @@ class PrivacyConfig(BaseModel):
     store_requests: bool = False
 
 
+class AuditConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+    path: str = "~/.jev-reflex/audit.log"
+    rotate_mb: int = 100
+
+    @model_validator(mode="after")
+    def _validate_rotate_mb(self) -> AuditConfig:
+        if self.rotate_mb < 1:
+            raise ValueError("rotate_mb must be at least 1")
+        return self
+
+
+class SigningConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    require_signature: bool = False
+    public_key_path: str | None = None
+    private_key_path: str | None = None
+    signer_type: str = "ed25519"  # "ed25519" or "cosign"
+
+
+class PolicySourceConfig(BaseModel):
+    """Configuration for fetching policy from a remote source."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: Literal["git", "https", "local"] | None = None
+    uri: str | None = None
+    ref: str | None = None  # Git branch/ref
+    poll_interval_seconds: int = 300  # Default 5 minutes
+    pinned_signature_pubkey: str | None = None  # Public key for signature verification
+
+    @model_validator(mode="after")
+    def _validate_policy_source(self) -> PolicySourceConfig:
+        if self.type is None:
+            return self
+        if self.uri is None:
+            raise ValueError("policy_source.uri is required when policy_source.type is set")
+        if self.type == "git" and self.ref is None:
+            raise ValueError("policy_source.ref is required when policy_source.type is 'git'")
+        if self.poll_interval_seconds < 10:
+            raise ValueError("policy_source.poll_interval_seconds must be at least 10")
+        if self.type is not None and self.pinned_signature_pubkey is None:
+            raise ValueError("policy_source.pinned_signature_pubkey is required for remote policy")
+        return self
+
+
+class BootstrapConfig(BaseModel):
+    """Bootstrap configuration for signature verification requirements."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    require_signature: bool = False
+    public_key_path: str | None = None
+    signer_type: str = "ed25519"
+    policy_source: PolicySourceConfig = Field(default_factory=PolicySourceConfig)
+
+
 class CalibrationConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -81,21 +141,63 @@ class CalibrationConfig(BaseModel):
     path: str | None = None
 
 
+class BrokerTLSConfig(BaseModel):
+    """Configuration for broker TLS transport."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    listen_addr: str = "0.0.0.0:8443"
+    cert_path: str
+    key_path: str
+    client_ca_path: str
+
+    @model_validator(mode="after")
+    def _validate_tls_paths(self) -> BrokerTLSConfig:
+        if not self.cert_path:
+            raise ValueError("broker_tls.cert_path is required")
+        if not self.key_path:
+            raise ValueError("broker_tls.key_path is required")
+        if not self.client_ca_path:
+            raise ValueError("broker_tls.client_ca_path is required")
+        return self
+
+
+class LoggingConfig(BaseModel):
+    """Configuration for structured logging."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = True
+    sink: Literal["stdout", "syslog", "webhook-url"] = "stdout"
+    level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    webhook_url: str | None = None
+    syslog_ident: str = "jrx"
+
+    @model_validator(mode="after")
+    def _validate_logging_config(self) -> LoggingConfig:
+        if self.sink == "webhook-url" and not self.webhook_url:
+            raise ValueError("webhook_url is required when sink='webhook-url'")
+        return self
+
+
 class JEVConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     samples: int = 1
     aggregation: Literal["median", "mean", "max"] = "median"
-    transport: Literal["direct", "broker"] = "direct"
+    transport: Literal["direct", "broker", "broker-tls"] = "direct"
     socket: str = "~/.jev-reflex/reflex.sock"
     connect_timeout: float = Field(default=1.0, gt=0, le=10)
     request_timeout: float = Field(default=25.0, gt=0, le=300)
     api_timeout: float = Field(default=20.0, gt=0, le=240)
+    broker_tls: BrokerTLSConfig | None = None
 
     @model_validator(mode="after")
-    def _validate_samples(self) -> JEVConfig:
+    def _validate_jev_config(self) -> JEVConfig:
         if self.samples < 1 or self.samples > 1_000:
             raise ValueError("JEV samples must be between 1 and 1000")
+        if self.transport == "broker-tls" and self.broker_tls is None:
+            raise ValueError("broker_tls configuration is required when transport='broker-tls'")
         return self
 
 
@@ -128,7 +230,10 @@ class ReflexConfig(BaseModel):
     review_on: list[str] = Field(default_factory=lambda: list(DEFAULT_REVIEW_ON))
     context: ContextConfig = Field(default_factory=ContextConfig)
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
+    audit: AuditConfig = Field(default_factory=AuditConfig)
+    signing: SigningConfig = Field(default_factory=SigningConfig)
     calibration: CalibrationConfig = Field(default_factory=CalibrationConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
     jev: JEVConfig = Field(default_factory=JEVConfig)
     stability: StabilityConfig = Field(default_factory=StabilityConfig)
     stability_policy: StabilityPolicyConfig = Field(default_factory=StabilityPolicyConfig)
@@ -160,4 +265,92 @@ def load_config(path: Path | None = None, *, mode_override: Mode | None = None) 
     config = ReflexConfig.model_validate(data)
     if mode_override is not None:
         config = config.model_copy(update={"mode": mode_override})
+
+    # Check if signature verification is required by bootstrap config
+    bootstrap = load_bootstrap_config()
+    if bootstrap.require_signature:
+        _verify_config_signature(config_path, bootstrap)
+
     return config
+
+
+def _verify_config_signature(config_path: Path, bootstrap: BootstrapConfig) -> None:
+    """Verify the configuration file signature.
+
+    Args:
+        config_path: Path to the configuration file.
+        bootstrap: Bootstrap configuration with signature requirements.
+
+    Raises:
+        ValueError: If signature verification fails or signature is missing.
+    """
+    from .signing import Ed25519Signer, load_public_key, verify_file
+
+    signature_path = config_path.with_suffix(config_path.suffix + ".sig")
+
+    if not signature_path.exists():
+        raise ValueError(
+            f"Signature verification required but signature file not found: {signature_path}"
+        )
+
+    if bootstrap.public_key_path is None:
+        raise ValueError(
+            "Signature verification required but public_key_path not specified in bootstrap config"
+        )
+
+    public_key_path = Path(bootstrap.public_key_path).expanduser()
+    public_key = load_public_key(public_key_path)
+
+    # Create appropriate signer
+    if bootstrap.signer_type == "ed25519":
+        signer = Ed25519Signer()
+    elif bootstrap.signer_type == "cosign":
+        raise ValueError(
+            "Cosign signature verification is not yet implemented. "
+            "Please use ed25519 signer for now."
+        )
+    else:
+        raise ValueError(f"Unsupported signer type: {bootstrap.signer_type}")
+
+    # Verify the signature
+    if not verify_file(config_path, signature_path, public_key, signer):
+        raise ValueError(f"Signature verification failed for configuration file: {config_path}")
+
+
+def load_bootstrap_config(path: Path | None = None) -> BootstrapConfig:
+    """Load bootstrap configuration for signature verification.
+
+    Args:
+        path: Path to bootstrap config file. Defaults to standard locations.
+
+    Returns:
+        BootstrapConfig instance.
+    """
+    if path is None:
+        # Check standard locations
+        for candidate in [
+            Path("/etc/jrx/bootstrap.yaml"),
+            Path.home() / ".jev-reflex" / "bootstrap.yaml",
+        ]:
+            if candidate.exists():
+                path = candidate
+                break
+        else:
+            # No bootstrap config found, return defaults
+            return BootstrapConfig()
+
+    if not path.exists():
+        return BootstrapConfig()
+
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            loaded = yaml.safe_load(handle)
+    except yaml.YAMLError:
+        raise ValueError("bootstrap configuration YAML is invalid") from None
+
+    if loaded is None:
+        loaded = {}
+    if not isinstance(loaded, dict):
+        raise ValueError("bootstrap configuration root must be a YAML mapping")
+
+    return BootstrapConfig.model_validate(loaded)

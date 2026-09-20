@@ -29,7 +29,13 @@ def display(value: dict, json_output: bool = False) -> None:
         typer.echo(json.dumps(value, sort_keys=True))
     else:
         typer.echo("JEV Reflex Broker\n\nStatus: " + ("running" if value["running"] else "stopped"))
-        typer.echo(f"Transport: unix socket\nSocket: {value['socket']}")
+        # Determine transport type from socket format
+        if ":" in value["socket"] and "/" not in value["socket"]:
+            typer.echo("Transport: TLS")
+            typer.echo(f"Listen Addr: {value['socket']}")
+        else:
+            typer.echo("Transport: unix socket")
+            typer.echo(f"Socket: {value['socket']}")
         typer.echo("JEV: " + ("configured" if value["jev_configured"] else "not configured"))
         if value.get("pid"):
             typer.echo(f"PID: {value['pid']}")
@@ -45,12 +51,27 @@ def status(
 
 
 @app.command()
-def run(config: Path | None = None, socket: Path | None = None) -> None:
+def run(
+    config: Path | None = None,
+    socket: Path | None = None,
+    metrics_host: str = typer.Option(
+        "127.0.0.1", "--metrics-host", help="Metrics HTTP server host"
+    ),
+    metrics_port: int = typer.Option(9090, "--metrics-port", help="Metrics HTTP server port"),
+) -> None:
     """Stay in the foreground; inherit credentials only from this host shell."""
     try:
         loaded = configuration(config, socket)
-        typer.echo(f"JEV Reflex Broker\nTransport: unix socket\nSocket: {socket_path(loaded)}")
-        asyncio.run(BrokerServer(loaded).run())
+        if loaded.jev.transport == "broker-tls":
+            typer.echo("JEV Reflex Broker\nTransport: TLS")
+            if loaded.jev.broker_tls:
+                typer.echo(f"Listen Addr: {loaded.jev.broker_tls.listen_addr}")
+        else:
+            typer.echo(f"JEV Reflex Broker\nTransport: unix socket\nSocket: {socket_path(loaded)}")
+        typer.echo(f"Metrics: http://{metrics_host}:{metrics_port}/metrics")
+        asyncio.run(
+            BrokerServer(loaded, metrics_host=metrics_host, metrics_port=metrics_port).run()
+        )
     except (OSError, RuntimeError, ValueError):
         typer.echo(
             "Broker could not start; check directory permissions and existing listener.", err=True
@@ -59,7 +80,14 @@ def run(config: Path | None = None, socket: Path | None = None) -> None:
 
 
 @app.command()
-def start(config: Path | None = None, socket: Path | None = None) -> None:
+def start(
+    config: Path | None = None,
+    socket: Path | None = None,
+    metrics_host: str = typer.Option(
+        "127.0.0.1", "--metrics-host", help="Metrics HTTP server host"
+    ),
+    metrics_port: int = typer.Option(9090, "--metrics-port", help="Metrics HTTP server port"),
+) -> None:
     """Start a detached host process; use run for foreground diagnostic logs."""
     loaded = configuration(config, socket)
     client = BrokerClient(loaded)
@@ -77,6 +105,10 @@ def start(config: Path | None = None, socket: Path | None = None) -> None:
             "run",
             "--socket",
             str(socket_path(loaded)),
+            "--metrics-host",
+            metrics_host,
+            "--metrics-port",
+            str(metrics_port),
         ]
         if config is not None:
             argv += ["--config", str(config.resolve())]

@@ -399,7 +399,7 @@ bash examples/demo.sh
 ## Known Limitations
 
 * **Observation vs Determinism Proof:** Model generation remains probabilistic. Stability metrics represent observed empirical consistency over evaluated runs.
-* **Heuristic Redaction:** Secret redaction catches standard high-entropy tokens and common credential patterns, but is not a substitute for a full secrets vault.
+* **Heuristic Redaction:** Secret redaction uses a hybrid approach: regex patterns for common credential patterns plus optional gitleaks integration for comprehensive secret detection. When gitleaks is available, it provides extensive rule coverage; when unavailable, it falls back to regex-only redaction. This is not a substitute for a full secrets vault or secure secret management practices.
 * **Time-of-Check to Time-of-Use (TOCTOU):** User-space pre-execution checks cannot eliminate all concurrent filesystem race conditions.
 * **Hook Coverage:** Commands executed outside the configured agent hook or wrapper bypass local inspection.
 

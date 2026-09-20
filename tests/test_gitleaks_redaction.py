@@ -1,0 +1,311 @@
+"""Tests for gitleaks-enhanced secret redaction."""
+
+from __future__ import annotations
+
+import json
+import warnings
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from jev_reflex.evaluator import _redacted_context_with_gitleaks
+from jev_reflex.models import EvaluationContext, ProposedAction
+from jev_reflex.redaction import (
+    GitleaksRedactor,
+    _check_gitleaks_available,
+    _get_gitleaks_redactor,
+    redact_text,
+    redact_text_with_gitleaks,
+)
+
+
+@pytest.fixture
+def sample_context() -> EvaluationContext:
+    """Create a sample evaluation context for testing."""
+    return EvaluationContext(
+        user_task="Deploy the application with API key AKIAIOSFODNN7EXAMPLE",
+        repository="test-repo",
+        repository_root="/tmp/test",
+        working_directory="/tmp/test",
+        proposed_action=ProposedAction(
+            command="curl -H 'Authorization: Bearer ghp_testtoken123' https://api.example.com"
+        ),
+        changed_files=[],
+        git_diff="",
+        test_results="",
+        recent_context="",
+        external_content="",
+    )
+
+
+def test_redact_text_regex_fallback() -> None:
+    """Test that regex redaction works as a fallback."""
+    text = "password: secret123"
+    redacted = redact_text(text)
+    assert "secret123" not in redacted
+    assert "<REDACTED_SECRET>" in redacted
+
+
+def test_redact_text_with_gitleaks_no_gitleaks() -> None:
+    """Test that redaction falls back to regex when gitleaks is not available."""
+    with patch("jev_reflex.redaction.shutil.which", return_value=None):
+        # Reset the cached availability check
+        import jev_reflex.redaction as redaction_module
+
+        redaction_module._GITLEAKS_AVAILABLE = None
+        redaction_module._GITLEAKS_WARNING_SHOWN = False
+
+        text = "password: secret123"
+        redacted, failed = redact_text_with_gitleaks(text)
+        assert "secret123" not in redacted
+        assert "<REDACTED_SECRET>" in redacted
+        assert failed is False
+
+
+def test_gitleaks_redactor_not_available() -> None:
+    """Test that GitleaksRedactor falls back to regex when gitleaks is not available."""
+    with patch("jev_reflex.redaction.shutil.which", return_value=None):
+        import jev_reflex.redaction as redaction_module
+
+        redaction_module._GITLEAKS_AVAILABLE = None
+        redaction_module._GITLEAKS_WARNING_SHOWN = False
+
+        redactor = GitleaksRedactor()
+        assert redactor._available is False
+
+        text = "password: secret123"
+        redacted, failed = redactor.redact(text)
+        assert "secret123" not in redacted
+        assert failed is False
+
+
+def test_gitleaks_redactor_timeout() -> None:
+    """Test that gitleaks timeout triggers fail-toward-more-redaction."""
+    with patch("jev_reflex.redaction.shutil.which", return_value="/usr/bin/gitleaks"):
+        with patch("jev_reflex.redaction.subprocess.run") as mock_run:
+            import jev_reflex.redaction as redaction_module
+
+            redaction_module._GITLEAKS_AVAILABLE = None
+            redaction_module._GITLEAKS_WARNING_SHOWN = False
+
+            # Simulate timeout
+            from subprocess import TimeoutExpired
+
+            mock_run.side_effect = TimeoutExpired("gitleaks", 10)
+
+            redactor = GitleaksRedactor(timeout=5.0)
+            text = "some text"
+            redacted, failed = redactor.redact(text)
+
+            assert redacted == "<REDACTED_SECRET>"
+            assert failed is True
+
+
+def test_gitleaks_redactor_subprocess_error() -> None:
+    """Test that gitleaks subprocess error triggers fail-toward-more-redaction."""
+    with patch("jev_reflex.redaction.shutil.which", return_value="/usr/bin/gitleaks"):
+        with patch("jev_reflex.redaction.subprocess.run") as mock_run:
+            import jev_reflex.redaction as redaction_module
+
+            redaction_module._GITLEAKS_AVAILABLE = None
+            redaction_module._GITLEAKS_WARNING_SHOWN = False
+
+            # Simulate subprocess error
+            mock_run.side_effect = OSError("Command failed")
+
+            redactor = GitleaksRedactor()
+            text = "some text"
+            redacted, failed = redactor.redact(text)
+
+            assert redacted == "<REDACTED_SECRET>"
+            assert failed is True
+
+
+def test_gitleaks_redactor_invalid_json() -> None:
+    """Test that invalid gitleaks JSON output triggers fail-toward-more-redaction."""
+    with patch("jev_reflex.redaction.shutil.which", return_value="/usr/bin/gitleaks"):
+        with patch("jev_reflex.redaction.subprocess.run") as mock_run:
+            import jev_reflex.redaction as redaction_module
+
+            redaction_module._GITLEAKS_AVAILABLE = None
+            redaction_module._GITLEAKS_WARNING_SHOWN = False
+
+            # Simulate invalid JSON
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = "not valid json"
+            mock_run.return_value = mock_result
+
+            redactor = GitleaksRedactor()
+            text = "some text"
+            redacted, failed = redactor.redact(text)
+
+            assert redacted == "<REDACTED_SECRET>"
+            assert failed is True
+
+
+def test_gitleaks_redactor_nonzero_exit() -> None:
+    """Test that gitleaks non-zero exit code triggers fail-toward-more-redaction."""
+    with patch("jev_reflex.redaction.shutil.which", return_value="/usr/bin/gitleaks"):
+        with patch("jev_reflex.redaction.subprocess.run") as mock_run:
+            import jev_reflex.redaction as redaction_module
+
+            redaction_module._GITLEAKS_AVAILABLE = None
+            redaction_module._GITLEAKS_WARNING_SHOWN = False
+
+            # Simulate non-zero exit code
+            mock_result = MagicMock()
+            mock_result.returncode = 1
+            mock_result.stdout = "error message"
+            mock_run.return_value = mock_result
+
+            redactor = GitleaksRedactor()
+            text = "some text"
+            redacted, failed = redactor.redact(text)
+
+            assert redacted == "<REDACTED_SECRET>"
+            assert failed is True
+
+
+def test_redacted_context_with_gitleaks(sample_context: EvaluationContext) -> None:
+    """Test that context redaction works with gitleaks."""
+    with patch("jev_reflex.redaction.shutil.which", return_value=None):
+        import jev_reflex.redaction as redaction_module
+
+        redaction_module._GITLEAKS_AVAILABLE = None
+        redaction_module._GITLEAKS_WARNING_SHOWN = False
+
+        redacted, failed = _redacted_context_with_gitleaks(sample_context)
+        assert failed is False
+        # Regex should have caught the patterns
+        assert "AKIAIOSFODNN7EXAMPLE" not in redacted.user_task
+        assert "ghp_testtoken123" not in redacted.proposed_action.command
+
+
+def test_redacted_context_gitleaks_failure_forces_review(sample_context: EvaluationContext) -> None:
+    """Test that gitleaks failure triggers REVIEW in policy."""
+    with patch("jev_reflex.redaction.shutil.which", return_value="/usr/bin/gitleaks"):
+        with patch("jev_reflex.redaction.subprocess.run") as mock_run:
+            import jev_reflex.redaction as redaction_module
+
+            redaction_module._GITLEAKS_AVAILABLE = None
+            redaction_module._GITLEAKS_WARNING_SHOWN = False
+            redaction_module._gitleaks_redactor = None
+
+            # Simulate timeout
+            from subprocess import TimeoutExpired
+
+            mock_run.side_effect = TimeoutExpired("gitleaks", 10)
+
+            redacted, failed = _redacted_context_with_gitleaks(sample_context)
+            assert failed is True
+
+
+def test_check_gitleaks_available_warning() -> None:
+    """Test that gitleaks availability check shows warning when not available."""
+    with patch("jev_reflex.redaction.shutil.which", return_value=None):
+        import jev_reflex.redaction as redaction_module
+
+        redaction_module._GITLEAKS_AVAILABLE = None
+        redaction_module._GITLEAKS_WARNING_SHOWN = False
+
+        with pytest.warns(UserWarning, match="gitleaks not found"):
+            available = _check_gitleaks_available()
+
+        assert available is False
+        assert redaction_module._GITLEAKS_WARNING_SHOWN is True
+
+
+def test_check_gitleaks_available_no_warning_second_call() -> None:
+    """Test that warning is only shown once."""
+    with patch("jev_reflex.redaction.shutil.which", return_value=None):
+        import jev_reflex.redaction as redaction_module
+
+        redaction_module._GITLEAKS_AVAILABLE = None
+        redaction_module._GITLEAKS_WARNING_SHOWN = False
+
+        # First call - should warn
+        with pytest.warns(UserWarning, match="gitleaks not found"):
+            _check_gitleaks_available()
+
+        # Second call - should not warn
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _check_gitleaks_available()
+
+
+def test_get_gitleaks_redactor_singleton() -> None:
+    """Test that gitleaks redactor is a singleton."""
+    with patch("jev_reflex.redaction.shutil.which", return_value=None):
+        import jev_reflex.redaction as redaction_module
+
+        redaction_module._GITLEAKS_AVAILABLE = None
+        redaction_module._GITLEAKS_WARNING_SHOWN = False
+        redaction_module._gitleaks_redactor = None
+
+        redactor1 = _get_gitleaks_redactor()
+        redactor2 = _get_gitleaks_redactor()
+
+        assert redactor1 is redactor2
+
+
+def test_regex_patterns_still_work_with_gitleaks() -> None:
+    """Test that regex patterns are applied even when gitleaks is available."""
+    with patch("jev_reflex.redaction.shutil.which", return_value="/usr/bin/gitleaks"):
+        with patch("jev_reflex.redaction.subprocess.run") as mock_run:
+            import jev_reflex.redaction as redaction_module
+
+            redaction_module._GITLEAKS_AVAILABLE = None
+            redaction_module._GITLEAKS_WARNING_SHOWN = False
+            redaction_module._gitleaks_redactor = None
+
+            # Simulate gitleaks finding nothing
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = "[]"
+            mock_run.return_value = mock_result
+
+            # Text with regex pattern
+            text = "password: secret123"
+            redacted, failed = redact_text_with_gitleaks(text)
+
+            # Regex should still have caught it
+            assert "secret123" not in redacted
+            assert "<REDACTED_SECRET>" in redacted
+            assert failed is False
+
+
+def test_gitleaks_finds_secrets_regex_misses() -> None:
+    """Test that gitleaks can catch secrets regex misses."""
+    with patch("jev_reflex.redaction.shutil.which", return_value="/usr/bin/gitleaks"):
+        with patch("jev_reflex.redaction.subprocess.run") as mock_run:
+            import jev_reflex.redaction as redaction_module
+
+            redaction_module._GITLEAKS_AVAILABLE = None
+            redaction_module._GITLEAKS_WARNING_SHOWN = False
+            redaction_module._gitleaks_redactor = None
+
+            # Simulate gitleaks finding a secret
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = json.dumps(
+                [
+                    {
+                        "startLine": 0,
+                        "startColumn": 10,
+                        "endLine": 0,
+                        "endColumn": 30,
+                        "secret": "custom_secret_key",
+                    }
+                ]
+            )
+            mock_run.return_value = mock_result
+
+            # Text without obvious regex pattern
+            text = "some custom_secret_key in code"
+            redacted, failed = redact_text_with_gitleaks(text)
+
+            # Gitleaks should have caught it
+            assert "custom_secret_key" not in redacted
+            assert "<REDACTED_SECRET>" in redacted
+            assert failed is False

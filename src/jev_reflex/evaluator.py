@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from statistics import mean, median
 from typing import Any, Protocol
 
+from .audit import AuditLog
 from .checks import has_blocking_finding, run_deterministic_checks
 from .config import ReflexConfig
 from .context import bounded_text
@@ -22,6 +23,13 @@ from .integrations.typesafe import (
 from .integrations.typesafe import (
     parse_response as parse_typesafe_response,
 )
+from .logging_config import log_structured
+from .metrics import (
+    decisions_total,
+    degraded_evaluations_total,
+    hard_rule_triggers_total,
+    jev_signal_latency_seconds,
+)
 from .models import (
     EvaluationContext,
     EvaluationResult,
@@ -29,7 +37,13 @@ from .models import (
     SemanticSignals,
 )
 from .policy import decide as deterministic_decide
-from .redaction import REDACTED_SECRET, redact_argv, redact_obj, redact_text
+from .redaction import (
+    REDACTED_SECRET,
+    redact_argv,
+    redact_obj,
+    redact_text,
+    redact_text_with_gitleaks,
+)
 
 JUDGMENT_NAMES = (
     "destructive",
@@ -125,6 +139,41 @@ def _redacted_context(context: EvaluationContext) -> EvaluationContext:
     if isinstance(action, Mapping) and isinstance(action.get("argv"), list):
         action["argv"] = redact_argv(action["argv"])
     return EvaluationContext.model_validate(dumped)
+
+
+def _redacted_context_with_gitleaks(context: EvaluationContext) -> tuple[EvaluationContext, bool]:
+    """Redact context using gitleaks if available.
+
+    Args:
+        context: The context to redact.
+
+    Returns:
+        (redacted_context, gitleaks_failed) where gitleaks_failed is True if gitleaks failed.
+    """
+    dumped = redact_obj(context.model_dump(mode="json"))
+
+    # Redaction with gitleaks for text fields
+    gitleaks_failed = False
+    for field in ("user_task", "git_diff", "test_results", "recent_context", "external_content"):
+        if field in dumped and isinstance(dumped[field], str):
+            redacted, failed = redact_text_with_gitleaks(dumped[field])
+            dumped[field] = redacted
+            gitleaks_failed = gitleaks_failed or failed
+
+    action = dumped.get("proposed_action")
+    if isinstance(action, Mapping):
+        if isinstance(action.get("argv"), list):
+            action["argv"] = redact_argv(action["argv"])
+        if isinstance(action.get("command"), str):
+            redacted, failed = redact_text_with_gitleaks(action["command"])
+            action["command"] = redacted
+            gitleaks_failed = gitleaks_failed or failed
+        if isinstance(action.get("description"), str):
+            redacted, failed = redact_text_with_gitleaks(action["description"])
+            action["description"] = redacted
+            gitleaks_failed = gitleaks_failed or failed
+
+    return EvaluationContext.model_validate(dumped), gitleaks_failed
 
 
 def compact_state(context: EvaluationContext, max_chars: int) -> dict[str, Any]:
@@ -370,8 +419,21 @@ def evaluate_context(
     if use_jev and config.stability_policy.mode == "majority" and samples < 2:
         raise ValueError("stability_policy majority requires at least two JEV samples")
     findings = run_deterministic_checks(context)
-    safe_action = redact_text(_redacted_context(context).proposed_action.display())
+
+    # Use gitleaks-enhanced redaction
+    redacted_context, gitleaks_failed = _redacted_context_with_gitleaks(context)
+    safe_action = redact_text(redacted_context.proposed_action.display())
     warnings: list[str] = []
+
+    if gitleaks_failed:
+        warnings.append(
+            "Gitleaks redaction failed; treating context as potentially containing secrets."
+        )
+
+    # Track hard rule triggers
+    for finding in findings:
+        if finding.triggered:
+            hard_rule_triggers_total.inc(rule_name=finding.check)
 
     if not use_jev:
         semantic = _zero_semantic(
@@ -398,6 +460,10 @@ def evaluate_context(
         aggregation_used = aggregation if samples > 1 else None
         warnings.extend(semantic.warnings)
 
+        # Track JEV latency if available
+        if hasattr(evaluator, "last_jev_latency_ms") and evaluator.last_jev_latency_ms is not None:
+            jev_signal_latency_seconds.observe(evaluator.last_jev_latency_ms / 1000.0)
+
     policy = deterministic_decide(
         findings,
         semantic.probabilities,
@@ -407,6 +473,54 @@ def evaluate_context(
         degraded=semantic.degraded and use_jev,
     )
     warnings.extend(semantic.warnings)
+
+    # Track decision metrics
+    decisions_total.inc(decision=policy.decision)
+
+    # Track degraded evaluations
+    if semantic.degraded and use_jev:
+        degraded_evaluations_total.inc(reason="jev_unavailable")
+    if gitleaks_failed:
+        degraded_evaluations_total.inc(reason="gitleaks_failed")
+
+    # Log structured decision event
+    log_structured(
+        level="INFO",
+        event="policy_decision",
+        fields={
+            "decision": policy.decision,
+            "action": safe_action,
+            "degraded": semantic.degraded and use_jev,
+            "semantic_source": semantic.source,
+            "triggered_rules": list(policy.triggered_rules),
+        },
+    )
+
+    # If gitleaks failed, force REVIEW for safety
+    if gitleaks_failed and policy.decision != "HOLD":
+        warnings.append("Forced to REVIEW due to gitleaks redaction failure.")
+        # Override the decision in the policy object
+        from .policy import PolicyDecision
+
+        policy = PolicyDecision(
+            decision="REVIEW",
+            triggered_rules=policy.triggered_rules,
+            reasons=policy.reasons,
+        )
+
+    # Write to audit log if enabled
+    try:
+        audit_log = AuditLog(config)
+        audit_log.write_entry(
+            action_summary=safe_action,
+            deterministic_findings=findings,
+            jev_signals=semantic.probabilities,
+            policy_decision=policy,
+        )
+    except Exception:
+        # Audit logging failures should not block policy decisions
+        pass
+
     from .broker import debug
 
     debug(
@@ -451,7 +565,7 @@ class DefaultEvaluator:
 
 
 def semantic_backend(config: ReflexConfig, gateway: Any | None = None) -> SemanticEvaluator:
-    if config.jev.transport == "broker":
+    if config.jev.transport in {"broker", "broker-tls"}:
         from .broker import BrokerClient
 
         return BrokerClient(config)
