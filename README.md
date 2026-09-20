@@ -4,6 +4,12 @@
 
 **Deterministic Execution Control for Autonomous Coding Agents**
 
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=flat-square)](LICENSE)
+[![Python Version](https://img.shields.io/badge/python-3.11+-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg?style=flat-square)](https://github.com/astral-sh/ruff)
+[![Architecture: Defense-in-Depth](https://img.shields.io/badge/architecture-defense--in--depth-success.svg?style=flat-square)](docs/architecture.md)
+[![Audit Log: Cryptographic](https://img.shields.io/badge/audit%20trail-SHA--256%20Merkle-purple.svg?style=flat-square)](docs/security.md)
+
 <p align="center">
   <a href="#quickstart">Quickstart</a> •
   <a href="#key-architecture">Architecture</a> •
