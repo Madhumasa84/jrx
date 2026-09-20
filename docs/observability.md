@@ -452,3 +452,41 @@ annotations:
 2. Review network latency to TypeSafe API
 3. Check broker resource utilization (CPU, memory)
 4. Consider increasing JEV timeout in configuration
+
+---
+
+## Calibration and Stability Tracking
+
+JEV Reflex supports optional local calibration logging to gather anonymous feedback on decision accuracy without recording sensitive command text or code:
+
+```yaml
+calibration:
+  enabled: true
+  path: ~/.jev-reflex/events.jsonl  # default path
+```
+
+When enabled, each evaluation records only:
+- Anonymous decision ID and timestamp
+- Signal probabilities and risk score
+- Deterministic policy decision
+- Optional user feedback labels
+
+### Providing Feedback & Summaries
+
+```bash
+# Label a specific decision
+jrx feedback 0123456789abcdef --correct
+jrx feedback 0123456789abcdef --incorrect
+
+# Summarize calibration metrics
+jrx calibration
+```
+
+### Measuring Evaluation Stability
+
+To measure observed final-decision stability and semantic variance across repeated identical evaluations:
+
+```bash
+jrx stability --runs 10 --json
+```
+

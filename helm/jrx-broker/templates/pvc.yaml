@@ -1,0 +1,15 @@
+{{- if and .Values.volumes.data.enabled (not .Values.volumes.data.existingClaim) (eq .Values.kind "Deployment") }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "jrx-broker.fullname" . }}-data
+  labels:
+    {{- include "jrx-broker.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.volumes.data.storageClass | default "" }}
+  resources:
+    requests:
+      storage: {{ .Values.volumes.data.size }}
+{{- end }}

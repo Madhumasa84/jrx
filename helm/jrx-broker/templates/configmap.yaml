@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "jrx-broker.fullname" . }}-config
+  labels:
+    {{- include "jrx-broker.labels" . | nindent 4 }}
+data:
+  reflex.yaml: |
+    mode: {{ .Values.config.mode }}
+    
+    policy:
+      allowHoldOverride: {{ .Values.config.policy.allowHoldOverride }}
+    
+    thresholds:
+      review: {{ .Values.config.thresholds.review }}
+      hold: {{ .Values.config.thresholds.hold }}
+    
+    hold_on:
+      {{- range .Values.config.holdOn }}
+      - {{ . }}
+      {{- end }}
+    
+    review_on:
+      {{- range .Values.config.reviewOn }}
+      - {{ . }}
+      {{- end }}
+    
+    context:
+      include_git_diff: {{ .Values.config.context.includeGitDiff }}
+      include_changed_files: {{ .Values.config.context.includeChangedFiles }}
+      include_tests: {{ .Values.config.context.includeTests }}
+      max_diff_chars: {{ .Values.config.context.maxDiffChars }}
+      max_context_chars: {{ .Values.config.context.maxContextChars }}
+    
+    privacy:
+      redact_secrets: {{ .Values.config.privacy.redactSecrets }}
+      store_requests: {{ .Values.config.privacy.storeRequests }}
+    
+    audit:
+      enabled: {{ .Values.config.audit.enabled }}
+      path: {{ .Values.config.audit.path }}
+      rotate_mb: {{ .Values.config.audit.rotateMb }}
+    
+    signing:
+      require_signature: {{ .Values.config.signing.requireSignature }}
+      {{- if .Values.config.signing.publicKeyPath }}
+      public_key_path: {{ .Values.config.signing.publicKeyPath }}
+      {{- end }}
+      {{- if .Values.config.signing.privateKeyPath }}
+      private_key_path: {{ .Values.config.signing.privateKeyPath }}
+      {{- end }}
+      signer_type: {{ .Values.config.signing.signerType }}
+    
+    calibration:
+      enabled: {{ .Values.config.calibration.enabled }}
+      {{- if .Values.config.calibration.path }}
+      path: {{ .Values.config.calibration.path }}
+      {{- end }}
+    
+    logging:
+      enabled: {{ .Values.config.logging.enabled }}
+      sink: {{ .Values.config.logging.sink }}
+      level: {{ .Values.config.logging.level }}
+      {{- if .Values.config.logging.webhookUrl }}
+      webhook_url: {{ .Values.config.logging.webhookUrl }}
+      {{- end }}
+      syslog_ident: {{ .Values.config.logging.syslogIdent }}
+    
+    jev:
+      samples: {{ .Values.config.jev.samples }}
+      aggregation: {{ .Values.config.jev.aggregation }}
+      transport: {{ .Values.config.jev.transport }}
+      socket: {{ .Values.config.jev.socket }}
+      connect_timeout: {{ .Values.config.jev.connectTimeout }}
+      request_timeout: {{ .Values.config.jev.requestTimeout }}
+      api_timeout: {{ .Values.config.jev.apiTimeout }}
+      {{- if .Values.config.jev.brokerTls.enabled }}
+      broker_tls:
+        listen_addr: {{ .Values.config.jev.brokerTls.listenAddr }}
+        cert_path: {{ .Values.config.jev.brokerTls.certPath }}
+        key_path: {{ .Values.config.jev.brokerTls.keyPath }}
+        client_ca_path: {{ .Values.config.jev.brokerTls.clientCaPath }}
+      {{- end }}
+    
+    stability:
+      boundary_margin: {{ .Values.config.stability.boundaryMargin }}
+    
+    stability_policy:
+      mode: {{ .Values.config.stabilityPolicy.mode }}

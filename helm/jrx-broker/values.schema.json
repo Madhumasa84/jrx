@@ -1,0 +1,263 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": {"type": "string"},
+        "pullPolicy": {"type": "string", "enum": ["Always", "IfNotPresent", "Never"]},
+        "tag": {"type": "string"}
+      },
+      "required": ["repository", "pullPolicy"]
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "nameOverride": {"type": "string"},
+    "fullnameOverride": {"type": "string"},
+    "kind": {"type": "string", "enum": ["Deployment", "StatefulSet"]},
+    "replicaCount": {"type": "integer", "minimum": 1},
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": {"type": "string"},
+        "metricsPort": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "brokerPort": {"type": "integer", "minimum": 1, "maximum": 65535}
+      },
+      "required": ["type", "metricsPort", "brokerPort"]
+    },
+    "resources": {
+      "type": "object",
+      "properties": {
+        "limits": {
+          "type": "object",
+          "properties": {
+            "cpu": {"type": "string"},
+            "memory": {"type": "string"}
+          }
+        },
+        "requests": {
+          "type": "object",
+          "properties": {
+            "cpu": {"type": "string"},
+            "memory": {"type": "string"}
+          }
+        }
+      }
+    },
+    "autoscaling": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "minReplicas": {"type": "integer", "minimum": 1},
+        "maxReplicas": {"type": "integer", "minimum": 1},
+        "targetCPUUtilizationPercentage": {"type": "integer", "minimum": 1, "maximum": 100},
+        "targetMemoryUtilizationPercentage": {"type": "integer", "minimum": 1, "maximum": 100}
+      }
+    },
+    "podSecurityContext": {
+      "type": "object",
+      "properties": {
+        "runAsNonRoot": {"type": "boolean"},
+        "runAsUser": {"type": "integer"},
+        "fsGroup": {"type": "integer"}
+      }
+    },
+    "securityContext": {
+      "type": "object",
+      "properties": {
+        "allowPrivilegeEscalation": {"type": "boolean"},
+        "capabilities": {
+          "type": "object",
+          "properties": {
+            "drop": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "readOnlyRootFilesystem": {"type": "boolean"}
+      }
+    },
+    "env": {
+      "type": "object",
+      "properties": {
+        "JRX_DEBUG": {"type": "string"},
+        "JRX_METRICS_HOST": {"type": "string"},
+        "JRX_METRICS_PORT": {"type": "string"}
+      }
+    },
+    "config": {
+      "type": "object",
+      "properties": {
+        "mode": {"type": "string", "enum": ["advisory", "review", "enforce"]},
+        "policy": {
+          "type": "object",
+          "properties": {
+            "allowHoldOverride": {"type": "boolean"}
+          }
+        },
+        "thresholds": {
+          "type": "object",
+          "properties": {
+            "review": {"type": "number", "minimum": 0, "maximum": 1},
+            "hold": {"type": "number", "minimum": 0, "maximum": 1}
+          }
+        },
+        "holdOn": {"type": "array", "items": {"type": "string"}},
+        "reviewOn": {"type": "array", "items": {"type": "string"}},
+        "context": {
+          "type": "object",
+          "properties": {
+            "includeGitDiff": {"type": "boolean"},
+            "includeChangedFiles": {"type": "boolean"},
+            "includeTests": {"type": "boolean"},
+            "maxDiffChars": {"type": "integer", "minimum": 1},
+            "maxContextChars": {"type": "integer", "minimum": 1}
+          }
+        },
+        "privacy": {
+          "type": "object",
+          "properties": {
+            "redactSecrets": {"type": "boolean"},
+            "storeRequests": {"type": "boolean"}
+          }
+        },
+        "audit": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "path": {"type": "string"},
+            "rotateMb": {"type": "integer", "minimum": 1}
+          }
+        },
+        "signing": {
+          "type": "object",
+          "properties": {
+            "requireSignature": {"type": "boolean"},
+            "publicKeyPath": {"type": ["string", "null"]},
+            "privateKeyPath": {"type": ["string", "null"]},
+            "signerType": {"type": "string"}
+          }
+        },
+        "calibration": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "path": {"type": ["string", "null"]}
+          }
+        },
+        "logging": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "sink": {"type": "string"},
+            "level": {"type": "string"},
+            "webhookUrl": {"type": ["string", "null"]},
+            "syslogIdent": {"type": "string"}
+          }
+        },
+        "jev": {
+          "type": "object",
+          "properties": {
+            "samples": {"type": "integer", "minimum": 1, "maximum": 1000},
+            "aggregation": {"type": "string", "enum": ["median", "mean", "max"]},
+            "transport": {"type": "string", "enum": ["direct", "broker", "broker-tls"]},
+            "socket": {"type": "string"},
+            "connectTimeout": {"type": "number", "minimum": 0, "maximum": 10},
+            "requestTimeout": {"type": "number", "minimum": 0, "maximum": 300},
+            "apiTimeout": {"type": "number", "minimum": 0, "maximum": 240},
+            "brokerTls": {
+              "type": "object",
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "listenAddr": {"type": "string"},
+                "certPath": {"type": "string"},
+                "keyPath": {"type": "string"},
+                "clientCaPath": {"type": "string"}
+              }
+            }
+          }
+        },
+        "stability": {
+          "type": "object",
+          "properties": {
+            "boundaryMargin": {"type": "number", "minimum": 0, "maximum": 0.5}
+          }
+        },
+        "stabilityPolicy": {
+          "type": "object",
+          "properties": {
+            "mode": {"type": "string", "enum": ["strict", "conservative", "majority"]}
+          }
+        }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "properties": {
+        "typesafeApiKey": {
+          "type": "object",
+          "properties": {
+            "existingSecret": {"type": "string"},
+            "key": {"type": "string"}
+          }
+        },
+        "tls": {
+          "type": "object",
+          "properties": {
+            "existingSecret": {"type": "string"},
+            "certKey": {"type": "string"},
+            "keyKey": {"type": "string"},
+            "caKey": {"type": "string"}
+          }
+        }
+      }
+    },
+    "volumes": {
+      "type": "object",
+      "properties": {
+        "tls": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "existingClaim": {"type": "string"},
+            "mountPath": {"type": "string"}
+          }
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "existingClaim": {"type": "string"},
+            "mountPath": {"type": "string"},
+            "storageClass": {"type": "string"},
+            "size": {"type": "string"}
+          }
+        }
+      }
+    },
+    "livenessProbe": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "initialDelaySeconds": {"type": "integer", "minimum": 0},
+        "periodSeconds": {"type": "integer", "minimum": 1},
+        "timeoutSeconds": {"type": "integer", "minimum": 1},
+        "successThreshold": {"type": "integer", "minimum": 1},
+        "failureThreshold": {"type": "integer", "minimum": 1}
+      }
+    },
+    "readinessProbe": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "initialDelaySeconds": {"type": "integer", "minimum": 0},
+        "periodSeconds": {"type": "integer", "minimum": 1},
+        "timeoutSeconds": {"type": "integer", "minimum": 1},
+        "successThreshold": {"type": "integer", "minimum": 1},
+        "failureThreshold": {"type": "integer", "minimum": 1}
+      }
+    }
+  },
+  "required": ["image", "service", "config"]
+}

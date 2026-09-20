@@ -1,0 +1,14 @@
+apiVersion: v2
+name: jrx-broker
+description: JEV Reflex (jrx) broker - deterministic execution control for autonomous coding agents
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - security
+  - agent
+  - policy
+  - enforcement
+home: https://github.com/Madhumasa84/jrx
+maintainers:
+  - name: Madhumasa84

@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "jrx-broker.fullname" . }}
+  labels:
+    {{- include "jrx-broker.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+    {{- if eq .Values.config.jev.transport "broker-tls" }}
+    - port: {{ .Values.service.brokerPort }}
+      targetPort: broker
+      protocol: TCP
+      name: broker
+    {{- end }}
+  selector:
+    {{- include "jrx-broker.selectorLabels" . | nindent 4 }}

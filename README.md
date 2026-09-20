@@ -1,62 +1,107 @@
+<div align="center">
+
 # JEV Reflex (`jrx`)
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Architecture: Defense-in-Depth](https://img.shields.io/badge/architecture-defense--in--depth-success.svg)](docs/architecture.md)
+**Deterministic Execution Control for Autonomous Coding Agents**
 
-> **Probabilistic judgment. Deterministic enforcement.**
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=flat-square)](LICENSE)
+[![Python Version](https://img.shields.io/badge/python-3.11+-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg?style=flat-square)](https://github.com/astral-sh/ruff)
+[![Architecture: Defense-in-Depth](https://img.shields.io/badge/architecture-defense--in--depth-success.svg?style=flat-square)](docs/architecture.md)
+[![Audit Log: Cryptographic](https://img.shields.io/badge/audit%20trail-SHA--256%20Merkle-purple.svg?style=flat-square)](docs/security.md)
 
-Deterministic execution control for autonomous coding agents (Codex CLI,
-Claude Code, Antigravity, OpenRouter Agent SDK, Pi, DeepSeek Harness, and
-custom terminal agents).
+<p align="center">
+  <a href="#quickstart">Quickstart</a> •
+  <a href="#key-architecture">Architecture</a> •
+  <a href="#supported-agents">Supported Agents</a> •
+  <a href="#host-broker">Host Broker</a> •
+  <a href="#cli-reference">CLI Reference</a> •
+  <a href="#configuration">Configuration</a> •
+  <a href="#docs">Documentation</a>
+</p>
+
+> *“Probabilistic judgment. Deterministic enforcement.”*
+
+</div>
 
 ---
 
-## Overview
+## ⚡ The Problem & The Solution
 
-Coding agents are probabilistic. Semantic models are probabilistic too. **JEV Reflex** does not pretend to make either one deterministic. Instead, it pairs instantaneous, local hard checks with bounded semantic risk signals (powered by [TypeSafe JEV](https://typesafe.ai/)), then applies an explicit, deterministic policy engine to determine whether an action should proceed.
+Coding agents (OpenAI Codex, Claude Code, Antigravity, OpenRouter, Pi, DeepSeek) are **probabilistic**. Semantic evaluation models are probabilistic too. 
 
-### The Problem
-* **Unconstrained Agents:** Autonomous coding agents can execute destructive commands (`rm -rf`, disk wipes), leak environment credentials, or perform out-of-boundary modifications before human review.
-* **Pure Static Analysis is Incomplete:** Heuristic rules alone cannot discern subtle context (e.g., whether database migration scripts, external dependency updates, or complex privilege alterations are legitimate or malicious).
-* **Model Decisions are Variable:** LLMs and probabilistic judges can fluctuate across runs. An AI model should never directly own an unmediated execution gate.
+Relying solely on LLM self-policing or naive regex blacklists inevitably fails:
+* **Unconstrained Agents:** Can execute catastrophic operations (`rm -rf /`, raw disk writes, force branch deletion), leak environment credentials, or escape workspace boundaries.
+* **Regex Blacklists Are Fragile:** Static pattern matching cannot grasp intent—such as discerning whether a database migration or dependency update is legitimate or malicious.
+* **Model Decisions Fluctuate:** An AI model should never directly own an unmediated execution gate without deterministic guardrails.
 
-### The Solution: Hybrid Deterministic Enforcement
+### The JEV Reflex Paradigm
+**JEV Reflex (`jrx`)** unites **instantaneous local hard rules** with **bounded semantic risk signals** (powered by [TypeSafe JEV](https://typesafe.ai/)). A pure, deterministic policy engine then maps these inputs to a definitive decision: **`ALLOW`**, **`REVIEW`**, or **`HOLD`**.
+
 ```mermaid
 flowchart TD
-    A["Autonomous Agent<br/>(Codex / Claude / Antigravity / OpenRouter / Pi / DSH)"] --> B["Proposed Action<br/>(command, args, diff, context)"]
-    B --> C["JEV Reflex Gateway"]
-    
-    subgraph C ["JEV Reflex Gateway"]
-        D["Context Provider & Redactor<br/>(Bounds diffs, scrubs secrets)"]
-        E["Deterministic Hard Rules<br/>(Instant local checks)"]
-        F["Semantic Evaluator<br/>(Host Broker / TypeSafe JEV)"]
-        G["Deterministic Policy Engine<br/>(Pure function over findings + signals)"]
+    Agent["Autonomous Agent Action<br/>(CLI Command, Patch, Tool Call)"] --> Gateway["JEV Reflex Gateway"]
+
+    subgraph Gateway ["JEV Reflex Gateway (jrx)"]
+        direction TB
+        Context["Context Provider & Redactor<br/>• Secret scrubbing (Gitleaks / Regex)<br/>• Diff & token bounding"]
         
-        D --> E
-        D --> F
-        E --> G
-        F --> G
+        HardChecks["1. Deterministic Hard Rules<br/>(Sub-millisecond checks: destructive, secrets, escaping)"]
+        Semantic["2. Semantic Risk Evaluator<br/>(TypeSafe JEV / Broker: persistence, dependency, intent)"]
+        Policy["3. Pure Policy Engine<br/>(ALLOW / REVIEW / HOLD)"]
+        Audit["4. Tamper-Evident Audit Log<br/>(Cryptographic SHA-256 Hash Chaining)"]
+
+        Context --> HardChecks
+        Context --> Semantic
+        HardChecks -->|Fast Path: HOLD on violation| Policy
+        Semantic --> Policy
+        Policy --> Audit
     end
 
-    G --> H{"Policy Decision"}
-    H -->|ALLOW| I["Execute Action"]
-    H -->|REVIEW| J["Prompt User / Request Approval"]
-    H -->|HOLD| K["Block Action"]
+    Policy -->|ALLOW| Exec["✓ Execute Action"]
+    Policy -->|REVIEW| User["⚠ Request Human Approval"]
+    Policy -->|HOLD| Block["✕ Block Execution & Exit Non-Zero"]
 ```
 
 ---
 
-## In 30 Seconds
+## 🚀 Quickstart
 
-Test a dangerous command offline (no API key required):
+### 1. Installation
 
-```console
+```bash
+# Clone the repository
+git clone https://github.com/Madhumasa84/jrx.git
+cd jrx
+
+# Create and activate virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install with development dependencies
+pip install -e ".[dev]"
+```
+
+Both `jrx` and `jev-reflex` CLI commands will be available in your `$PATH`.
+
+### 2. Configure Credentials (BYOK)
+
+JEV Reflex follows a **Bring-Your-Own-Key (BYOK)** model. Provide your TypeSafe API key via environment variable or `.env`:
+
+```bash
+cp .env.example .env
+# Edit .env with your credentials:
+# TYPESAFE_API_KEY="your-typesafe-api-key"
+```
+
+### 3. Test in 10 Seconds (Offline Demo Mode)
+
+Evaluate a dangerous command offline without needing an API key:
+
+```bash
 $ jrx check --demo --command "rm -rf ./cache"
 ```
 
-Output:
 ```text
 HARD RULES
   known_destructive  TRIGGERED (RECURSIVE_DELETE)
@@ -73,250 +118,150 @@ FINAL
   HOLD
 ```
 
-> [!NOTE]
-> Demo mode (`--demo`) uses an offline, deterministic canned semantic evaluator. When you provide a `TYPESAFE_API_KEY`, live JEV semantic signals are queried.
-
 ---
 
-## Installation & Setup
+## 🛡️ Policy Decisions & Modes
 
-### Requirements
-* Python **3.11** or newer
-* Linux / macOS environment
+JEV Reflex calculates deterministic results across 18 semantic risk dimensions:
 
-### Install via pip / editable
-```bash
-# Clone the repository
-git clone https://github.com/Madhumasa84/jrx.git
-cd jrx
-
-# Create and activate a virtual environment
-python3.11 -m venv .venv
-source .venv/bin/activate
-
-# Install with development dependencies
-pip install -e ".[dev]"
-```
-
-Both `jev-reflex` and its shorthand alias `jrx` are installed into your PATH.
-
-### Environment Configuration (`.env`)
-
-Authentication uses **BYOK (Bring Your Own Key)**. Supply your TypeSafe API key through the environment or a `.env` file:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-```bash
-# ==============================================================================
-# JEV Reflex / JRX - Environment Configuration
-# ==============================================================================
-# TypeSafe API Key (BYOK) - Required for live JEV semantic evaluations
-TYPESAFE_API_KEY="your-typesafe-api-key"
-
-# Debug mode for JEV Reflex broker and CLI (1 = verbose, 0 = normal)
-JRX_DEBUG=0
-```
-
-> [!IMPORTANT]
-> Never commit `.env` or secret keys to version control. `.env` is ignored by default in `.gitignore`. The core policy and evaluator interfaces are vendor-neutral; TypeSafe is isolated behind a dedicated integration boundary.
-
----
-
-## Key Concepts & Policy Decisions
-
-The deterministic policy engine applies configured thresholds and hard rule triggers to produce one of three outcomes:
-
-| Decision | Meaning | Typical Trigger |
-| :--- | :--- | :--- |
-| **`ALLOW`** | Safe to proceed. No hard rule triggered and semantic risks below review threshold. | Standard test runner (`pytest`), linting, read-only commands. |
-| **`REVIEW`** | Meaningful uncertainty or risk. Requires explicit human confirmation. | Dependency updates, database migrations, security-sensitive flags. |
-| **`HOLD`** | High risk or violation detected. Execution is blocked. | Recursive deletions, secret leaks, prompt injections, repository escape. |
+| Decision | Meaning | Execution Behavior | Example Trigger |
+| :--- | :--- | :--- | :--- |
+| **`ALLOW`** | Safe to proceed | Executes transparently | `pytest tests/`, `ruff check`, read-only commands |
+| **`REVIEW`** | Moderate risk / Ambiguous intent | Pauses for human confirmation | `alembic upgrade`, `pip install`, config mutations |
+| **`HOLD`** | Critical hazard detected | **Terminates execution** | `rm -rf /`, `git push --force`, credential export |
 
 ### Execution Modes
-Configure how `jrx exec` or agent adapters handle decisions:
-* **`advisory`** (Default): Outputs recommendations without halting execution.
-* **`review`**: Prompts the user or halts with non-zero exit status on `REVIEW` and `HOLD`.
-* **`enforce`**: Blocks `HOLD` actions and rejects degraded semantic evaluations.
+* **`advisory`** (Default): Emits structured audit warnings and signals without interrupting execution. Ideal for CI observation and baseline calibration.
+* **`review`**: Prompts the developer or halts execution whenever a `REVIEW` or `HOLD` condition is triggered.
+* **`enforce`**: Strictly blocks `HOLD` actions and treats degraded/unavailable semantic evaluations as fail-closed.
 
 ---
 
-## CLI & Command Reference
+## 🤖 Supported Agent Harnesses
 
-The `jrx` (or `jev-reflex`) CLI provides targeted commands for action evaluation, execution wrapping, stability analysis, and daemon management:
+JEV Reflex features native hook adapters for leading coding agent frameworks:
 
-### 1. Evaluate an Action (`check`)
-Evaluate an action without executing it:
-```bash
-# Evaluate a shell command
-jrx check --command "pytest tests/"
+| Agent / Harness | Integration Hook | Adapter Command | Docs |
+| :--- | :--- | :--- | :--- |
+| **OpenAI Codex CLI** | `.codex/hooks.json` PreToolUse | `jrx codex-hook` | [Guide](docs/harnesses.md#1-openai-codex-cli) |
+| **Anthropic Claude Code** | `.claude/settings.json` PreToolUse | `jrx claude-code-hook` | [Guide](docs/harnesses.md#2-anthropic-claude-code) |
+| **Google Antigravity** | `.agents/hooks.json` PreToolUse | `jrx antigravity-hook` | [Guide](docs/harnesses.md#3-google-antigravity) |
+| **OpenRouter Agent SDK** | Python & TypeScript Lifecycle Hooks | `jrx openrouter-hook` | [Guide](docs/harnesses.md#4-openrouter-agent-sdk) |
+| **Pi Coding Agent** | `.pi/extensions/` Extension Event | `jrx pi-hook` | [Guide](docs/harnesses.md#5-pi-agent) |
+| **DeepSeek Harness** | `dsh-hooks-codex` Bridge Protocol | `jrx deepseek-hook` | [Guide](docs/harnesses.md#6-deepseek-harness) |
+| **Universal Wrapper** | Standard CLI Prefix | `jrx exec --mode enforce -- <cmd>` | [Guide](docs/harnesses.md#7-universal-cli-wrapper-fallback) |
 
-# Evaluate with bounded git diff from stdin
-git diff | jrx check --stdin-diff --command "git commit -am 'Update auth logic'"
-
-# Evaluate with task context
-jrx check --task "Fix database migration" --command "python migrate.py"
-
-# Evaluate using local deterministic checks only (no API calls)
-jrx check --no-jev --command "git status"
-
-# Stable JSON contract for agent hooks
-jrx check --json --command "rm -rf ./temp"
-```
-
-### 2. Transparent Execution Wrapper (`exec`)
-Wrap agent actions to intercept execution before damage occurs:
-```bash
-# In enforce mode: allows safe actions, halts on HOLD
-jrx exec --mode enforce -- python migrate.py
-
-# Preserves exact arguments and avoids shell injection risks
-jrx exec --mode review -- npm install lodash
-```
-
-### 3. Compare Rule vs Semantic Impact (`compare`)
-Compare what semantic evaluation adds over static rules:
-```bash
-jrx compare --demo --task "Update schema" --command "python migrate.py"
-```
-
-### 4. Measure Decision Stability (`stability`)
-Run repeated evaluations across N runs to measure consistency, flip rate, and signal variance:
-```bash
-jrx stability --demo --runs 100 --command "python migrate.py"
-```
-
-### 5. Benchmark Suite (`benchmark`)
-Run repeatable policy and stability benchmarks:
-```bash
-# Offline benchmark with fixture suites
-jrx benchmark stability --runs 10
-
-# Live TypeSafe benchmark with synthetic fixtures (requires API key)
-jrx benchmark live --runs 5 --case dependency-upgrade --output benchmark-smoke.json
-```
+*Full integration instructions and ready-to-copy hook configurations are documented in [docs/harnesses.md](docs/harnesses.md).*
 
 ---
 
-## Host-Side Broker (Secure Sandbox Isolation)
+## 🔒 Host Broker Architecture
 
-When coding agents run inside locked-down sandboxes (containers, VMs), outbound internet access may be restricted, or exposing `TYPESAFE_API_KEY` inside the sandbox may violate security policies.
+In enterprise sandbox environments (Docker containers, microVMs, Kubernetes pods), passing raw API keys into the untrusted agent environment violates least privilege.
 
-JEV Reflex provides a **Host Broker** architecture:
-```text
-┌──────────────────────────────────────┐       ┌──────────────────────────────────────┐
-│       Untrusted Agent Sandbox        │       │             Trusted Host             │
-│                                      │       │                                      │
-│  Codex CLI / Claude Code Hook        │       │  jrx broker (daemon)                 │
-│         │                            │       │       │                              │
-│         ▼                            │       │       ▼                              │
-│  Local Hard Checks                   │       │  TypeSafe JEV API                    │
-│         │                            │       │  (Key stored safely on host)         │
-│         ▼                            │       │       │                              │
-│  Unix Domain Socket Client ──────────┼───────┼───────┘                              │
-│  (~/.jev-reflex/reflex.sock, 0600)   │  IPC  │                                      │
-└──────────────────────────────────────┘       └──────────────────────────────────────┘
+The **JEV Reflex Host Broker** isolates credentials in the host environment while serving evaluations over a restricted Unix domain socket:
+
+```
+┌─────────────────────────────────────────┐         ┌─────────────────────────────────────────┐
+│     Untrusted Agent Sandbox / Pod       │         │        Trusted Host Environment         │
+│                                         │         │                                         │
+│   Agent (Codex / Claude / Custom)       │         │   jrx broker (Background Daemon)        │
+│         │                               │         │         │                               │
+│         ▼                               │         │         ▼                               │
+│   Local Hard Checks                     │  POSIX  │   TypeSafe JEV API Gateway              │
+│         │                               │ Socket  │   (TYPESAFE_API_KEY stored on host)     │
+│         ▼                               │ (0600)  │         │                               │
+│   Unix Socket Client ───────────────────┼─────────┼─────────┘                               │
+│   ~/.jev-reflex/reflex.sock             │         │   Prometheus Metrics Server (:9090)     │
+└─────────────────────────────────────────┘         └─────────────────────────────────────────┘
 ```
 
-### Starting the Broker
-In a trusted host shell with `TYPESAFE_API_KEY` set:
+### Managing the Broker Daemon
+
 ```bash
-# Run broker interactively
+# Start broker in foreground (useful for development & debugging)
 jrx broker run
 
-# Or run as a detached background daemon
+# Start broker as a detached background daemon
 jrx broker start
 
-# Check status
+# Query broker health and socket status
 jrx broker status --json
 
-# Stop broker
+# Terminate broker daemon
 jrx broker stop
 ```
 
-### Using the Broker from Sandbox
-From an agent shell where `TYPESAFE_API_KEY` is not present:
+---
+
+## 📜 Cryptographic Audit Trail & Governance
+
+Every decision evaluated by JEV Reflex is permanently logged to an append-only, SHA-256 hash-chained Merkle ledger.
+
+### Verifying Log Integrity
+Detect any unauthorized alteration, sequence reordering, or record deletion:
+
 ```bash
-env -u TYPESAFE_API_KEY jrx check --transport broker --command "python migrate.py"
+$ jrx audit verify
+Audit log cryptographic integrity verified: 1042 entries checked (0 errors).
 ```
 
-See [docs/broker.md](docs/broker.md) for full socket protocols, timeouts, and daemon lifecycle details.
+### Human Override Tracking
+Track authorized manual bypasses for auditing and governance compliance:
+
+```bash
+# Authorize an override as a named approver
+jrx exec --mode enforce --allow-override --approver "lead-secops" -- terraform apply
+
+# Review audit trail of overrides
+jrx audit overrides --since 2026-09-01
+```
+
+### Cryptographic Policy Signing
+Guarantee that policies cannot be modified by unprivileged local developers:
+
+```bash
+# Generate Ed25519 signing keypair
+jrx policy keygen --output-dir ~/.jrx/keys
+
+# Sign a policy file
+jrx policy sign reflex.yaml --key ~/.jrx/keys/policy_signing.key
+
+# Verify policy authenticity
+jrx policy verify reflex.yaml --public-key ~/.jrx/keys/policy_signing.pub
+```
 
 ---
 
-## Agent Integrations
+## 💻 CLI Command Reference
 
-### Codex CLI
-Codex CLI supports native `PreToolUse` lifecycle hooks. Configure `.codex/hooks.json`:
-
-```json
-{
-  "description": "JEV Reflex deterministic execution control",
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash|bash|command_execution|apply_patch|mcp__.*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "jev-reflex codex-hook",
-            "timeout": 30,
-            "statusMessage": "JEV Reflex is checking the proposed action"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-See [docs/codex.md](docs/codex.md) for detailed configuration and trust reviews.
-
-### Claude Code
-Claude Code supports `PreToolUse` hooks natively. Configure via:
-```bash
-jev-reflex claude-code-hook --mode enforce
-```
-`HOLD` decisions map to `deny`, and `REVIEW` maps to `ask`. See [docs/claude-code.md](docs/claude-code.md).
-
-### Generic Terminal Agents
-Any terminal-based agent can incorporate execution control via:
-```bash
-jrx exec --mode enforce -- <command>
-```
-Or query policy as JSON via `jrx check --json --command "..."`. See [examples/AGENTS.md](examples/AGENTS.md).
-
-### Antigravity, OpenRouter, Pi, and DeepSeek Harness
-
-Native integrations are available for the other common harness surfaces:
-
-| Harness | Integration | Native entry point |
+| Command | Usage | Description |
 | :--- | :--- | :--- |
-| Antigravity | `.agents/hooks.json` command hook | `jev-reflex antigravity-hook` |
-| OpenRouter Agent SDK | Python lifecycle hooks | `evaluate_openrouter_hook(...)` |
-| Pi | TypeScript `tool_call` extension | `jev-reflex pi-hook` |
-| DeepSeek Harness | Codex hook bridge | `jev-reflex deepseek-hook` |
-
-See [docs/harnesses.md](docs/harnesses.md) and the ready-to-copy files in
-[`examples/antigravity`](examples/antigravity), [`examples/openrouter`](examples/openrouter),
-[`examples/pi`](examples/pi), and [`examples/deepseek`](examples/deepseek). Each adapter preserves the same
-`advisory`, `review`, and `enforce` semantics; the host harness remains the
-owner of model authentication and its normal sandbox controls.
+| `jrx check` | `jrx check --command "<cmd>"` | Analyze proposed action without executing. Supports `--json`, `--task`, `--stdin-diff`. |
+| `jrx exec` | `jrx exec --mode enforce -- <cmd>` | Evaluate and execute command safely. Blocks execution on `HOLD`. |
+| `jrx compare` | `jrx compare --command "<cmd>"` | Compare deterministic-only rules versus combined JEV semantic evaluation. |
+| `jrx stability` | `jrx stability --runs 100 --command "<cmd>"` | Test decision consistency and calculate flip rates over repeated evaluations. |
+| `jrx broker` | `jrx broker [run\|start\|stop\|status]` | Manage the host-side semantic daemon and IPC socket. |
+| `jrx audit` | `jrx audit [verify\|overrides\|export]` | Audit log verification, override governance, and SIEM exports. |
+| `jrx policy` | `jrx policy [sign\|verify\|test\|keygen]` | Policy signing, Ed25519 verification, and golden regression testing. |
+| `jrx benchmark` | `jrx benchmark [stability\|live]` | Run automated offline test suites or live TypeSafe API benchmarks. |
 
 ---
 
-## Configuration (`reflex.yaml`)
+## ⚙️ Configuration Reference (`reflex.yaml`)
 
-Copy [reflex.example.yaml](reflex.example.yaml) to `reflex.yaml` to configure project-level thresholds and rules:
+Configure thresholds, hard rules, and evaluation behaviors with `reflex.yaml`:
 
 ```yaml
-mode: advisory # advisory | review | enforce
+# Execution mode: advisory | review | enforce
+mode: advisory
 
+# Decision thresholds (0.0 to 1.0)
 thresholds:
   review: 0.70
   hold: 0.90
 
+# Semantic categories that trigger immediate HOLD
 hold_on:
   - destructive
   - secret_exposure
@@ -325,6 +270,7 @@ hold_on:
   - wrong_repo
   - fail_open
 
+# Semantic categories that require explicit REVIEW
 review_on:
   - security_sensitive
   - concurrency_sensitive
@@ -332,88 +278,84 @@ review_on:
   - backwards_compatibility
   - human_review
 
+# JEV Semantic Settings
 jev:
-  samples: 1
-  aggregation: median # median | mean | max
-  transport: direct   # direct | broker
+  transport: direct      # direct | broker | broker-tls
   socket: ~/.jev-reflex/reflex.sock
+  samples: 1             # Number of semantic samples to aggregate
+  aggregation: median    # median | mean | max
+  api_timeout: 20.0
 
-stability:
-  boundary_margin: 0.03
+# Cryptographic Governance
+signing:
+  require_signature: false
+  public_key_path: ~/.jrx/keys/policy_signing.pub
 
-stability_policy:
-  mode: strict # strict | conservative | majority
-
-privacy:
-  redact_secrets: true
-  store_requests: false
+# Human Override Rules
+override:
+  allow_hold_override: false  # When false, HOLD actions can NEVER be bypassed
 ```
 
 ---
 
-## Architecture & Design Principles
+## 🚢 Production & Container Deployment
 
-```text
-ContextProvider (bounds diff, scrubs secrets)
-      ↓
-Deterministic Checks ─────────────┐
-      │                           │
-      └──── Semantic Evaluator ───┤
-                                  ↓
-                        Policy Engine (pure function)
-                                  ↓
-                        ALLOW / REVIEW / HOLD
-                                  ↓
-                        CLI / Wrapper / Hook
-```
-
-* **Separation of Concerns:** Policy evaluation makes zero network calls. The semantic evaluator never makes final execution decisions.
-* **Deterministic Boundary:** Identical findings + identical semantic probabilities + identical config = identical decision every time.
-* **Bounded Context:** Diff sizes and prompt strings are deterministically bounded before IPC/network transmission.
-* **Zero Host Pollution:** Redaction strips credential patterns (bearer tokens, private keys, AWS/GitHub tokens) prior to any logging or transmission.
-
-See [docs/architecture.md](docs/architecture.md) and [docs/security.md](docs/security.md).
-
----
-
-## Testing & Quality Assurance
+### Docker Container
+Build and deploy the lightweight, non-root container image:
 
 ```bash
-# Run unit and integration tests
-make test
-# Or directly with pytest in the virtual environment
-.venv/bin/pytest
+docker build -t jrx-broker:latest .
 
-# Lint and check formatting
-make lint
+docker run -d \
+  --name jrx-broker \
+  -e TYPESAFE_API_KEY="your-api-key" \
+  -p 9090:9090 \
+  jrx-broker:latest
+```
 
-# Run offline benchmark suite
-jrx benchmark stability --runs 10
+### Kubernetes Helm Chart
+Deploy the broker into Kubernetes clusters using the included Helm chart:
 
-# Run automated demo walkthrough
-bash examples/demo.sh
+```bash
+# Validate chart
+helm lint ./helm/jrx-broker
+
+# Install chart
+helm install jrx-broker ./helm/jrx-broker \
+  --set env.TYPESAFE_API_KEY="your-api-key" \
+  --set service.metrics.port=9090
 ```
 
 ---
 
-## Known Limitations
+## 📚 Documentation Index
 
-* **Observation vs Determinism Proof:** Model generation remains probabilistic. Stability metrics represent observed empirical consistency over evaluated runs.
-* **Heuristic Redaction:** Secret redaction uses a hybrid approach: regex patterns for common credential patterns plus optional gitleaks integration for comprehensive secret detection. When gitleaks is available, it provides extensive rule coverage; when unavailable, it falls back to regex-only redaction. This is not a substitute for a full secrets vault or secure secret management practices.
-* **Time-of-Check to Time-of-Use (TOCTOU):** User-space pre-execution checks cannot eliminate all concurrent filesystem race conditions.
-* **Hook Coverage:** Commands executed outside the configured agent hook or wrapper bypass local inspection.
-
----
-
-## Contributing
-
-Contributions, bug reports, and suggestions are welcome!
-1. Ensure all vendor-specific integrations remain decoupled behind the adapter boundary.
-2. Add tests for all new checks or policy rules in `tests/`.
-3. Verify that `make test` and `make lint` pass before submitting pull requests.
+| Guide | Content |
+| :--- | :--- |
+| 🏗️ **[System Architecture](docs/architecture.md)** | Deep dive into the 4-stage pipeline, context bounding, and pure policy logic. |
+| 🔌 **[Harness Integrations](docs/harnesses.md)** | Comprehensive setup guides for Codex, Claude Code, Antigravity, OpenRouter, Pi, and DeepSeek. |
+| 🛡️ **[Security Architecture](docs/security.md)** | Hard check mechanics, secret redaction engine, Ed25519 signing, and boundary traversal defenses. |
+| 🎯 **[Enterprise Threat Model](docs/threat-model.md)** | Formal security boundaries, 12 attacker personas, and negative security findings. |
+| 🖥️ **[Host Broker Daemon](docs/broker.md)** | Unix socket protocol, permissions specification, mTLS transport, and IPC limits. |
+| 📊 **[Observability & Metrics](docs/observability.md)** | Prometheus metrics exposition (`:9090/metrics`), structured logging, and calibration. |
+| 🔬 **[Benchmark Methodology](docs/live-benchmark.md)** | Empirical stability metrics, decision consistency calculation, and live API test suites. |
 
 ---
 
-## License
+## 🤝 Contributing
 
-This project is licensed under the **Apache 2.0 License**. See [LICENSE](LICENSE) for details.
+Contributions, bug reports, and discussions are welcome!
+
+1. Ensure vendor-specific logic remains decoupled in `src/jev_reflex/adapters/`.
+2. Maintain zero host pollution—all tests should run in isolated temporary sandboxes.
+3. Verify linting and test suites pass:
+   ```bash
+   make lint
+   make test
+   ```
+
+---
+
+## 📄 License
+
+JEV Reflex is open-source software licensed under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for details.

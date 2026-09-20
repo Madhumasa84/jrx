@@ -1,0 +1,208 @@
+# Default values for jrx-broker
+
+image:
+  repository: ghcr.io/madhumasa84/jrx-broker
+  pullPolicy: IfNotPresent
+  tag: ""  # Overrides the image tag whose default is the chart appVersion
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Deployment vs StatefulSet decision:
+# - Use Deployment for standard broker with unix socket transport (default)
+# - Use StatefulSet for broker-tls with HA requirements requiring stable network identity
+# - This default uses Deployment for simplicity; switch to StatefulSet if broker-tls HA is needed
+kind: Deployment
+
+replicaCount: 1
+
+# ServiceAccount configuration
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Service configuration
+service:
+  type: ClusterIP
+  # For unix socket transport, service is primarily for metrics
+  metricsPort: 9090
+  # For TLS transport, expose the broker port
+  brokerPort: 8443
+
+# Resource limits and requests
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Autoscaling
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+# Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Environment variables
+env:
+  # Debug mode (1 to enable, 0 to disable)
+  JRX_DEBUG: "0"
+  # Metrics configuration
+  JRX_METRICS_HOST: "0.0.0.0"
+  JRX_METRICS_PORT: "9090"
+
+# Configuration for reflex.yaml
+config:
+  # Execution mode: advisory, review, enforce
+  mode: advisory
+  # Policy configuration
+  policy:
+    allowHoldOverride: false
+  # Thresholds
+  thresholds:
+    review: 0.70
+    hold: 0.90
+  # Hold conditions
+  holdOn:
+    - destructive
+    - secret_exposure
+    - irreversible
+    - prompt_injection
+    - wrong_repo
+    - wrong_repo_semantic
+    - fail_open
+  # Review conditions
+  reviewOn:
+    - security_sensitive
+    - concurrency_sensitive
+    - persistence_sensitive
+    - backwards_compatibility
+    - human_review
+  # Context configuration
+  context:
+    includeGitDiff: true
+    includeChangedFiles: true
+    includeTests: true
+    maxDiffChars: 30000
+    maxContextChars: 50000
+  # Privacy configuration
+  privacy:
+    redactSecrets: true
+    storeRequests: false
+  # Audit configuration
+  audit:
+    enabled: false
+    path: /home/jrx/.jev-reflex/audit.log
+    rotateMb: 100
+  # Signing configuration
+  signing:
+    requireSignature: false
+    publicKeyPath: null
+    privateKeyPath: null
+    signerType: ed25519
+  # Calibration configuration
+  calibration:
+    enabled: false
+    path: null
+  # Logging configuration
+  logging:
+    enabled: true
+    sink: stdout
+    level: INFO
+    webhookUrl: null
+    syslogIdent: jrx
+  # JEV configuration
+  jev:
+    samples: 1
+    aggregation: median
+    transport: direct  # direct, broker, broker-tls
+    socket: /home/jrx/.jev-reflex/reflex.sock
+    connectTimeout: 1.0
+    requestTimeout: 25.0
+    apiTimeout: 20.0
+    # TLS configuration (only when transport: broker-tls)
+    brokerTls:
+      enabled: false
+      listenAddr: 0.0.0.0:8443
+      certPath: /etc/jrx/tls/tls.crt
+      keyPath: /etc/jrx/tls/tls.key
+      clientCaPath: /etc/jrx/tls/ca.crt
+  # Stability configuration
+  stability:
+    boundaryMargin: 0.03
+  # Stability policy configuration
+  stabilityPolicy:
+    mode: strict
+
+# Secret references
+secrets:
+  # TypeSafe API key secret reference
+  typesafeApiKey:
+    existingSecret: ""
+    key: "typesafe-api-key"
+  # TLS certificate secret reference (for broker-tls)
+  tls:
+    existingSecret: ""
+    certKey: "tls.crt"
+    keyKey: "tls.key"
+    caKey: "ca.crt"
+
+# Volume mounts for TLS certificates and persistent storage
+volumes:
+  # TLS certificates volume (for broker-tls)
+  tls:
+    enabled: false
+    existingClaim: ""
+    mountPath: /etc/jrx/tls
+  # Persistent storage for audit logs and socket
+  data:
+    enabled: false
+    existingClaim: ""
+    mountPath: /home/jrx/.jev-reflex
+    storageClass: ""
+    size: 1Gi
+
+# Liveness and readiness probes
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 30
+  periodSeconds: 30
+  timeoutSeconds: 10
+  successThreshold: 1
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  successThreshold: 1
+  failureThreshold: 3

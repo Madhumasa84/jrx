@@ -1,0 +1,160 @@
+{{- if eq .Values.kind "StatefulSet" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "jrx-broker.fullname" . }}
+  labels:
+    {{- include "jrx-broker.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  serviceName: {{ include "jrx-broker.fullname" . }}
+  selector:
+    matchLabels:
+      {{- include "jrx-broker.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "jrx-broker.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "jrx-broker.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: jrx-broker
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.env.JRX_METRICS_PORT | default 9090 }}
+              protocol: TCP
+            {{- if eq .Values.config.jev.transport "broker-tls" }}
+            - name: broker
+              containerPort: {{ .Values.service.brokerPort }}
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: TYPESAFE_API_KEY
+              {{- if .Values.secrets.typesafeApiKey.existingSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.typesafeApiKey.existingSecret }}
+                  key: {{ .Values.secrets.typesafeApiKey.key }}
+              {{- else }}
+              value: ""
+              {{- end }}
+            - name: JRX_DEBUG
+              value: {{ .Values.env.JRX_DEBUG | quote }}
+            - name: JRX_METRICS_HOST
+              value: {{ .Values.env.JRX_METRICS_HOST | quote }}
+            - name: JRX_METRICS_PORT
+              value: {{ .Values.env.JRX_METRICS_PORT | quote }}
+            {{- if eq .Values.config.jev.transport "broker-tls" }}
+            - name: JRX_BROKER_TLS_LISTEN_ADDR
+              value: {{ .Values.config.jev.brokerTls.listenAddr | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /home/jrx/reflex.yaml
+              subPath: reflex.yaml
+            - name: tmp
+              mountPath: /home/jrx/.jev-reflex
+            {{- if .Values.volumes.tls.enabled }}
+            - name: tls
+              mountPath: {{ .Values.volumes.tls.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.volumes.data.enabled }}
+            - name: data
+              mountPath: {{ .Values.volumes.data.mountPath }}
+            {{- end }}
+          {{- if .Values.livenessProbe.enabled }}
+          livenessProbe:
+            exec:
+              command:
+                - jrx
+                - broker
+                - status
+                - --json
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.livenessProbe.successThreshold }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.readinessProbe.enabled }}
+          readinessProbe:
+            exec:
+              command:
+                - jrx
+                - broker
+                - status
+                - --json
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.readinessProbe.successThreshold }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "jrx-broker.fullname" . }}-config
+        - name: tmp
+          emptyDir:
+            medium: Memory
+        {{- if .Values.volumes.tls.enabled }}
+        - name: tls
+          {{- if .Values.volumes.tls.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.volumes.tls.existingClaim }}
+          {{- else }}
+          secret:
+            secretName: {{ .Values.secrets.tls.existingSecret }}
+            defaultMode: 0400
+          {{- end }}
+        {{- end }}
+        {{- if .Values.volumes.data.enabled }}
+        - name: data
+          {{- if .Values.volumes.data.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.volumes.data.existingClaim }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if and .Values.volumes.data.enabled (not .Values.volumes.data.existingClaim) }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.volumes.data.storageClass | default "" }}
+        resources:
+          requests:
+            storage: {{ .Values.volumes.data.size }}
+  {{- end }}
+{{- end }}
