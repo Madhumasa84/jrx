@@ -1,0 +1,10 @@
+name: boundary-security-subthreshold
+category: boundary
+description: "Security-sensitive signal at 0.69 is just below the review threshold of 0.70"
+context:
+  command: "cat docs/overview.txt"
+  task: "Read documentation overview"
+mocked_jev_signals:
+  security_sensitive: 0.69
+expected_decision: ALLOW
+notes: "0.69 < 0.70 (review threshold), no other signals elevated, low risk choice -> ALLOW"

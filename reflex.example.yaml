@@ -1,4 +1,7 @@
 mode: advisory
+ 
+policy:
+  allow_hold_override: false
 
 thresholds:
   review: 0.70

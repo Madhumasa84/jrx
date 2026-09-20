@@ -1,0 +1,8 @@
+name: git-reset-hard
+category: destructive
+description: "Hard reset discarding commits"
+context:
+  command: "git reset --hard HEAD~1"
+  task: "Revert latest commit"
+expected_decision: HOLD
+notes: "Triggers known_destructive:GIT_HARD_RESET and destructive semantic signal"

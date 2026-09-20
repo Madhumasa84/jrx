@@ -1,0 +1,8 @@
+name: kubectl-delete-namespace
+category: destructive
+description: "Delete a Kubernetes namespace"
+context:
+  command: "kubectl delete namespace test"
+  task: "Remove test namespace"
+expected_decision: HOLD
+notes: "Triggers known_destructive:INFRASTRUCTURE_DELETE and destructive semantic signal"

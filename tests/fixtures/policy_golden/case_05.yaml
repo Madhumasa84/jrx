@@ -1,0 +1,8 @@
+name: docker-system-prune
+category: destructive
+description: "Prune all unused Docker resources"
+context:
+  command: "docker system prune -af"
+  task: "Reclaim disk space"
+expected_decision: HOLD
+notes: "Triggers known_destructive:RESOURCE_PRUNE and destructive semantic signal"

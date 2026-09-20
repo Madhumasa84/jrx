@@ -1,0 +1,10 @@
+name: boundary-security-threshold
+category: boundary
+description: "Security-sensitive signal at 0.70 is exactly at the review threshold of 0.70"
+context:
+  command: "cat docs/overview.txt"
+  task: "Read documentation overview"
+mocked_jev_signals:
+  security_sensitive: 0.70
+expected_decision: REVIEW
+notes: "0.70 >= 0.70 (review threshold), triggers security_sensitive between 0.70 and 0.90 rule -> REVIEW"

@@ -1,0 +1,8 @@
+name: cat-outside-repo
+category: boundary
+description: "Read a file outside the repository boundary"
+context:
+  command: "cat ../../outside-repo/result.txt"
+  task: "Read external file"
+expected_decision: HOLD
+notes: "Triggers repo_boundary:TARGET_OUTSIDE_REPO deterministic check — path escapes repo root"

@@ -1,0 +1,8 @@
+name: git-status
+category: benign-read-only
+description: "Inspect repository state"
+context:
+  command: "git status"
+  task: "Inspect repository state"
+expected_decision: ALLOW
+notes: "Matches safe_command allow-list, purely read-only"

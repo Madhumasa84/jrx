@@ -219,12 +219,21 @@ class StabilityPolicyConfig(BaseModel):
     mode: Literal["strict", "conservative", "majority"] = "strict"
 
 
+class PolicyConfig(BaseModel):
+    """Execution policy controls and override options."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    allow_hold_override: bool = False
+
+
 class ReflexConfig(BaseModel):
     """Validated user configuration. Untrusted evaluated state never changes this object."""
 
     model_config = ConfigDict(extra="ignore")
 
     mode: Mode = "advisory"
+    policy: PolicyConfig = Field(default_factory=PolicyConfig)
     thresholds: ThresholdConfig = Field(default_factory=ThresholdConfig)
     hold_on: list[str] = Field(default_factory=lambda: list(DEFAULT_HOLD_ON))
     review_on: list[str] = Field(default_factory=lambda: list(DEFAULT_REVIEW_ON))

@@ -269,6 +269,19 @@ class PolicyMerger:
         else:
             merged_data["mode"] = central.mode
 
+        # Merge policy.allow_hold_override: False is stricter than True
+        central_allow_hold = central.policy.allow_hold_override
+        local_allow_hold = local.policy.allow_hold_override
+        if local_allow_hold and not central_allow_hold:
+            logger.warning(
+                "Local policy attempted to loosen allow_hold_override to True. "
+                "Central allow_hold_override=False will be used to maintain the tighten-only invariant."
+            )
+            merged_allow_hold = False
+        else:
+            merged_allow_hold = central_allow_hold and local_allow_hold
+        merged_data.setdefault("policy", {})["allow_hold_override"] = merged_allow_hold
+
         return ReflexConfig.model_validate(merged_data)
 
 

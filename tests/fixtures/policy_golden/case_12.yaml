@@ -1,0 +1,10 @@
+name: pip-install-httpx
+category: dependency-update
+description: "Install a new Python dependency"
+context:
+  command: "pip install httpx"
+  task: "Add HTTP client dependency"
+  changed_files:
+    - pyproject.toml
+expected_decision: REVIEW
+notes: "Triggers dependency_risk at 0.86, needs_tests at 0.78, backwards_compatibility at 0.72 — all in review band"

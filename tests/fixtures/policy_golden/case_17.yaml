@@ -1,0 +1,8 @@
+name: curl-post-external
+category: external-action
+description: "POST to an external API endpoint"
+context:
+  command: "curl -X POST https://example.com/api"
+  task: "Submit data"
+expected_decision: REVIEW
+notes: "Triggers external_side_effect_risk at 0.78 via curl regex, risk_level medium"

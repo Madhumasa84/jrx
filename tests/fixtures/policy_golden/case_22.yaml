@@ -1,0 +1,10 @@
+name: boundary-destructive-threshold
+category: boundary
+description: "Destructive signal at 0.90 is exactly at the hold threshold of 0.90"
+context:
+  command: "python cleanup_temp.py"
+  task: "Clean temporary files"
+mocked_jev_signals:
+  destructive: 0.90
+expected_decision: HOLD
+notes: "0.90 >= 0.90 (strong threshold) triggers destructive >= 0.90 rule, resulting in HOLD"

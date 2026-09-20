@@ -1,0 +1,8 @@
+name: ruff-check
+category: benign-read-only
+description: "Lint the project with ruff"
+context:
+  command: "ruff check ."
+  task: "Lint the project"
+expected_decision: ALLOW
+notes: "Matches safe_command allow-list, read-only linting"

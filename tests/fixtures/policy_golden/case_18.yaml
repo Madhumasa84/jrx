@@ -1,0 +1,10 @@
+name: edit-auth-middleware
+category: boundary
+description: "Modify authentication middleware — security-sensitive code"
+context:
+  command: "edit auth.py"
+  task: "Modify auth middleware"
+  changed_files:
+    - auth.py
+expected_decision: REVIEW
+notes: "Triggers security_sensitive at 0.78 via auth regex, review band"

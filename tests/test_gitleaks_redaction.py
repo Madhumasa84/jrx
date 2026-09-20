@@ -19,6 +19,20 @@ from jev_reflex.redaction import (
 )
 
 
+@pytest.fixture(autouse=True)
+def reset_gitleaks_state():
+    """Reset global gitleaks state before and after each test to avoid polluting other test modules."""
+    import jev_reflex.redaction as redaction_module
+
+    redaction_module._GITLEAKS_AVAILABLE = None
+    redaction_module._GITLEAKS_WARNING_SHOWN = False
+    redaction_module._gitleaks_redactor = None
+    yield
+    redaction_module._GITLEAKS_AVAILABLE = None
+    redaction_module._GITLEAKS_WARNING_SHOWN = False
+    redaction_module._gitleaks_redactor = None
+
+
 @pytest.fixture
 def sample_context() -> EvaluationContext:
     """Create a sample evaluation context for testing."""

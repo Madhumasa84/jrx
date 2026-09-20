@@ -1,9 +1,12 @@
 PYTHON ?= $(shell which .venv/bin/python 2>/dev/null || which python3 2>/dev/null || which python)
 
-.PHONY: test lint format
+.PHONY: test policy-test lint format
 
-test:
+test: policy-test
 	$(PYTHON) -m pytest
+
+policy-test:
+	$(PYTHON) -m jev_reflex policy test --config reflex.example.yaml
 
 lint:
 	$(PYTHON) -m ruff check .

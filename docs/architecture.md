@@ -167,3 +167,23 @@ adapters translate host actions into the same context/result types. The
 contracts are intentionally reusable for future MCP firewalls, research
 agents, browser agents, and CI/PR gates. The first product stays focused on
 coding-agent execution control.
+
+## Policy Golden Regression Suite
+
+JEV Reflex maintains a golden fixture regression suite under `tests/fixtures/policy_golden/`
+to detect unintended verdict alterations on known cases when policy rules or thresholds change.
+
+Run the fixture suite using:
+
+```console
+$ jrx policy test [--config reflex.yaml] [--fixtures tests/fixtures/policy_golden/] [--json]
+```
+
+Or via `make policy-test` (automatically executed during `make test`).
+
+> [!IMPORTANT]
+> **Policy Modification Invariant**: Any pull request touching `reflex.example.yaml`
+> or the policy engine (`src/jev_reflex/policy.py`) **must** include a fixture update
+> in `tests/fixtures/policy_golden/` explaining the intended behavior change and the
+> expected decision differences.
+

@@ -6,6 +6,7 @@ import json
 import shlex
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,8 @@ from .config import JEVConfig, Mode, ReflexConfig, load_config
 from .context import RepositoryContextProvider
 from .evaluator import DefaultEvaluator, DemoEvaluator, evaluate_context
 from .formatters import format_compare, format_human, format_json, format_stability
+from .identity import resolve_approver
+from .logging_config import log_structured
 from .models import EvaluationContext, EvaluationResult, ProposedAction
 from .policy import execution_allowed
 from .signing import Ed25519Signer, sign_file
@@ -364,6 +367,15 @@ def exec_action(
     samples: int | None = typer.Option(None, "--samples", min=1),
     aggregation: str | None = typer.Option(None, "--aggregation"),
     json_output: bool = typer.Option(False, "--json"),
+    approver: str | None = typer.Option(
+        None, "--approver", help="Identity of human approver for REVIEW/HOLD override."
+    ),
+    justification: str | None = typer.Option(
+        None, "--justification", help="Justification for human override."
+    ),
+    yes: bool = typer.Option(
+        False, "-y", "--yes", help="Automatically confirm prompts without interactive input."
+    ),
 ) -> None:
     """Evaluate and, when the configured mode permits it, execute one argv list."""
 
@@ -396,8 +408,76 @@ def exec_action(
 
     _emit_result(result, json_output=json_output)
     if not execution_allowed(result.decision, mode=loaded.mode, degraded=result.degraded):
-        typer.echo("Execution skipped by JEV Reflex policy.", err=True)
-        raise typer.Exit(code=2)
+        # In enforce mode specifically, check policy.allow_hold_override
+        if loaded.mode == "enforce" and result.decision == "HOLD":
+            if not loaded.policy.allow_hold_override:
+                typer.echo(
+                    "Execution blocked: HOLD cannot be overridden in enforce mode "
+                    "(policy.allow_hold_override is false).",
+                    err=True,
+                )
+                raise typer.Exit(code=2)
+
+        prompt_text = (
+            f"Policy decision is {result.decision}. Override and execute?"
+            if result.decision == "HOLD"
+            else f"Policy decision is {result.decision}. Approve and execute?"
+        )
+        confirmed = yes
+        if not confirmed:
+            try:
+                confirmed = typer.confirm(prompt_text, default=False)
+            except (typer.Abort, EOFError, OSError):
+                confirmed = False
+
+        if not confirmed:
+            typer.echo("Execution skipped by user.", err=True)
+            raise typer.Exit(code=2)
+
+        # Require approver identity
+        approver_identity = resolve_approver(approver)
+        if not approver_identity:
+            typer.echo(
+                "Human override refused: no approver identity available. "
+                "Provide --approver, set $JRX_APPROVER, or run as a valid user.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+
+        if justification is not None:
+            override_justification = justification
+        elif yes:
+            override_justification = ""
+        else:
+            try:
+                override_justification = typer.prompt(
+                    "Justification for override", default="", show_default=False
+                )
+            except (typer.Abort, EOFError, OSError):
+                override_justification = ""
+
+        # Log override via audit module
+        try:
+            audit_log = AuditLog(loaded)
+            audit_log.write_human_override(
+                identity=approver_identity,
+                original_decision=result.decision,
+                action_summary=result.action or " ".join(argv),
+                justification=override_justification,
+            )
+        except Exception as exc:
+            typer.echo(f"Warning: could not write override to audit log: {exc}", err=True)
+
+        log_structured(
+            level="WARNING",
+            event="human_override",
+            fields={
+                "identity": approver_identity,
+                "original_decision": result.decision,
+                "action": result.action or " ".join(argv),
+                "justification": override_justification,
+            },
+        )
 
     try:
         completed = subprocess.run(
@@ -1125,24 +1205,89 @@ def audit_tail(
 
             for entry in entries:
                 typer.echo(f"Seq: {entry['seq']}")
-                typer.echo(f"Timestamp: {entry['timestamp_utc']}")
-                typer.echo(f"Decision: {entry['policy_decision']}")
-                typer.echo(f"Action: {entry['action_summary']}")
-                if entry["hard_rule_findings"]:
-                    typer.echo("Hard rule findings:")
-                    for finding in entry["hard_rule_findings"]:
-                        typer.echo(
-                            f"  - {finding['check']}: {finding['reason_code']} (triggered: {finding['triggered']})"
-                        )
-                if entry["jev_signals"]:
-                    typer.echo("JEV signals:")
-                    for signal, value in entry["jev_signals"].items():
-                        typer.echo(f"  - {signal}: {value:.2f}")
-                typer.echo(f"Policy version hash: {entry['policy_version_hash']}")
-                typer.echo(f"Entry hash: {entry['entry_hash']}")
+                typer.echo(f"Timestamp: {entry.get('timestamp_utc') or entry.get('timestamp')}")
+                if entry.get("event_type") == "human_override":
+                    typer.echo("Event: human_override")
+                    typer.echo(f"Approver: {entry.get('identity', 'unknown')}")
+                    typer.echo(f"Original Decision: {entry.get('original_decision', 'unknown')}")
+                    typer.echo(f"Action: {entry.get('action_summary', '')}")
+                    justification = entry.get("justification", "")
+                    typer.echo(f"Justification: {justification if justification else '(empty)'}")
+                else:
+                    typer.echo(f"Decision: {entry.get('policy_decision', '')}")
+                    typer.echo(f"Action: {entry.get('action_summary', '')}")
+                    if entry.get("hard_rule_findings"):
+                        typer.echo("Hard rule findings:")
+                        for finding in entry["hard_rule_findings"]:
+                            typer.echo(
+                                f"  - {finding['check']}: {finding['reason_code']} (triggered: {finding['triggered']})"
+                            )
+                    if entry.get("jev_signals"):
+                        typer.echo("JEV signals:")
+                        for signal, value in entry["jev_signals"].items():
+                            typer.echo(f"  - {signal}: {value:.2f}")
+                typer.echo(f"Policy version hash: {entry.get('policy_version_hash', '')}")
+                typer.echo(f"Entry hash: {entry.get('entry_hash', '')}")
                 typer.echo("---")
     except Exception as e:
         typer.echo(f"Error reading audit log: {e}", err=True)
+        raise typer.Exit(code=1) from None
+
+
+@audit_app.command("overrides")
+def audit_overrides(
+    since: str | None = typer.Option(
+        None, "--since", help="Filter overrides since DATE (YYYY-MM-DD or ISO 8601)."
+    ),
+    path: Path | None = typer.Option(None, "--path", help="Override the audit log path."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """List all human overrides for review."""
+
+    try:
+        config = load_config()
+        if path is not None:
+            config = config.model_copy(
+                update={"audit": config.audit.model_copy(update={"path": str(path)})}
+            )
+        audit_log = AuditLog(config)
+
+        since_dt = None
+        if since is not None:
+            try:
+                clean = since.replace("Z", "+00:00")
+                since_dt = datetime.fromisoformat(clean)
+                if since_dt.tzinfo is None:
+                    since_dt = since_dt.replace(tzinfo=UTC)
+            except ValueError:
+                typer.echo(
+                    f"Invalid date format for --since: '{since}'. Use YYYY-MM-DD or ISO 8601.",
+                    err=True,
+                )
+                raise typer.Exit(code=2) from None
+
+        overrides = audit_log.get_overrides(since=since_dt)
+
+        if json_output:
+            typer.echo(json.dumps(overrides, indent=2, sort_keys=True))
+        else:
+            if not overrides:
+                typer.echo("No human overrides found.")
+                return
+
+            for entry in overrides:
+                typer.echo(f"Seq: {entry['seq']}")
+                typer.echo(f"Timestamp: {entry.get('timestamp_utc') or entry.get('timestamp')}")
+                typer.echo(f"Approver: {entry.get('identity', 'unknown')}")
+                typer.echo(f"Original Decision: {entry.get('original_decision', 'unknown')}")
+                typer.echo(f"Action: {entry.get('action_summary', '')}")
+                justification = entry.get("justification", "")
+                typer.echo(f"Justification: {justification if justification else '(empty)'}")
+                typer.echo("---")
+    except typer.Exit:
+        raise
+    except Exception as e:
+        typer.echo(f"Error reading audit log overrides: {e}", err=True)
         raise typer.Exit(code=1) from None
 
 
@@ -1229,6 +1374,41 @@ def policy_status() -> None:
         typer.echo("Local override: present (reflex.yaml)")
     else:
         typer.echo("Local override: none")
+
+
+@policy_app.command("test")
+def policy_test(
+    fixtures: Path | None = typer.Option(
+        None, "--fixtures", help="Directory containing golden policy fixtures."
+    ),
+    config: Path | None = typer.Option(
+        None, "-c", "--config", help="Path to reflex.yaml configuration to test."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Output results in JSON format."),
+) -> None:
+    """Run golden fixture regression suite against a policy configuration."""
+    from .golden_runner import run_fixtures
+
+    config_path = config
+    if config_path is None:
+        if Path("reflex.yaml").exists():
+            config_path = Path("reflex.yaml")
+        elif Path("reflex.example.yaml").exists():
+            config_path = Path("reflex.example.yaml")
+
+    try:
+        report = run_fixtures(fixtures_dir=fixtures, config_path=config_path)
+    except Exception as e:
+        typer.echo(f"Error running policy fixtures: {e}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if json_output:
+        typer.echo(json.dumps(report.to_dict(), indent=2))
+    else:
+        typer.echo(report.summary_table())
+
+    if not report.all_passed:
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -26,42 +26,47 @@ class AuditEntry:
         seq: int,
         timestamp_utc: str,
         action_summary: str,
-        hard_rule_findings: list[dict[str, Any]],
-        jev_signals: dict[str, float],
-        policy_decision: str,
-        policy_version_hash: str,
-        prev_hash: str,
+        hard_rule_findings: list[dict[str, Any]] | None = None,
+        jev_signals: dict[str, float] | None = None,
+        policy_decision: str = "",
+        policy_version_hash: str = "",
+        prev_hash: str = GENESIS_HASH,
         decision_signature: str | None = None,
+        event_type: str = "policy_decision",
+        identity: str | None = None,
+        original_decision: str | None = None,
+        justification: str | None = None,
     ) -> None:
         self.seq = seq
         self.timestamp_utc = timestamp_utc
         self.action_summary = action_summary
-        self.hard_rule_findings = hard_rule_findings
-        self.jev_signals = jev_signals
+        self.hard_rule_findings = hard_rule_findings if hard_rule_findings is not None else []
+        self.jev_signals = jev_signals if jev_signals is not None else {}
         self.policy_decision = policy_decision
         self.policy_version_hash = policy_version_hash
         self.prev_hash = prev_hash
         self.decision_signature = decision_signature
+        self.event_type = event_type
+        self.identity = identity
+        self.original_decision = original_decision
+        self.justification = justification
         self.entry_hash = self._compute_hash()
 
-    def _compute_hash(self) -> str:
-        """Compute the hash of this entry based on prev_hash and canonical JSON."""
-        entry_without_hash = {
-            "seq": self.seq,
-            "timestamp_utc": self.timestamp_utc,
-            "action_summary": self.action_summary,
-            "hard_rule_findings": self.hard_rule_findings,
-            "jev_signals": self.jev_signals,
-            "policy_decision": self.policy_decision,
-            "policy_version_hash": self.policy_version_hash,
-            "prev_hash": self.prev_hash,
-        }
-        canonical = json.dumps(entry_without_hash, sort_keys=True, separators=(",", ":"))
-        combined = self.prev_hash + canonical
-        return hashlib.sha256(combined.encode()).hexdigest()
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
+    def _get_hash_dict(self) -> dict[str, Any]:
+        """Get canonical dictionary of entry fields for hashing."""
+        if self.event_type == "human_override":
+            return {
+                "action_summary": self.action_summary,
+                "event_type": self.event_type,
+                "identity": self.identity or "",
+                "justification": self.justification if self.justification is not None else "",
+                "original_decision": self.original_decision or "",
+                "policy_version_hash": self.policy_version_hash,
+                "prev_hash": self.prev_hash,
+                "seq": self.seq,
+                "timestamp": self.timestamp_utc,
+                "timestamp_utc": self.timestamp_utc,
+            }
         return {
             "seq": self.seq,
             "timestamp_utc": self.timestamp_utc,
@@ -71,9 +76,21 @@ class AuditEntry:
             "policy_decision": self.policy_decision,
             "policy_version_hash": self.policy_version_hash,
             "prev_hash": self.prev_hash,
-            "entry_hash": self.entry_hash,
-            "decision_signature": self.decision_signature,
         }
+
+    def _compute_hash(self) -> str:
+        """Compute the hash of this entry based on prev_hash and canonical JSON."""
+        entry_without_hash = self._get_hash_dict()
+        canonical = json.dumps(entry_without_hash, sort_keys=True, separators=(",", ":"))
+        combined = self.prev_hash + canonical
+        return hashlib.sha256(combined.encode()).hexdigest()
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        d = self._get_hash_dict()
+        d["entry_hash"] = self.entry_hash
+        d["decision_signature"] = self.decision_signature
+        return d
 
 
 class AuditLog:
@@ -109,23 +126,8 @@ class AuditLog:
         if self._signer is None:
             return None
 
-        # Sign the entry hash (the hash is computed in the entry constructor)
-        # We need to compute it first since we're being called before entry is fully constructed
-        entry_data = {
-            "seq": entry.seq,
-            "timestamp_utc": entry.timestamp_utc,
-            "action_summary": entry.action_summary,
-            "hard_rule_findings": entry.hard_rule_findings,
-            "jev_signals": entry.jev_signals,
-            "policy_decision": entry.policy_decision,
-            "policy_version_hash": entry.policy_version_hash,
-            "prev_hash": entry.prev_hash,
-        }
-        canonical = json.dumps(entry_data, sort_keys=True, separators=(",", ":"))
-        entry_hash = hashlib.sha256((entry.prev_hash + canonical).encode()).hexdigest()
-
-        # Sign the hash
-        signature = self._signer.sign(entry_hash.encode())
+        # Sign the entry hash
+        signature = self._signer.sign(entry.entry_hash.encode())
         import base64
 
         return base64.b64encode(signature).decode()
@@ -149,16 +151,23 @@ class AuditLog:
                 if not last_line:
                     return None
                 data = json.loads(last_line)
-                return AuditEntry(
+                entry = AuditEntry(
                     seq=data["seq"],
-                    timestamp_utc=data["timestamp_utc"],
-                    action_summary=data["action_summary"],
-                    hard_rule_findings=data["hard_rule_findings"],
-                    jev_signals=data["jev_signals"],
-                    policy_decision=data["policy_decision"],
-                    policy_version_hash=data["policy_version_hash"],
-                    prev_hash=data["prev_hash"],
+                    timestamp_utc=data.get("timestamp_utc", data.get("timestamp", "")),
+                    action_summary=data.get("action_summary", ""),
+                    hard_rule_findings=data.get("hard_rule_findings", []),
+                    jev_signals=data.get("jev_signals", {}),
+                    policy_decision=data.get("policy_decision", ""),
+                    policy_version_hash=data.get("policy_version_hash", ""),
+                    prev_hash=data.get("prev_hash", GENESIS_HASH),
+                    event_type=data.get("event_type", "policy_decision"),
+                    identity=data.get("identity"),
+                    original_decision=data.get("original_decision"),
+                    justification=data.get("justification"),
                 )
+                if "entry_hash" in data:
+                    entry.entry_hash = data["entry_hash"]
+                return entry
         except (OSError, json.JSONDecodeError, KeyError):
             return None
 
@@ -172,6 +181,9 @@ class AuditLog:
             },
             "hold_on": sorted(config.hold_on),
             "review_on": sorted(config.review_on),
+            "allow_hold_override": (
+                config.policy.allow_hold_override if hasattr(config, "policy") else False
+            ),
         }
         canonical = json.dumps(policy_data, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()
@@ -240,28 +252,17 @@ class AuditLog:
                 # Read the last entry to get the previous hash and sequence number
                 f.seek(0)
                 lines = f.readlines()
-                last_entry = None
+                last_hash = GENESIS_HASH
+                seq = 1
                 if lines:
                     try:
                         last_line = lines[-1].strip()
                         if last_line:
                             data = json.loads(last_line)
-                            last_entry = AuditEntry(
-                                seq=data["seq"],
-                                timestamp_utc=data["timestamp_utc"],
-                                action_summary=data["action_summary"],
-                                hard_rule_findings=data["hard_rule_findings"],
-                                jev_signals=data["jev_signals"],
-                                policy_decision=data["policy_decision"],
-                                policy_version_hash=data["policy_version_hash"],
-                                prev_hash=data["prev_hash"],
-                            )
+                            last_hash = data.get("entry_hash", GENESIS_HASH)
+                            seq = data.get("seq", 0) + 1
                     except (json.JSONDecodeError, KeyError):
                         pass
-
-                # Get previous hash or use genesis
-                prev_hash = last_entry.entry_hash if last_entry else GENESIS_HASH
-                seq = (last_entry.seq + 1) if last_entry else 1
 
                 # Create new entry (without signature first)
                 entry = AuditEntry(
@@ -272,7 +273,7 @@ class AuditLog:
                     jev_signals=jev_signals,
                     policy_decision=policy_decision,
                     policy_version_hash=policy_version_hash,
-                    prev_hash=prev_hash,
+                    prev_hash=last_hash,
                 )
 
                 # Add signature if signer is configured
@@ -284,6 +285,104 @@ class AuditLog:
             finally:
                 # Release lock
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+    def write_human_override(
+        self,
+        identity: str,
+        original_decision: str,
+        action_summary: str,
+        justification: str = "",
+    ) -> AuditEntry:
+        """Write a human override entry to the audit log with file locking."""
+        redacted_summary = redact_obj(action_summary)
+        redacted_justification = redact_obj(justification) if justification else ""
+        timestamp = datetime.now(UTC).isoformat()
+        policy_version_hash = self._compute_policy_version_hash(self.config)
+
+        log_path = self._get_log_path()
+        if not log_path.exists():
+            log_path.touch(mode=0o600)
+
+        with log_path.open("a+", encoding="utf-8") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.seek(0)
+                lines = f.readlines()
+                last_hash = GENESIS_HASH
+                seq = 1
+                if lines:
+                    try:
+                        last_line = lines[-1].strip()
+                        if last_line:
+                            data = json.loads(last_line)
+                            last_hash = data.get("entry_hash", GENESIS_HASH)
+                            seq = data.get("seq", 0) + 1
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
+                entry = AuditEntry(
+                    seq=seq,
+                    timestamp_utc=timestamp,
+                    action_summary=redacted_summary,
+                    policy_version_hash=policy_version_hash,
+                    prev_hash=last_hash,
+                    event_type="human_override",
+                    identity=identity,
+                    original_decision=original_decision,
+                    justification=redacted_justification,
+                )
+                entry.decision_signature = self._sign_entry_hash(entry)
+
+                f.write(json.dumps(entry.to_dict()) + "\n")
+                f.flush()
+                return entry
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+    write_override_entry = write_human_override
+
+    def get_overrides(self, since: datetime | str | None = None) -> list[dict[str, Any]]:
+        """Return all human override entries, optionally filtered by since date."""
+        log_path = self._get_log_path()
+        if not log_path.exists():
+            return []
+
+        since_dt: datetime | None = None
+        if since is not None:
+            if isinstance(since, str):
+                clean = since.replace("Z", "+00:00")
+                since_dt = datetime.fromisoformat(clean)
+            else:
+                since_dt = since
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=UTC)
+
+        overrides = []
+        try:
+            with log_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        if data.get("event_type") != "human_override":
+                            continue
+                        if since_dt is not None:
+                            ts_str = data.get("timestamp_utc") or data.get("timestamp")
+                            if ts_str:
+                                clean_ts = ts_str.replace("Z", "+00:00")
+                                entry_dt = datetime.fromisoformat(clean_ts)
+                                if entry_dt.tzinfo is None:
+                                    entry_dt = entry_dt.replace(tzinfo=UTC)
+                                if entry_dt < since_dt:
+                                    continue
+                        overrides.append(data)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+            return overrides
+        except OSError:
+            return []
 
     def verify(self, public_key_path: Path | None = None) -> tuple[bool, str]:
         """Verify the integrity of the hash chain and optionally decision signatures.
@@ -348,14 +447,9 @@ class AuditLog:
 
                 # Recompute entry hash and verify
                 entry_without_hash = {
-                    "seq": entry_data["seq"],
-                    "timestamp_utc": entry_data["timestamp_utc"],
-                    "action_summary": entry_data["action_summary"],
-                    "hard_rule_findings": entry_data["hard_rule_findings"],
-                    "jev_signals": entry_data["jev_signals"],
-                    "policy_decision": entry_data["policy_decision"],
-                    "policy_version_hash": entry_data["policy_version_hash"],
-                    "prev_hash": entry_data["prev_hash"],
+                    k: v
+                    for k, v in entry_data.items()
+                    if k not in ("entry_hash", "decision_signature")
                 }
                 canonical = json.dumps(entry_without_hash, sort_keys=True, separators=(",", ":"))
                 combined = prev_hash + canonical
