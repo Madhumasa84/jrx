@@ -4,12 +4,6 @@
 
 **Deterministic Execution Control for Autonomous Coding Agents**
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=flat-square)](LICENSE)
-[![Python Version](https://img.shields.io/badge/python-3.11+-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
-[![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg?style=flat-square)](https://github.com/astral-sh/ruff)
-[![Architecture: Defense-in-Depth](https://img.shields.io/badge/architecture-defense--in--depth-success.svg?style=flat-square)](docs/architecture.md)
-[![Audit Log: Cryptographic](https://img.shields.io/badge/audit%20trail-SHA--256%20Merkle-purple.svg?style=flat-square)](docs/security.md)
-
 <p align="center">
   <a href="#quickstart">Quickstart</a> •
   <a href="#key-architecture">Architecture</a> •
@@ -26,7 +20,7 @@
 
 ---
 
-## ⚡ The Problem & The Solution
+## The Problem & The Solution
 
 Coding agents (OpenAI Codex, Claude Code, Antigravity, OpenRouter, Pi, DeepSeek) are **probabilistic**. Semantic evaluation models are probabilistic too. 
 
@@ -44,7 +38,7 @@ flowchart TD
 
     subgraph Gateway ["JEV Reflex Gateway (jrx)"]
         direction TB
-        Context["Context Provider & Redactor<br/>• Secret scrubbing (Gitleaks / Regex)<br/>• Diff & token bounding"]
+        Context["Context Provider & Redactor<br/>- Secret scrubbing (Gitleaks / Regex)<br/>- Diff & token bounding"]
         
         HardChecks["1. Deterministic Hard Rules<br/>(Sub-millisecond checks: destructive, secrets, escaping)"]
         Semantic["2. Semantic Risk Evaluator<br/>(TypeSafe JEV / Broker: persistence, dependency, intent)"]
@@ -58,14 +52,14 @@ flowchart TD
         Policy --> Audit
     end
 
-    Policy -->|ALLOW| Exec["✓ Execute Action"]
-    Policy -->|REVIEW| User["⚠ Request Human Approval"]
-    Policy -->|HOLD| Block["✕ Block Execution & Exit Non-Zero"]
+    Policy -->|ALLOW| Exec["Execute Action"]
+    Policy -->|REVIEW| User["Request Human Approval"]
+    Policy -->|HOLD| Block["Block Execution & Exit Non-Zero"]
 ```
 
 ---
 
-## 🚀 Quickstart
+## Quickstart
 
 ### 1. Installation
 
@@ -120,7 +114,7 @@ FINAL
 
 ---
 
-## 🛡️ Policy Decisions & Modes
+## Policy Decisions & Modes
 
 JEV Reflex calculates deterministic results across 18 semantic risk dimensions:
 
@@ -137,7 +131,7 @@ JEV Reflex calculates deterministic results across 18 semantic risk dimensions:
 
 ---
 
-## 🤖 Supported Agent Harnesses
+## Supported Agent Harnesses
 
 JEV Reflex features native hook adapters for leading coding agent frameworks:
 
@@ -155,7 +149,7 @@ JEV Reflex features native hook adapters for leading coding agent frameworks:
 
 ---
 
-## 🔒 Host Broker Architecture
+## Host Broker Architecture
 
 In enterprise sandbox environments (Docker containers, microVMs, Kubernetes pods), passing raw API keys into the untrusted agent environment violates least privilege.
 
@@ -194,7 +188,7 @@ jrx broker stop
 
 ---
 
-## 📜 Cryptographic Audit Trail & Governance
+## Cryptographic Audit Trail & Governance
 
 Every decision evaluated by JEV Reflex is permanently logged to an append-only, SHA-256 hash-chained Merkle ledger.
 
@@ -233,7 +227,7 @@ jrx policy verify reflex.yaml --public-key ~/.jrx/keys/policy_signing.pub
 
 ---
 
-## 💻 CLI Command Reference
+## CLI Command Reference
 
 | Command | Usage | Description |
 | :--- | :--- | :--- |
@@ -248,7 +242,7 @@ jrx policy verify reflex.yaml --public-key ~/.jrx/keys/policy_signing.pub
 
 ---
 
-## ⚙️ Configuration Reference (`reflex.yaml`)
+## Configuration Reference (`reflex.yaml`)
 
 Configure thresholds, hard rules, and evaluation behaviors with `reflex.yaml`:
 
@@ -298,7 +292,7 @@ override:
 
 ---
 
-## 🚢 Production & Container Deployment
+## Production & Container Deployment
 
 ### Docker Container
 Build and deploy the lightweight, non-root container image:
@@ -328,21 +322,21 @@ helm install jrx-broker ./helm/jrx-broker \
 
 ---
 
-## 📚 Documentation Index
+## Documentation Index
 
 | Guide | Content |
 | :--- | :--- |
-| 🏗️ **[System Architecture](docs/architecture.md)** | Deep dive into the 4-stage pipeline, context bounding, and pure policy logic. |
-| 🔌 **[Harness Integrations](docs/harnesses.md)** | Comprehensive setup guides for Codex, Claude Code, Antigravity, OpenRouter, Pi, and DeepSeek. |
-| 🛡️ **[Security Architecture](docs/security.md)** | Hard check mechanics, secret redaction engine, Ed25519 signing, and boundary traversal defenses. |
-| 🎯 **[Enterprise Threat Model](docs/threat-model.md)** | Formal security boundaries, 12 attacker personas, and negative security findings. |
-| 🖥️ **[Host Broker Daemon](docs/broker.md)** | Unix socket protocol, permissions specification, mTLS transport, and IPC limits. |
-| 📊 **[Observability & Metrics](docs/observability.md)** | Prometheus metrics exposition (`:9090/metrics`), structured logging, and calibration. |
-| 🔬 **[Benchmark Methodology](docs/live-benchmark.md)** | Empirical stability metrics, decision consistency calculation, and live API test suites. |
+| **[System Architecture](docs/architecture.md)** | Deep dive into the 4-stage pipeline, context bounding, and pure policy logic. |
+| **[Harness Integrations](docs/harnesses.md)** | Comprehensive setup guides for Codex, Claude Code, Antigravity, OpenRouter, Pi, and DeepSeek. |
+| **[Security Architecture](docs/security.md)** | Hard check mechanics, secret redaction engine, Ed25519 signing, and boundary traversal defenses. |
+| **[Enterprise Threat Model](docs/threat-model.md)** | Formal security boundaries, 12 attacker personas, and negative security findings. |
+| **[Host Broker Daemon](docs/broker.md)** | Unix socket protocol, permissions specification, mTLS transport, and IPC limits. |
+| **[Observability & Metrics](docs/observability.md)** | Prometheus metrics exposition (`:9090/metrics`), structured logging, and calibration. |
+| **[Benchmark Methodology](docs/live-benchmark.md)** | Empirical stability metrics, decision consistency calculation, and live API test suites. |
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions, bug reports, and discussions are welcome!
 
@@ -356,6 +350,6 @@ Contributions, bug reports, and discussions are welcome!
 
 ---
 
-## 📄 License
+## License
 
 JEV Reflex is open-source software licensed under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for details.
