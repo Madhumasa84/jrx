@@ -1,0 +1,10 @@
+name: edit-worker-concurrency
+category: boundary
+description: "Modify shared-state locking in concurrent workers"
+context:
+  command: "edit worker.py"
+  task: "Change shared-state locking for concurrent workers"
+  changed_files:
+    - worker.py
+expected_decision: REVIEW
+notes: "Triggers concurrency_sensitive at 0.78 via concurr regex, review band"

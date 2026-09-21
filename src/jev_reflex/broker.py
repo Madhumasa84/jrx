@@ -35,6 +35,11 @@ def socket_path(config: ReflexConfig) -> Path:
 def secure_directory(path: Path, *, create: bool = False) -> None:
     if create:
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            if path.stat().st_uid == os.getuid():
+                path.chmod(0o700)
+        except OSError:
+            pass
     info = path.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise ValueError("broker directory must be owned by the current user with mode 0700")
@@ -631,16 +636,6 @@ class BrokerServer:
         host, port_str = tls_config.listen_addr.rsplit(":", 1)
         port = int(port_str)
 
-        # Create SSL context for mutual TLS
-        ssl_context = ssl.create_server_context(
-            ssl.Purpose.CLIENT_AUTH,
-            cafile=tls_config.client_ca_path,
-            certfile=tls_config.cert_path,
-            keyfile=tls_config.key_path,
-        )
-        ssl_context.verify_mode = ssl.CERT_REQUIRED
-        ssl_context.check_hostname = False  # Don't verify hostname for simplicity
-
         # Expand paths
         cert_path = Path(tls_config.cert_path).expanduser()
         key_path = Path(tls_config.key_path).expanduser()
@@ -653,6 +648,15 @@ class BrokerServer:
             raise ValueError(f"TLS key file not found: {key_path}")
         if not client_ca_path.exists():
             raise ValueError(f"TLS client CA file not found: {client_ca_path}")
+
+        # Create SSL context for mutual TLS
+        ssl_context = ssl.create_default_context(
+            ssl.Purpose.CLIENT_AUTH,
+            cafile=str(client_ca_path),
+        )
+        ssl_context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+        ssl_context.verify_mode = ssl.CERT_REQUIRED
+        ssl_context.check_hostname = False  # Don't verify hostname for simplicity
 
         # Create server with SSL context
         tls_server = await asyncio.start_server(

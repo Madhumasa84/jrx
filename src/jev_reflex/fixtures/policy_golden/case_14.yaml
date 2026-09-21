@@ -1,0 +1,8 @@
+name: python-migrate
+category: migration
+description: "Apply a database schema migration"
+context:
+  command: "python migrate.py"
+  task: "Apply a database schema migration"
+expected_decision: REVIEW
+notes: "Triggers persistence_sensitive at 0.80 via migration regex and filesystem:PERSISTENCE_ACTION check"

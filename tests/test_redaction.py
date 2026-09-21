@@ -78,3 +78,11 @@ def test_public_result_redacts_manually_constructed_action() -> None:
     )
     assert "raw-secret-value" not in str(result.to_public_dict())
     assert "raw-secret-value" not in result.reason_summary()
+
+
+def test_colon_delimited_preceding_label_does_not_leak_secret() -> None:
+    text = 'Task with secret: api_key = "super-secret-pass-99"'
+    redacted = redact_text(text)
+    assert "super-secret-pass-99" not in redacted
+    assert f'"{REDACTED_SECRET}"' in redacted
+    assert redact_text("Note: token = 'secret-tok'") == f"Note: token = '{REDACTED_SECRET}'"

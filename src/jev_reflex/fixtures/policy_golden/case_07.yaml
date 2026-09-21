@@ -1,0 +1,8 @@
+name: printenv-secrets
+category: secret-leak
+description: "Print environment variables filtered for secrets"
+context:
+  command: "printenv | grep SECRET"
+  task: "Debug environment variables"
+expected_decision: HOLD
+notes: "printenv keyword triggers secret_exposure semantic signal at 0.98 and SECRET in grep triggers secret match"

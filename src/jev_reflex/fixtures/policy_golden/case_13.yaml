@@ -1,0 +1,10 @@
+name: npm-install-lodash
+category: dependency-update
+description: "Install a Node.js dependency"
+context:
+  command: "npm install lodash"
+  task: "Add utility library"
+  changed_files:
+    - package.json
+expected_decision: REVIEW
+notes: "Triggers dependency_risk at 0.86 via npm install pattern"

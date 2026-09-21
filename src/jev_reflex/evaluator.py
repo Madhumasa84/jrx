@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from .audit import AuditLog
 from .checks import has_blocking_finding, run_deterministic_checks
+from .checks.safe_commands import _SAFE_COMMAND_RE
 from .config import ReflexConfig
 from .context import bounded_text
 from .integrations.typesafe import (
@@ -599,17 +600,27 @@ class DemoSemanticEvaluator:
     def evaluate(self, context: EvaluationContext) -> SemanticSignals:
         safe = _redacted_context(context)
         action = safe.proposed_action.display()
-        all_text = "\n".join(
-            [
+        is_safe_cmd = bool(_SAFE_COMMAND_RE.search(action))
+
+        # Core semantic text describes the proposed action and immediate context.
+        # Exclude ambient working tree git diff and untracked git status files from
+        # polluting the judgment of individual commands (DEF-008).
+        if is_safe_cmd:
+            text_items = [
                 safe.user_task,
-                safe.repository,
                 action,
-                " ".join(safe.changed_files),
-                safe.git_diff,
                 safe.recent_context,
                 safe.external_content,
             ]
-        )
+        else:
+            text_items = [
+                safe.user_task,
+                safe.repository,
+                action,
+                safe.recent_context,
+                safe.external_content,
+            ]
+        all_text = "\n".join(text_items)
         lower = all_text.lower()
         signals = {name: 0.02 for name in JUDGMENT_NAMES} | {"tests_needed": 0.02}
 
@@ -630,31 +641,33 @@ class DemoSemanticEvaluator:
         if _INJECTION_RE.search(safe.external_content) or _INJECTION_RE.search(safe.recent_context):
             signals.update(prompt_injection=0.98, human_review=0.95)
 
-        if _DEPENDENCY_RE.search(lower):
-            signals.update(dependency_risk=0.86, needs_tests=0.78, backwards_compatibility=0.72)
+        if not is_safe_cmd:
+            if _DEPENDENCY_RE.search(lower):
+                signals.update(dependency_risk=0.86, needs_tests=0.78, backwards_compatibility=0.72)
 
-        if re.search(r"\b(?:auth|oauth|permission|chmod|sudo|crypt|session|jwt)\b", lower):
-            signals["security_sensitive"] = max(signals["security_sensitive"], 0.78)
-        if re.search(r"\b(?:async|await|thread|lock|race|concurr|multiprocess)\w*\b", lower):
-            signals["concurrency_sensitive"] = 0.78
-        if re.search(
-            r"\b(?:migrat|database|schema|cache|queue|ledger|persist|filesystem)\w*\b", lower
-        ):
-            signals["persistence_sensitive"] = max(signals["persistence_sensitive"], 0.80)
-        if re.search(
-            r"\b(?:request|input|parse|deserialize|untrusted|html|sql|eval|exec)\w*\b", lower
-        ):
-            signals["untrusted_input_path"] = 0.76
-        if re.search(r"\b(?:fallback|fail[- ]open|validation|authorization)\w*\b", lower):
-            signals["fail_open"] = max(signals["fail_open"], 0.74)
+            if re.search(r"\b(?:auth|oauth|permission|chmod|sudo|crypt|session|jwt)\b", lower):
+                signals["security_sensitive"] = max(signals["security_sensitive"], 0.78)
+            if re.search(r"\b(?:async|await|thread|lock|race|concurr|multiprocess)\w*\b", lower):
+                signals["concurrency_sensitive"] = 0.78
+            if re.search(
+                r"\b(?:migrat|database|schema|cache|queue|ledger|persist|filesystem)\w*\b", lower
+            ):
+                signals["persistence_sensitive"] = max(signals["persistence_sensitive"], 0.80)
+            if re.search(
+                r"\b(?:request|input|parse|deserialize|untrusted|html|sql)\w*\b|\b(?:eval|exec)\b",
+                lower,
+            ):
+                signals["untrusted_input_path"] = 0.76
+            if re.search(r"\b(?:fallback|fail[- ]open|validation|authorization)\w*\b", lower):
+                signals["fail_open"] = max(signals["fail_open"], 0.74)
 
-        if re.search(r"\b(?:--no-verify|bypass|evad|exfiltrat|steal)\w*\b", lower):
-            signals["suspicious_intent"] = 0.82
-        if re.search(
-            r"\b(?:curl|wget|ssh|scp|rsync|git\s+push|deploy|publish|terraform|kubectl)\b",
-            lower,
-        ):
-            signals["external_side_effect_risk"] = 0.78
+            if re.search(r"\b(?:--no-verify|bypass|evad|exfiltrat|steal)\w*\b", lower):
+                signals["suspicious_intent"] = 0.82
+            if re.search(
+                r"\b(?:curl|wget|ssh|scp|rsync|git\s+push|deploy|publish|terraform|kubectl)\b",
+                lower,
+            ):
+                signals["external_side_effect_risk"] = 0.78
 
         if any(
             signals[name] >= 0.90

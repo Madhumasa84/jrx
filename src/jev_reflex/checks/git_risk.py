@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from ..models import DeterministicFinding, EvaluationContext
-from .common import command_text
+from .common import action_argv, command_text
 
 
 def _finding(
@@ -26,9 +26,13 @@ def _finding(
 
 def evaluate(context: EvaluationContext) -> list[DeterministicFinding]:
     text = command_text(context)
+    raw_argv = action_argv(context)
+    raw_text = " ".join(raw_argv)
     if re.search(r"\bgit\s+push\b[^\n]*(?:--force(?:-with-lease)?|\s-f(?:\s|$))", text):
         return [_finding(triggered=True, severity="high", reason_code="FORCE_PUSH", blocking=True)]
-    if re.search(r"\bgit\s+branch\b[^\n]*\s-D(?:\s|$)", text):
+    if re.search(r"\bgit\s+branch\b[^\n]*\s-D(?:\s|$)", raw_text) or re.search(
+        r"\bgit\s+branch\b[^\n]*(?:--delete|-d)\b[^\n]*(?:--force|-f)\b", text
+    ):
         return [
             _finding(
                 triggered=True, severity="high", reason_code="BRANCH_DELETE_FORCE", blocking=True

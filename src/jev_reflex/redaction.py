@@ -43,7 +43,8 @@ _SECRET_ASSIGNMENT_RE = re.compile(
     r"authorization|aws_access_key_id|aws_secret_access_key|"
     r"[a-z][a-z0-9_]*(?:_token|_secret|_key|_password|_passwd|_credential)s?"
     r")\b\s*(?:=|:)\s*)"
-    r"(?P<value>\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;}\"']*)"
+    r"(?P<value>\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;}\"']+(?=[\s,;}]|$))"
+    r"(?!\s*=)"
 )
 _SECRET_FLAG_RE = re.compile(
     r"(?ix)(?P<flag>(?<!\S)--?"

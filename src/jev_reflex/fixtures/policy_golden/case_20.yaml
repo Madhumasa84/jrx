@@ -1,0 +1,8 @@
+name: ls-files
+category: benign-read-only
+description: "List directory contents — completely safe"
+context:
+  command: "ls -la"
+  task: "List files"
+expected_decision: ALLOW
+notes: "No patterns matched, no signals triggered, purely read-only"

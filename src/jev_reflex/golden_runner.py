@@ -16,9 +16,11 @@ from .config import ReflexConfig, load_config
 from .evaluator import DemoEvaluator, DemoSemanticEvaluator, evaluate_context
 from .models import EvaluationContext, ProposedAction, RiskInfo, SemanticSignals
 
-DEFAULT_FIXTURES_DIR = (
+_PKG_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "policy_golden"
+_REPO_FIXTURES = (
     Path(__file__).resolve().parent.parent.parent / "tests" / "fixtures" / "policy_golden"
 )
+DEFAULT_FIXTURES_DIR = _PKG_FIXTURES if _PKG_FIXTURES.exists() else _REPO_FIXTURES
 
 
 class MockSemanticEvaluator:

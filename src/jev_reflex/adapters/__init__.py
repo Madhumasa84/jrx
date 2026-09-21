@@ -5,8 +5,12 @@ from .antigravity import (
     antigravity_hooks_json,
     evaluate_antigravity_hook,
 )
-from .claude_code import claude_code_hook_response, claude_code_settings_json
-from .codex import codex_hook_response, codex_hooks_json
+from .claude_code import (
+    claude_code_hook_response,
+    claude_code_settings_json,
+    evaluate_claude_code_hook,
+)
+from .codex import codex_hook_response, codex_hooks_json, evaluate_codex_hook
 from .deepseek import deepseek_hook_response, deepseek_hooks_json, evaluate_deepseek_hook
 from .generic import Adapter
 from .openrouter import evaluate_openrouter_hook, openrouter_hook_response
@@ -18,8 +22,10 @@ __all__ = [
     "evaluate_antigravity_hook",
     "claude_code_hook_response",
     "claude_code_settings_json",
+    "evaluate_claude_code_hook",
     "codex_hook_response",
     "codex_hooks_json",
+    "evaluate_codex_hook",
     "deepseek_hook_response",
     "deepseek_hooks_json",
     "evaluate_deepseek_hook",

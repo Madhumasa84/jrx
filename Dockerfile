@@ -33,6 +33,7 @@ COPY --from=builder /install /usr/local
 
 # Create directory for broker socket and data
 RUN mkdir -p /home/jrx/.jev-reflex && \
+    chmod 700 /home/jrx/.jev-reflex && \
     chown -R jrx:jrx /home/jrx/.jev-reflex
 
 # Set environment variables

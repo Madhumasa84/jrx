@@ -1,0 +1,10 @@
+name: boundary-destructive-subthreshold
+category: boundary
+description: "Destructive signal at 0.89 is just below the hold threshold of 0.90"
+context:
+  command: "python cleanup_temp.py"
+  task: "Clean temporary files"
+mocked_jev_signals:
+  destructive: 0.89
+expected_decision: REVIEW
+notes: "0.89 < 0.90 (strong threshold) so does not trigger HOLD; 0.89 >= 0.70 (review threshold) so triggers REVIEW"
