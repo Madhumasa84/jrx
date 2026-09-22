@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from collections.abc import Mapping
@@ -409,6 +410,8 @@ def evaluate_context(
     samples: int = 1,
     aggregation: str | None = None,
     skip_jev_on_hard: bool = False,
+    session_id: str | None = None,
+    session_tool_calls: int = 1,
 ) -> EvaluationResult:
     """Run deterministic checks, optional semantic evaluation, and pure policy."""
 
@@ -419,6 +422,15 @@ def evaluate_context(
         raise ValueError("aggregation must be median, mean, or max")
     if use_jev and config.stability_policy.mode == "majority" and samples < 2:
         raise ValueError("stability_policy majority requires at least two JEV samples")
+    session_store = None
+    if config.session.enabled:
+        from .session_limits import SessionStore
+
+        session_id = session_id if session_id is not None else os.environ.get("JRX_SESSION_ID", "")
+        session_store = SessionStore(config.session)
+        session_store.reserve(
+            session_id, semantic=samples if use_jev else 0, tool_calls=session_tool_calls
+        )
     findings = run_deterministic_checks(context)
 
     # Use gitleaks-enhanced redaction
@@ -517,6 +529,10 @@ def evaluate_context(
             deterministic_findings=findings,
             jev_signals=semantic.probabilities,
             policy_decision=policy,
+            risk_choice=semantic.risk.choice,
+            risk_confidence=semantic.risk.confidence,
+            degraded=semantic.degraded and use_jev,
+            forced_review=gitleaks_failed and policy.decision == "REVIEW",
         )
     except Exception:
         # Audit logging failures should not block policy decisions
@@ -530,7 +546,7 @@ def evaluate_context(
         semantic_evaluator=semantic.source,
         signals=semantic.probabilities,
     )
-    return EvaluationResult(
+    result = EvaluationResult(
         decision=policy.decision,
         risk=semantic.risk,
         signals=semantic.probabilities,
@@ -544,6 +560,13 @@ def evaluate_context(
         degraded=semantic.degraded and use_jev,
         action=safe_action,
     )
+    if session_store is not None:
+        if result.decision != "ALLOW" or result.degraded:
+            session_store.record_risky(
+                session_id, context.proposed_action.model_dump_json(exclude_none=True)
+            )
+        session_store.reserve(session_id, semantic=0, tool_calls=0)
+    return result
 
 
 class DefaultEvaluator:

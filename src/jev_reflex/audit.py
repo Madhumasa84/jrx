@@ -36,6 +36,10 @@ class AuditEntry:
         identity: str | None = None,
         original_decision: str | None = None,
         justification: str | None = None,
+        risk_choice: str | None = None,
+        risk_confidence: float | None = None,
+        degraded: bool | None = None,
+        forced_review: bool | None = None,
     ) -> None:
         self.seq = seq
         self.timestamp_utc = timestamp_utc
@@ -50,6 +54,10 @@ class AuditEntry:
         self.identity = identity
         self.original_decision = original_decision
         self.justification = justification
+        self.risk_choice = risk_choice
+        self.risk_confidence = risk_confidence
+        self.degraded = degraded
+        self.forced_review = forced_review
         self.entry_hash = self._compute_hash()
 
     def _get_hash_dict(self) -> dict[str, Any]:
@@ -67,7 +75,7 @@ class AuditEntry:
                 "timestamp": self.timestamp_utc,
                 "timestamp_utc": self.timestamp_utc,
             }
-        return {
+        data = {
             "seq": self.seq,
             "timestamp_utc": self.timestamp_utc,
             "action_summary": self.action_summary,
@@ -77,6 +85,12 @@ class AuditEntry:
             "policy_version_hash": self.policy_version_hash,
             "prev_hash": self.prev_hash,
         }
+        if self.risk_choice is not None:
+            data["risk_choice"] = self.risk_choice
+            data["risk_confidence"] = self.risk_confidence
+            data["degraded"] = self.degraded
+            data["forced_review"] = self.forced_review
+        return data
 
     def _compute_hash(self) -> str:
         """Compute the hash of this entry based on prev_hash and canonical JSON."""
@@ -198,6 +212,11 @@ class AuditLog:
         deterministic_findings: list[DeterministicFinding],
         jev_signals: dict[str, float],
         policy_decision: PolicyDecision,
+        *,
+        risk_choice: str | None = None,
+        risk_confidence: float | None = None,
+        degraded: bool | None = None,
+        forced_review: bool | None = None,
     ) -> None:
         """Write a new entry to the audit log with file locking."""
         if not self.should_log():
@@ -228,6 +247,10 @@ class AuditLog:
             policy_decision.decision,
             timestamp,
             policy_version_hash,
+            risk_choice,
+            risk_confidence,
+            degraded,
+            forced_review,
         )
 
     def _write_with_lock_atomic(
@@ -238,6 +261,10 @@ class AuditLog:
         policy_decision: str,
         timestamp: str,
         policy_version_hash: str,
+        risk_choice: str | None,
+        risk_confidence: float | None,
+        degraded: bool | None,
+        forced_review: bool | None,
     ) -> None:
         """Atomically read last entry, compute next sequence, and write with file locking."""
         log_path = self._get_log_path()
@@ -274,6 +301,10 @@ class AuditLog:
                     policy_decision=policy_decision,
                     policy_version_hash=policy_version_hash,
                     prev_hash=last_hash,
+                    risk_choice=risk_choice,
+                    risk_confidence=risk_confidence,
+                    degraded=degraded,
+                    forced_review=forced_review,
                 )
 
                 # Add signature if signer is configured

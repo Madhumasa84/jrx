@@ -132,6 +132,7 @@ class BootstrapConfig(BaseModel):
     public_key_path: str | None = None
     signer_type: str = "ed25519"
     policy_source: PolicySourceConfig = Field(default_factory=PolicySourceConfig)
+    rollout_state_path: str | None = None
 
 
 class CalibrationConfig(BaseModel):
@@ -177,6 +178,44 @@ class LoggingConfig(BaseModel):
     def _validate_logging_config(self) -> LoggingConfig:
         if self.sink == "webhook-url" and not self.webhook_url:
             raise ValueError("webhook_url is required when sink='webhook-url'")
+        return self
+
+
+class RoleRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: str
+    actions: list[Literal["execute", "review", "view", "admin"]]
+    repositories: list[str]
+    environments: list[str]
+
+
+class AccessConfig(BaseModel):
+    """OIDC identity and scoped authorization for enterprise execution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issuer: str
+    audience: str
+    jwks_uri: str
+    environment: str
+    roles_claim: str = "roles"
+    rules: list[RoleRule]
+    approval_db: str = "~/.jev-reflex/approvals.sqlite3"
+    approval_ttl_seconds: int = 900
+    production_environments: list[str] = Field(default_factory=lambda: ["production"])
+
+    @model_validator(mode="after")
+    def _validate_access(self) -> AccessConfig:
+        if not self.issuer.startswith("https://") or not self.jwks_uri.startswith("https://"):
+            raise ValueError("access issuer and jwks_uri must use HTTPS")
+        if (
+            not self.audience
+            or not self.environment
+            or not self.rules
+            or not 1 <= self.approval_ttl_seconds <= 86400
+        ):
+            raise ValueError("access requires an audience, rules, and a valid approval TTL")
         return self
 
 
@@ -227,6 +266,37 @@ class PolicyConfig(BaseModel):
     allow_hold_override: bool = False
 
 
+class MCPToolRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    server: str
+    name: str
+    effect: Literal["read", "write", "destructive"]
+
+
+class MCPGatewayConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tools: list[MCPToolRule] = Field(default_factory=list)
+    use_jev: bool = True
+    timeout_seconds: float = Field(default=30.0, gt=0, le=3600)
+    max_message_bytes: int = Field(default=1_048_576, ge=1024, le=16_777_216)
+
+
+class SessionLimitsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    path: str = "~/.jev-reflex/sessions.sqlite3"
+    max_tool_calls: int = Field(default=1000, ge=1)
+    max_semantic_evaluations: int = Field(default=1000, ge=1)
+    max_semantic_spend_usd: float = Field(default=10.0, gt=0, allow_inf_nan=False)
+    reserved_cost_per_evaluation_usd: float = Field(default=0.01, gt=0, allow_inf_nan=False)
+    max_elapsed_seconds: int = Field(default=3600, ge=1)
+    max_execution_seconds: int = Field(default=300, ge=1)
+    max_risky_attempts: int = Field(default=10, ge=1)
+
+
 class ReflexConfig(BaseModel):
     """Validated user configuration. Untrusted evaluated state never changes this object."""
 
@@ -243,6 +313,9 @@ class ReflexConfig(BaseModel):
     signing: SigningConfig = Field(default_factory=SigningConfig)
     calibration: CalibrationConfig = Field(default_factory=CalibrationConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    access: AccessConfig | None = None
+    mcp: MCPGatewayConfig = Field(default_factory=MCPGatewayConfig)
+    session: SessionLimitsConfig = Field(default_factory=SessionLimitsConfig)
     jev: JEVConfig = Field(default_factory=JEVConfig)
     stability: StabilityConfig = Field(default_factory=StabilityConfig)
     stability_policy: StabilityPolicyConfig = Field(default_factory=StabilityPolicyConfig)
@@ -254,7 +327,9 @@ class ReflexConfig(BaseModel):
         return self
 
 
-def load_config(path: Path | None = None, *, mode_override: Mode | None = None) -> ReflexConfig:
+def load_config(
+    path: Path | None = None, *, mode_override: Mode | None = None, scope: str | None = None
+) -> ReflexConfig:
     """Load ``reflex.yaml`` when present, otherwise return safe defaults."""
 
     config_path = path or Path("reflex.yaml")
@@ -272,13 +347,23 @@ def load_config(path: Path | None = None, *, mode_override: Mode | None = None) 
         data = loaded
 
     config = ReflexConfig.model_validate(data)
-    if mode_override is not None:
-        config = config.model_copy(update={"mode": mode_override})
 
     # Check if signature verification is required by bootstrap config
     bootstrap = load_bootstrap_config()
     if bootstrap.require_signature:
         _verify_config_signature(config_path, bootstrap)
+
+    if bootstrap.rollout_state_path:
+        from .policy_rollout import RolloutStore
+
+        selected = RolloutStore(Path(bootstrap.rollout_state_path)).select(
+            scope or str(config_path.parent.resolve())
+        )
+        if selected is not None:
+            config = selected
+
+    if mode_override is not None:
+        config = config.model_copy(update={"mode": mode_override})
 
     return config
 

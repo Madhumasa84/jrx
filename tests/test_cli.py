@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,32 @@ def test_safe_demo_command_is_allow() -> None:
     assert body["decision"] == "ALLOW"
     assert body["risk"]["choice"] == "low"
     assert "destructive" in body["signals"]
+
+
+def test_policy_keygen_sign_verify_and_detect_tampering(tmp_path: Path) -> None:
+    keys = tmp_path / "keys"
+    policy = tmp_path / "reflex.yaml"
+    policy.write_text("mode: enforce\n", encoding="utf-8")
+
+    generated = runner.invoke(app, ["policy", "keygen", "--output-dir", str(keys)])
+    assert generated.exit_code == 0, generated.stdout
+    private_key = keys / "policy_signing.key"
+    public_key = keys / "policy_signing.pub"
+    assert private_key.exists() and public_key.exists()
+    assert stat.S_IMODE(private_key.stat().st_mode) == 0o600
+    assert "PRIVATE KEY" not in generated.stdout
+    assert runner.invoke(app, ["policy", "keygen", "--output-dir", str(keys)]).exit_code == 1
+
+    signed = runner.invoke(app, ["policy", "sign", str(policy), "--key", str(private_key)])
+    assert signed.exit_code == 0, signed.stdout
+    verify_args = ["policy", "verify", str(policy), "--public-key", str(public_key)]
+    verified = runner.invoke(app, verify_args)
+    assert verified.exit_code == 0, verified.stdout
+
+    policy.write_text("mode: advisory\n", encoding="utf-8")
+    tampered = runner.invoke(app, verify_args)
+    assert tampered.exit_code == 1
+    assert "verification failed" in tampered.stderr
 
 
 def test_destructive_demo_command_is_hold_but_advisory_is_non_blocking() -> None:

@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
+import signal
+import sqlite3
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import typer
+import yaml
 
 from .adapters.antigravity import antigravity_hook_error, evaluate_antigravity_hook
 from .adapters.claude_code import (
@@ -22,7 +27,7 @@ from .adapters.claude_code import (
 from .adapters.codex import _hook_error as codex_hook_error
 from .adapters.codex import evaluate_codex_hook
 from .adapters.deepseek import deepseek_hook_error, evaluate_deepseek_hook
-from .adapters.generic import read_hook_payload
+from .adapters.generic import context_from_hook_payload, read_hook_payload
 from .adapters.openrouter import evaluate_openrouter_hook, openrouter_hook_error
 from .adapters.pi import evaluate_pi_hook, pi_hook_error
 from .audit import AuditLog
@@ -30,13 +35,15 @@ from .broker_cli import app as broker_app
 from .calibration import CalibrationStore
 from .config import JEVConfig, Mode, ReflexConfig, load_config
 from .context import RepositoryContextProvider
+from .enterprise import AccessDenied, ApprovalStore, action_binding, authorize, verified_identity
 from .evaluator import DefaultEvaluator, DemoEvaluator, evaluate_context
 from .formatters import format_compare, format_human, format_json, format_stability
 from .identity import resolve_approver
 from .logging_config import log_structured
 from .models import EvaluationContext, EvaluationResult, ProposedAction
 from .policy import execution_allowed
-from .signing import Ed25519Signer, sign_file
+from .session_limits import SessionLimitError
+from .signing import Ed25519Signer, load_public_key, sign_file, verify_file
 from .stability import StabilityRunner
 
 app = typer.Typer(
@@ -48,10 +55,22 @@ app = typer.Typer(
 benchmark_app = typer.Typer(name="benchmark", help="Run offline or live benchmark suites.")
 audit_app = typer.Typer(name="audit", help="Audit log management and verification.")
 policy_app = typer.Typer(name="policy", help="Policy file signing and verification.")
+rollout_app = typer.Typer(
+    name="rollout", help="Stage, promote, and roll back signed policy revisions."
+)
+approval_app = typer.Typer(name="approval", help="Request and grant action-bound approvals.")
+dashboard_app = typer.Typer(name="dashboard", help="Serve a read-only operations dashboard.")
+mcp_app = typer.Typer(name="mcp", help="Run a policy-enforcing MCP stdio gateway.")
+session_app = typer.Typer(name="session", help="Inspect or stop an agent session.")
 app.add_typer(benchmark_app, name="benchmark")
 app.add_typer(broker_app, name="broker")
 app.add_typer(audit_app, name="audit")
 app.add_typer(policy_app, name="policy")
+policy_app.add_typer(rollout_app, name="rollout")
+app.add_typer(approval_app, name="approval")
+app.add_typer(dashboard_app, name="dashboard")
+app.add_typer(mcp_app, name="mcp")
+app.add_typer(session_app, name="session")
 
 
 @benchmark_app.command("live")
@@ -121,8 +140,12 @@ def _validated_mode(value: str | None) -> Mode | None:
     return value  # type: ignore[return-value]
 
 
-def _load(path: Path | None, mode: str | None) -> ReflexConfig:
-    return load_config(path, mode_override=_validated_mode(mode))
+def _load(path: Path | None, mode: str | None, cwd: Path | None = None) -> ReflexConfig:
+    return load_config(
+        path,
+        mode_override=_validated_mode(mode),
+        scope=str(cwd.resolve()) if cwd is not None else None,
+    )
 
 
 def _provider(config: ReflexConfig, cwd: Path | None) -> RepositoryContextProvider:
@@ -238,6 +261,68 @@ def _read_diff(enabled: bool) -> str:
         raise typer.BadParameter("could not read stdin diff") from exc
 
 
+@approval_app.command("request")
+def approval_request(
+    command: str = typer.Option(..., "--command", help="Exact command to approve."),
+    cwd: Path = typer.Option(..., "--cwd"),
+    environment: str = typer.Option(..., "--environment"),
+    config: Path | None = typer.Option(None, "--config"),
+    hook_command: bool = typer.Option(
+        False, "--hook-command", help="Bind the raw hook shell command."
+    ),
+) -> None:
+    """Create a time-limited approval request for a command and repository state."""
+    try:
+        loaded = _load(config, None, cwd)
+        if loaded.access is None:
+            raise AccessDenied("Enterprise access is not configured")
+        identity = verified_identity(loaded.access)
+        argv = [command] if hook_command else shlex.split(command)
+        if not argv or not environment.strip():
+            raise AccessDenied("Command and environment are required")
+        repository, binding = action_binding(loaded, cwd, argv, environment)
+        authorize(identity, loaded.access, "execute", repository, environment)
+        approval_id = ApprovalStore(loaded.access).request(
+            identity, repository, environment, binding, command
+        )
+        typer.echo(approval_id)
+    except (AccessDenied, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
+        typer.echo("Approval request denied.", err=True)
+        raise typer.Exit(code=2) from None
+
+
+@approval_app.command("grant")
+def approval_grant(
+    approval_id: str = typer.Argument(...),
+    config: Path | None = typer.Option(None, "--config"),
+) -> None:
+    """Record one verified, independent reviewer approval."""
+    try:
+        loaded = _load(config, None)
+        if loaded.access is None:
+            raise AccessDenied("Enterprise access is not configured")
+        identity = verified_identity(loaded.access)
+        count, required = ApprovalStore(loaded.access).grant(approval_id, identity)
+        typer.echo(f"Approval granted by {identity.subject} ({count}/{required}).")
+    except (AccessDenied, OSError, ValueError, sqlite3.Error):
+        typer.echo("Approval grant denied.", err=True)
+        raise typer.Exit(code=2) from None
+
+
+@approval_app.command("pending")
+def approval_pending(config: Path | None = typer.Option(None, "--config")) -> None:
+    """Show pending requests visible to this verified reviewer."""
+    try:
+        loaded = _load(config, None)
+        if loaded.access is None:
+            raise AccessDenied("Enterprise access is not configured")
+        identity = verified_identity(loaded.access)
+        typer.echo(json.dumps(ApprovalStore(loaded.access).pending(identity), indent=2))
+    except (AccessDenied, OSError, ValueError, sqlite3.Error):
+        typer.echo("Pending approvals unavailable.", err=True)
+        raise typer.Exit(code=2) from None
+
+
 @app.command()
 def check(
     transport: str | None = typer.Option(
@@ -287,7 +372,7 @@ def check(
         return
 
     try:
-        loaded = _load(config, mode)
+        loaded = _load(config, mode, cwd)
         if transport is not None:
             if transport not in {"direct", "broker", "broker-tls"}:
                 raise typer.BadParameter("transport must be direct, broker, or broker-tls")
@@ -348,6 +433,35 @@ def _resolve_exec_argv(command: str | None, trailing: list[str]) -> list[str]:
     return values
 
 
+def _execute_argv(argv: list[str], cwd: Path, config: ReflexConfig) -> int:
+    """Run a command under the session stop and elapsed-execution boundary."""
+    if not config.session.enabled:
+        return subprocess.run(argv, cwd=str(cwd), check=False, shell=False).returncode
+    from .session_limits import SessionLimitError, SessionStore
+
+    session_id = os.environ.get("JRX_SESSION_ID", "")
+    store = SessionStore(config.session)
+    store.reserve(session_id, semantic=0, tool_calls=0)
+    process = subprocess.Popen(argv, cwd=str(cwd), shell=False, start_new_session=True)
+    deadline = time.monotonic() + config.session.max_execution_seconds
+    try:
+        while True:
+            try:
+                return process.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                if time.monotonic() >= deadline:
+                    raise SessionLimitError("session execution time limit reached") from None
+                store.reserve(session_id, semantic=0, tool_calls=0)
+    except (SessionLimitError, OSError):
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+        raise
+
+
 @app.command("exec", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def exec_action(
     ctx: typer.Context,
@@ -373,6 +487,8 @@ def exec_action(
     justification: str | None = typer.Option(
         None, "--justification", help="Justification for human override."
     ),
+    environment: str | None = typer.Option(None, "--environment"),
+    approval_id: str | None = typer.Option(None, "--approval-id"),
     yes: bool = typer.Option(
         False, "-y", "--yes", help="Automatically confirm prompts without interactive input."
     ),
@@ -381,7 +497,19 @@ def exec_action(
 
     try:
         argv = _resolve_exec_argv(command, _trailing_argv(ctx))
-        loaded = _load(config, mode)
+        loaded = _load(config, mode, cwd)
+        enterprise_identity = None
+        enterprise_binding = None
+        if loaded.access is not None:
+            if demo or no_jev or mode is not None or not environment:
+                raise AccessDenied(
+                    "Enterprise execution requires normal evaluation and an environment"
+                )
+            enterprise_identity = verified_identity(loaded.access)
+            repository, enterprise_binding = action_binding(
+                loaded, (cwd or Path.cwd()).resolve(), argv, environment
+            )
+            authorize(enterprise_identity, loaded.access, "execute", repository, environment)
         context = _build_context(
             config=loaded,
             cwd=cwd,
@@ -402,11 +530,53 @@ def exec_action(
         )
     except typer.BadParameter:
         raise
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
         typer.echo("Configuration, input, or command error. No action was executed.", err=True)
         raise typer.Exit(code=2) from None
 
     _emit_result(result, json_output=json_output)
+    if loaded.access is not None:
+        try:
+            if verified_identity(loaded.access) != enterprise_identity:
+                raise AccessDenied("Identity changed during evaluation")
+        except AccessDenied:
+            typer.echo("Verified identity expired or changed.", err=True)
+            raise typer.Exit(code=2) from None
+        if result.degraded and loaded.mode == "enforce":
+            typer.echo("Execution blocked: semantic evaluation is unavailable.", err=True)
+            raise typer.Exit(code=2)
+        if result.decision == "HOLD" and not loaded.policy.allow_hold_override:
+            typer.echo("Execution blocked: HOLD override is disabled.", err=True)
+            raise typer.Exit(code=2)
+        if result.decision != "ALLOW" or result.degraded:
+            if not approval_id:
+                typer.echo("Execution requires a reviewed approval ID.", err=True)
+                raise typer.Exit(code=2)
+            try:
+                assert enterprise_identity is not None and enterprise_binding is not None
+                _, current_binding = action_binding(
+                    loaded, (cwd or Path.cwd()).resolve(), argv, environment
+                )
+                if current_binding != enterprise_binding:
+                    raise AccessDenied("Repository state changed during evaluation")
+                ApprovalStore(loaded.access).consume(
+                    approval_id, enterprise_identity, current_binding
+                )
+            except (AccessDenied, OSError, sqlite3.Error, subprocess.SubprocessError):
+                typer.echo("Approval is invalid or incomplete.", err=True)
+                raise typer.Exit(code=2) from None
+        elif approval_id:
+            typer.echo("Approval ID was supplied for an allowed action.", err=True)
+            raise typer.Exit(code=2)
+        try:
+            exit_code = _execute_argv(argv, _provider(loaded, cwd).working_directory, loaded)
+        except SessionLimitError as exc:
+            typer.echo(f"Execution stopped: {exc}", err=True)
+            raise typer.Exit(code=124) from None
+        except (OSError, ValueError):
+            typer.echo("Command could not be started.", err=True)
+            raise typer.Exit(code=127) from None
+        raise typer.Exit(code=exit_code)
     if not execution_allowed(result.decision, mode=loaded.mode, degraded=result.degraded):
         # In enforce mode specifically, check policy.allow_hold_override
         if loaded.mode == "enforce" and result.decision == "HOLD":
@@ -480,16 +650,14 @@ def exec_action(
         )
 
     try:
-        completed = subprocess.run(
-            argv,
-            cwd=str(_provider(loaded, cwd).working_directory),
-            check=False,
-            shell=False,
-        )
-    except OSError:
+        exit_code = _execute_argv(argv, _provider(loaded, cwd).working_directory, loaded)
+    except SessionLimitError as exc:
+        typer.echo(f"Execution stopped: {exc}", err=True)
+        raise typer.Exit(code=124) from None
+    except (OSError, ValueError):
         typer.echo("Command could not be started.", err=True)
         raise typer.Exit(code=127) from None
-    raise typer.Exit(code=completed.returncode)
+    raise typer.Exit(code=exit_code)
 
 
 @app.command()
@@ -737,7 +905,21 @@ def benchmark_stability(
 def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool) -> None:
     try:
         payload = read_hook_payload()
-        loaded = _load(config_path, mode)
+        hook_cwd = payload.get("cwd")
+        loaded = _load(
+            config_path,
+            mode,
+            Path(hook_cwd) if isinstance(hook_cwd, str) and hook_cwd else None,
+        )
+        if loaded.access is not None:
+            if demo or mode is not None:
+                raise AccessDenied("Enterprise hooks require normal evaluation")
+            environment = os.environ.get("JRX_ENVIRONMENT", "")
+            if not environment:
+                raise AccessDenied("JRX_ENVIRONMENT is required")
+            identity = verified_identity(loaded.access)
+            hook_context = context_from_hook_payload(payload, config=loaded)
+            authorize(identity, loaded.access, "execute", hook_context.repository_root, environment)
         if kind == "codex":
             _result, output = evaluate_codex_hook(payload, config=loaded, demo=demo)
         elif kind == "claude":
@@ -750,6 +932,32 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
             _result, output = evaluate_pi_hook(payload, config=loaded, demo=demo)
         else:
             _result, output = evaluate_deepseek_hook(payload, config=loaded, demo=demo)
+        if loaded.access is not None:
+            if verified_identity(loaded.access) != identity:
+                raise AccessDenied("Identity changed during evaluation")
+            if _result.degraded and loaded.mode == "enforce":
+                raise AccessDenied("Semantic evaluation is unavailable")
+            if _result.decision == "HOLD" and not loaded.policy.allow_hold_override:
+                raise AccessDenied("HOLD override is disabled")
+            if _result.decision != "ALLOW" or _result.degraded:
+                approval_id = os.environ.get("JRX_APPROVAL_ID", "")
+                command = hook_context.proposed_action.command
+                if not approval_id or not command:
+                    raise AccessDenied("Hook action requires a matching approval")
+                _, binding = action_binding(
+                    loaded, Path(hook_context.working_directory), [command], environment
+                )
+                ApprovalStore(loaded.access).consume(approval_id, identity, binding)
+                if kind == "antigravity":
+                    output = {"decision": "allow"}
+                elif kind == "openrouter" and any(
+                    str(payload.get(name, "")).replace("_", "").replace("-", "").lower()
+                    == "permissionrequest"
+                    for name in ("hook_name", "hookName", "event", "event_name", "eventName")
+                ):
+                    output = {"decision": "allow"}
+                else:
+                    output = {}
     except Exception:
         # Hook hosts differ in how they treat non-zero hook exits. A valid deny response
         # is the most portable fail-safe for malformed input/configuration.
@@ -1288,6 +1496,241 @@ def audit_overrides(
         raise
     except Exception as e:
         typer.echo(f"Error reading audit log overrides: {e}", err=True)
+        raise typer.Exit(code=1) from None
+
+
+def _policy_file(path: Path) -> ReflexConfig:
+    value = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return ReflexConfig.model_validate(value)
+
+
+@policy_app.command("simulate")
+def policy_simulate(
+    audit: Path = typer.Option(..., "--audit"),
+    baseline: Path = typer.Option(..., "--baseline"),
+    candidate: Path = typer.Option(..., "--candidate"),
+) -> None:
+    """Replay verified audit decisions against a proposed policy without model calls."""
+    from .policy_rollout import simulate
+
+    try:
+        report = simulate(audit, _policy_file(baseline), _policy_file(candidate))
+        typer.echo(json.dumps(report, indent=2, sort_keys=True))
+    except (OSError, ValueError):
+        typer.echo("Policy simulation failed; check the audit chain and input policies.", err=True)
+        raise typer.Exit(code=2) from None
+
+
+def _rollout_store(bootstrap: Path):
+    from .config import load_bootstrap_config
+    from .policy_rollout import RolloutStore
+
+    settings = load_bootstrap_config(bootstrap)
+    if not settings.rollout_state_path:
+        raise ValueError("bootstrap rollout_state_path is required")
+    return settings, RolloutStore(Path(settings.rollout_state_path))
+
+
+@rollout_app.command("stage")
+def policy_rollout_stage(
+    bootstrap: Path = typer.Option(..., "--bootstrap"),
+    baseline: Path = typer.Option(..., "--baseline"),
+    audit: Path = typer.Option(..., "--audit"),
+    max_new_allows: int = typer.Option(0, "--max-new-allows", min=0),
+) -> None:
+    """Fetch a signed remote candidate and stage it after an offline replay."""
+    from .config import _verify_config_signature
+    from .policy_rollout import policy_hash, simulate
+    from .policy_source import PolicyFetcher
+
+    try:
+        settings, store = _rollout_store(bootstrap)
+        if settings.policy_source.type is None:
+            raise ValueError("a signed policy source is required")
+        if settings.require_signature:
+            _verify_config_signature(baseline, settings)
+        active = _policy_file(baseline)
+        current = store.status()
+        if current["active_hash"] and current["active_hash"] != policy_hash(active):
+            raise ValueError("baseline policy differs from active rollout policy")
+        candidate, _hash = PolicyFetcher(settings.policy_source).fetch()
+        report = simulate(audit, active, candidate)
+        if report["replayed"] == 0 or report["new_allows"] > max_new_allows:
+            raise ValueError("simulation gate failed")
+        store.stage(active, candidate)
+        typer.echo(json.dumps({"status": store.status(), "simulation": report}, indent=2))
+    except Exception as exc:
+        typer.echo(f"Policy stage failed: {type(exc).__name__}.", err=True)
+        raise typer.Exit(code=2) from None
+
+
+@dashboard_app.command("serve")
+def dashboard_serve(
+    config: Path = typer.Option(..., "--config"),
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8080, "--port", min=1, max=65535),
+) -> None:
+    """Serve authorized team status on a loopback address."""
+    from .dashboard import load_dashboard_config, serve
+
+    try:
+        settings = load_dashboard_config(config)
+        serve(settings, host, port)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Dashboard failed: {exc}", err=True)
+        raise typer.Exit(code=2) from None
+
+
+@mcp_app.command(
+    "serve", context_settings={"allow_extra_args": True, "ignore_unknown_options": True}
+)
+def mcp_serve(
+    ctx: typer.Context,
+    server: str = typer.Option(..., "--server", help="Trusted upstream server identifier."),
+    config: Path | None = typer.Option(None, "--config"),
+    session_id: str | None = typer.Option(None, "--session-id"),
+) -> None:
+    """Proxy an MCP stdio server, enforcing policy before tools/call."""
+    from .mcp_gateway import MCPGateway
+
+    try:
+        command = _trailing_argv(ctx)
+        loaded = _load(config, None)
+        if loaded.mode == "advisory":
+            raise ValueError("MCP gateway requires review or enforce mode")
+        gateway = MCPGateway(loaded, server, command, session_id=session_id)
+        raise typer.Exit(code=gateway.run())
+    except typer.Exit:
+        raise
+    except (OSError, ValueError):
+        typer.echo("MCP gateway configuration or upstream error.", err=True)
+        raise typer.Exit(code=2) from None
+
+
+def _admin_session_store(config: Path | None):
+    from .session_limits import SessionStore
+
+    loaded = _load(config, None)
+    if not loaded.session.enabled:
+        raise ValueError("session limits are disabled")
+    if loaded.access is not None:
+        identity = verified_identity(loaded.access)
+        authorize(identity, loaded.access, "admin", "*", loaded.access.environment)
+    return SessionStore(loaded.session)
+
+
+@session_app.command("status")
+def session_status(
+    session_id: str = typer.Argument(...), config: Path | None = typer.Option(None, "--config")
+) -> None:
+    """Show reserved budget and stop state for one session."""
+    try:
+        typer.echo(json.dumps(_admin_session_store(config).status(session_id), indent=2))
+    except (OSError, ValueError, sqlite3.Error):
+        typer.echo("Session status unavailable.", err=True)
+        raise typer.Exit(code=2) from None
+
+
+@session_app.command("stop")
+def session_stop(
+    session_id: str = typer.Argument(...), config: Path | None = typer.Option(None, "--config")
+) -> None:
+    """Stop a session before its next policy or execution boundary."""
+    try:
+        store = _admin_session_store(config)
+        store.stop(session_id)
+        typer.echo(json.dumps(store.status(session_id), indent=2))
+    except (OSError, ValueError, sqlite3.Error):
+        typer.echo("Session stop failed.", err=True)
+        raise typer.Exit(code=2) from None
+
+
+@rollout_app.command("promote")
+def policy_rollout_promote(
+    percent: int = typer.Option(..., "--percent", min=1, max=100),
+    bootstrap: Path = typer.Option(..., "--bootstrap"),
+) -> None:
+    """Activate a stable percentage of repositories or fully promote a candidate."""
+    try:
+        _, store = _rollout_store(bootstrap)
+        store.promote(percent)
+        typer.echo(json.dumps(store.status(), indent=2))
+    except (OSError, ValueError):
+        typer.echo("Policy promotion failed.", err=True)
+        raise typer.Exit(code=2) from None
+
+
+@rollout_app.command("rollback")
+def policy_rollout_rollback(bootstrap: Path = typer.Option(..., "--bootstrap")) -> None:
+    """Restore the active policy and clear a staged candidate."""
+    try:
+        _, store = _rollout_store(bootstrap)
+        store.rollback()
+        typer.echo(json.dumps(store.status(), indent=2))
+    except (OSError, ValueError):
+        typer.echo("Policy rollback failed.", err=True)
+        raise typer.Exit(code=2) from None
+
+
+@rollout_app.command("status")
+def policy_rollout_status(bootstrap: Path = typer.Option(..., "--bootstrap")) -> None:
+    """Show active, candidate, and previous policy revisions."""
+    try:
+        _, store = _rollout_store(bootstrap)
+        typer.echo(json.dumps(store.status(), indent=2))
+    except (OSError, ValueError):
+        typer.echo("Policy rollout status unavailable.", err=True)
+        raise typer.Exit(code=2) from None
+
+
+@policy_app.command("keygen")
+def policy_keygen(
+    output_dir: Path = typer.Option(..., "--output-dir", help="Directory for the signing keypair."),
+) -> None:
+    """Generate an Ed25519 policy signing keypair."""
+    directory = output_dir.expanduser()
+    private_path = directory / "policy_signing.key"
+    public_path = directory / "policy_signing.pub"
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        if private_path.exists() or public_path.exists():
+            raise FileExistsError("Policy signing keypair already exists")
+        signer = Ed25519Signer()
+        descriptor = os.open(private_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as private_file:
+            private_file.write(signer.get_private_key_pem())
+        with public_path.open("x", encoding="utf-8") as public_file:
+            public_file.write(signer.get_public_key_pem())
+        typer.echo(f"Private key written to: {private_path}")
+        typer.echo(f"Public key written to: {public_path}")
+    except Exception as exc:
+        typer.echo(f"Error generating policy keypair: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+
+@policy_app.command("verify")
+def policy_verify(
+    config_path: Path = typer.Argument(..., help="Path to the signed policy file."),
+    public_key: Path = typer.Option(..., "--public-key", help="Path to the Ed25519 public key."),
+    signature: Path | None = typer.Option(None, "--signature", help="Path to the signature file."),
+) -> None:
+    """Verify an Ed25519 policy signature."""
+    try:
+        config_file = config_path.expanduser()
+        signature_file = (
+            signature.expanduser()
+            if signature
+            else config_file.with_suffix(config_file.suffix + ".sig")
+        )
+        key = load_public_key(public_key.expanduser())
+        if not verify_file(config_file, signature_file, key, Ed25519Signer()):
+            typer.echo("Policy signature verification failed.", err=True)
+            raise typer.Exit(code=1)
+        typer.echo("Policy signature verified.")
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        typer.echo(f"Error verifying policy: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
 
