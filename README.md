@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/jrx-logo.png" alt="JRX logo" width="640">
+
 # JEV Reflex (`jrx`)
 
 **Deterministic Execution Control for Autonomous Coding Agents**
