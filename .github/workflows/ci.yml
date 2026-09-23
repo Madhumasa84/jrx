@@ -36,6 +36,11 @@ jobs:
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m pip install --upgrade pip
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m pip install dist/*.whl
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m pip check
+          cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m jev_reflex --help
+          "$RUNNER_TEMP/jev-reflex-clean/bin/jev-reflex" --help
+          "$RUNNER_TEMP/jev-reflex-clean/bin/jrx" --help
+          "$RUNNER_TEMP/jev-reflex-clean/bin/jev-reflex" policy test --config "$GITHUB_WORKSPACE/reflex.example.yaml" --json
+          "$RUNNER_TEMP/jev-reflex-clean/bin/jrx" policy test --config "$GITHUB_WORKSPACE/reflex.example.yaml" --json
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m jev_reflex check --demo --command "pytest tests/" --json
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m jev_reflex benchmark stability --runs 1 --json

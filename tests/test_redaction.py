@@ -80,6 +80,25 @@ def test_public_result_redacts_manually_constructed_action() -> None:
     assert "raw-secret-value" not in result.reason_summary()
 
 
+def test_public_result_redacts_secrets_from_all_free_text_fields() -> None:
+    secrets = ("action-secret", "warning-secret", "reason-secret")
+    result = EvaluationResult(
+        decision="REVIEW",
+        risk=RiskInfo(choice="medium"),
+        action="deploy --token action-secret",
+        warnings=["TYPESAFE_API_KEY=warning-secret"],
+        reasons=["Authorization: Bearer reason-secret"],
+        triggered_rules=["password=reason-secret"],
+    )
+
+    public_result = str(result.to_public_dict())
+    hook_explanation = result.reason_summary()
+
+    for secret in secrets:
+        assert secret not in public_result
+        assert secret not in hook_explanation
+
+
 def test_colon_delimited_preceding_label_does_not_leak_secret() -> None:
     text = 'Task with secret: api_key = "super-secret-pass-99"'
     redacted = redact_text(text)

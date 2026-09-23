@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import itertools
+
+import pytest
+
 from jev_reflex.config import ReflexConfig, ThresholdConfig
 from jev_reflex.policy_source import PolicyMerger
 
@@ -170,3 +174,52 @@ def test_merge_local_none_returns_central() -> None:
 
     assert merged.hold_on == central.hold_on
     assert merged.mode == central.mode
+
+
+@pytest.mark.parametrize("central_mode", ["advisory", "review", "enforce"])
+@pytest.mark.parametrize("local_mode", ["advisory", "review", "enforce"])
+def test_merge_never_loosens_mode_or_central_rules(central_mode: str, local_mode: str) -> None:
+    strictness = {"advisory": 0, "review": 1, "enforce": 2}
+    central = ReflexConfig(
+        mode=central_mode,
+        hold_on=["destructive", "secret_exposure"],
+        review_on=["security_sensitive", "needs_tests"],
+        thresholds=ThresholdConfig(strong=0.9, review=0.7),
+        policy={"allow_hold_override": False},
+    )
+    local = ReflexConfig(
+        mode=local_mode,
+        hold_on=["new_hold"],
+        review_on=["new_review"],
+        thresholds=ThresholdConfig(strong=0.95, review=0.8),
+        policy={"allow_hold_override": True},
+    )
+
+    merged = PolicyMerger.merge_policies(central, local)
+
+    assert set(central.hold_on).issubset(merged.hold_on)
+    assert set(central.review_on).issubset(merged.review_on)
+    assert "new_hold" in merged.hold_on
+    assert "new_review" in merged.review_on
+    assert merged.thresholds.strong <= central.thresholds.strong
+    assert merged.thresholds.review <= central.thresholds.review
+    assert strictness[merged.mode] >= strictness[central.mode]
+    assert merged.policy.allow_hold_override is False
+
+
+def test_merge_threshold_invariant_for_all_supported_boundaries() -> None:
+    thresholds = (0.0, 0.4, 0.7, 0.9, 1.0)
+    for central_strong, local_strong, central_review, local_review in itertools.product(
+        thresholds, repeat=4
+    ):
+        if central_review >= central_strong or local_review >= local_strong:
+            continue
+        central = ReflexConfig(
+            thresholds=ThresholdConfig(strong=central_strong, review=central_review)
+        )
+        local = ReflexConfig(thresholds=ThresholdConfig(strong=local_strong, review=local_review))
+
+        merged = PolicyMerger.merge_policies(central, local)
+
+        assert merged.thresholds.strong == min(central_strong, local_strong)
+        assert merged.thresholds.review == min(central_review, local_review)

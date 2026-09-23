@@ -132,15 +132,6 @@ class BrokerClient:
         host, port_str = tls_config.listen_addr.rsplit(":", 1)
         port = int(port_str)
 
-        # Create SSL context for client
-        ssl_context = ssl.create_client_context(
-            ssl.Purpose.SERVER_AUTH,
-            cafile=tls_config.client_ca_path,
-            certfile=tls_config.cert_path,
-            keyfile=tls_config.key_path,
-        )
-        ssl_context.check_hostname = False  # Don't verify hostname for simplicity
-
         # Expand paths
         cert_path = Path(tls_config.cert_path).expanduser()
         key_path = Path(tls_config.key_path).expanduser()
@@ -153,6 +144,14 @@ class BrokerClient:
             raise ValueError(f"TLS client key file not found: {key_path}")
         if not client_ca_path.exists():
             raise ValueError(f"TLS client CA file not found: {client_ca_path}")
+
+        # Create an authenticated client context using the standard library API.
+        ssl_context = ssl.create_default_context(
+            ssl.Purpose.SERVER_AUTH,
+            cafile=str(client_ca_path),
+        )
+        ssl_context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+        ssl_context.check_hostname = False  # Don't verify hostname for simplicity
 
         request_id = uuid.uuid4().hex
         message = encode(
