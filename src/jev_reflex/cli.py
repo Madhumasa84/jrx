@@ -87,7 +87,7 @@ def benchmark_live(
     if transport not in {"direct", "broker", "broker-tls"}:
         raise typer.BadParameter("transport must be direct, broker, or broker-tls")
     try:
-        loaded = load_config(config)
+        loaded = _load(config, None)
         loaded.jev.transport = transport
         if output is not None and output.exists():
             raise ValueError("output already exists")
@@ -141,11 +141,14 @@ def _validated_mode(value: str | None) -> Mode | None:
 
 
 def _load(path: Path | None, mode: str | None, cwd: Path | None = None) -> ReflexConfig:
-    return load_config(
-        path,
-        mode_override=_validated_mode(mode),
-        scope=str(cwd.resolve()) if cwd is not None else None,
-    )
+    try:
+        return load_config(
+            path,
+            mode_override=_validated_mode(mode),
+            scope=str(cwd.resolve()) if cwd is not None else None,
+        )
+    except FileNotFoundError as exc:
+        raise typer.BadParameter(str(exc)) from None
 
 
 def _provider(config: ReflexConfig, cwd: Path | None) -> RepositoryContextProvider:

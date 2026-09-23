@@ -31,8 +31,14 @@ def test_invalid_thresholds_fail() -> None:
         ReflexConfig.model_validate({"thresholds": {"strong": 0.6, "review": 0.7}})
 
 
-def test_missing_config_uses_defaults(tmp_path: Path) -> None:
-    assert load_config(tmp_path / "missing.yaml").mode == "advisory"
+def test_missing_config_uses_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert load_config().mode == "advisory"
+
+
+def test_missing_explicit_config_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="Configuration file not found"):
+        load_config(tmp_path / "missing.yaml")
 
 
 def test_new_threshold_and_stability_configuration_is_loaded(tmp_path: Path) -> None:

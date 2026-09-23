@@ -18,7 +18,10 @@ app = typer.Typer(help="Run the trusted host-side semantic broker.")
 
 
 def configuration(config: Path | None, socket: Path | None) -> ReflexConfig:
-    loaded = load_config(config)
+    try:
+        loaded = load_config(config)
+    except FileNotFoundError as exc:
+        raise typer.BadParameter(str(exc)) from None
     if socket is not None:
         loaded.jev.socket = str(socket)
     return loaded

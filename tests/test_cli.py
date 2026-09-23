@@ -244,3 +244,20 @@ def test_benchmark_command_works_offline() -> None:
     assert body["gold_metrics"]["decision_accuracy"] == 1.0
     assert body["gold_metrics"]["false_allow_rate"] == 0.0
     assert body["gold_metrics"]["false_hold_rate"] == 0.0
+
+
+def test_cli_rejects_missing_explicit_config(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["check", "--config", str(tmp_path / "nonexistent.yaml"), "--demo", "--command", "ls"],
+    )
+    assert result.exit_code == 2
+    assert "Configuration file not found" in result.output
+
+
+def test_broker_cli_rejects_missing_config(tmp_path: Path) -> None:
+    from jev_reflex.broker_cli import app as broker_app
+
+    result = runner.invoke(broker_app, ["run", "--config", str(tmp_path / "missing.yaml")])
+    assert result.exit_code == 2
+    assert "Configuration file not found" in result.output

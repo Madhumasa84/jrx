@@ -330,16 +330,19 @@ class ReflexConfig(BaseModel):
 def load_config(
     path: Path | None = None, *, mode_override: Mode | None = None, scope: str | None = None
 ) -> ReflexConfig:
-    """Load ``reflex.yaml`` when present, otherwise return safe defaults."""
+    """Load config, defaulting only when the implicit ``reflex.yaml`` is absent."""
 
-    config_path = path or Path("reflex.yaml")
+    config_path = path if path is not None else Path("reflex.yaml")
     data: object = {}
-    if config_path.exists():
-        try:
-            with config_path.open("r", encoding="utf-8") as handle:
-                loaded = yaml.safe_load(handle)
-        except yaml.YAMLError:
-            raise ValueError("configuration YAML is invalid") from None
+    try:
+        with config_path.open("r", encoding="utf-8") as handle:
+            loaded = yaml.safe_load(handle)
+    except FileNotFoundError:
+        if path is not None:
+            raise FileNotFoundError(f"Configuration file not found: {config_path}") from None
+    except yaml.YAMLError:
+        raise ValueError("configuration YAML is invalid") from None
+    else:
         if loaded is None:
             loaded = {}
         if not isinstance(loaded, dict):
