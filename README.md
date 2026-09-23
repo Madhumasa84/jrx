@@ -354,6 +354,10 @@ sources:
 jrx dashboard serve --config dashboard.yaml --port 8080
 ```
 
+![JEV Reflex operations dashboard with sample team data](docs/assets/dashboard.png)
+
+*Operations dashboard shown with sample data.*
+
 This dashboard aggregates sources on the host where it runs. To view multiple hosts, mount their read-only data or run a dashboard per host. Metrics are read from loopback, and the dashboard does not label metrics with repository or user identifiers.
 
 The workflow follows the signed activation and status patterns described by [Open Policy Agent bundle management](https://www.openpolicyagent.org/docs/management-bundles) and its [status API](https://www.openpolicyagent.org/docs/management-status). Broker metrics follow [Prometheus exposition](https://prometheus.io/docs/instrumenting/exposition_formats/) and keep labels bounded as recommended in [Prometheus instrumentation guidance](https://prometheus.io/docs/practices/instrumentation/). JRX uses its own policy file format; it does not consume OPA bundles.
