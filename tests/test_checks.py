@@ -160,3 +160,27 @@ def test_tool_input_secret_is_detected_without_returning_the_value(tmp_path: Pat
     )
     assert secret.triggered is True
     assert secret.reason_code in {"AUTHORIZATION_HEADER", "KNOWN_TOKEN_PATTERN"}
+
+
+@pytest.mark.parametrize(
+    "tool_input",
+    [
+        {"operations": [{"file_path": "../outside.txt"}]},
+        [{"options": {"path": "../outside.txt"}}],
+        {"operations": [[{"destination": "../outside.txt"}]]},
+        {"path": {"options": [{"file_path": "../outside.txt"}]}},
+    ],
+)
+def test_nested_tool_input_paths_cannot_escape_repository(tmp_path: Path, tool_input) -> None:
+    context = _context(tmp_path, "")
+    context.proposed_action = ProposedAction(type="tool_call", input=tool_input)
+    assert _triggered(context, "repo_boundary")
+
+
+def test_nested_tool_input_checks_only_path_fields(tmp_path: Path) -> None:
+    context = _context(tmp_path, "")
+    context.proposed_action = ProposedAction(
+        type="tool_call",
+        input={"operations": [{"path": "src/file.py", "content": "../example.txt"}]},
+    )
+    assert not _triggered(context, "repo_boundary")

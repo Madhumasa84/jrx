@@ -115,6 +115,10 @@ class SessionStore:
                 "SELECT count FROM risky_attempts WHERE session_id=? AND fingerprint=?",
                 (session_id, fingerprint),
             ).fetchone()[0]
+            if count >= self.config.max_risky_attempts:
+                # Commit the stop together with the counter so subsequent calls and
+                # execution watchers observe the exhausted limit across processes.
+                connection.execute("UPDATE sessions SET stopped=1 WHERE id=?", (session_id,))
             connection.commit()
         if count >= self.config.max_risky_attempts:
             raise SessionLimitError("repeated risky-action limit reached")

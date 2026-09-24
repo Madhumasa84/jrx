@@ -42,6 +42,12 @@ from .identity import resolve_approver
 from .logging_config import log_structured
 from .models import EvaluationContext, EvaluationResult, ProposedAction
 from .policy import execution_allowed
+from .sandbox import (
+    build_sandbox_command,
+    prepare_sandbox_egress,
+    remove_sandbox_container,
+    remove_sandbox_egress,
+)
 from .session_limits import SessionLimitError
 from .signing import Ed25519Signer, load_public_key, sign_file, verify_file
 from .stability import StabilityRunner
@@ -437,32 +443,69 @@ def _resolve_exec_argv(command: str | None, trailing: list[str]) -> list[str]:
 
 
 def _execute_argv(argv: list[str], cwd: Path, config: ReflexConfig) -> int:
-    """Run a command under the session stop and elapsed-execution boundary."""
-    if not config.session.enabled:
+    """Run a command directly or in the configured isolated container."""
+    sandbox_container: str | None = None
+    command = argv
+    if config.sandbox.enabled:
+        command, sandbox_container = build_sandbox_command(argv, cwd, config.sandbox)
+    if not config.session.enabled and not config.sandbox.enabled:
         return subprocess.run(argv, cwd=str(cwd), check=False, shell=False).returncode
-    from .session_limits import SessionLimitError, SessionStore
 
-    session_id = os.environ.get("JRX_SESSION_ID", "")
-    store = SessionStore(config.session)
-    store.reserve(session_id, semantic=0, tool_calls=0)
-    process = subprocess.Popen(argv, cwd=str(cwd), shell=False, start_new_session=True)
-    deadline = time.monotonic() + config.session.max_execution_seconds
+    store = None
+    session_id = ""
+    if config.session.enabled:
+        from .session_limits import SessionStore
+
+        session_id = os.environ.get("JRX_SESSION_ID", "")
+        store = SessionStore(config.session)
+        store.reserve(session_id, semantic=0, tool_calls=0)
+    egress_prepared = False
+    process: subprocess.Popen[bytes] | None = None
     try:
+        if sandbox_container is not None and config.sandbox.allowed_hosts:
+            prepare_sandbox_egress(config.sandbox, sandbox_container)
+            egress_prepared = True
+        if store is not None:
+            store.reserve(session_id, semantic=0, tool_calls=0)
+        process = subprocess.Popen(command, cwd=str(cwd), shell=False, start_new_session=True)
+        timeout = config.sandbox.max_execution_seconds if config.sandbox.enabled else None
+        if config.session.enabled:
+            timeout = (
+                min(timeout, config.session.max_execution_seconds)
+                if timeout
+                else config.session.max_execution_seconds
+            )
+        deadline = time.monotonic() + timeout if timeout is not None else None
         while True:
             try:
-                return process.wait(timeout=0.1)
+                return process.wait(timeout=0.1 if deadline is not None else None)
             except subprocess.TimeoutExpired:
-                if time.monotonic() >= deadline:
+                if deadline is not None and time.monotonic() >= deadline:
+                    if config.sandbox.enabled:
+                        raise subprocess.TimeoutExpired(command, timeout) from None
                     raise SessionLimitError("session execution time limit reached") from None
-                store.reserve(session_id, semantic=0, tool_calls=0)
-    except (SessionLimitError, OSError):
-        os.killpg(process.pid, signal.SIGTERM)
-        try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+                if store is not None:
+                    store.reserve(session_id, semantic=0, tool_calls=0)
+    except (KeyboardInterrupt, SessionLimitError, OSError, subprocess.TimeoutExpired):
+        if process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+            if sandbox_container is not None:
+                remove_sandbox_container(config.sandbox, sandbox_container)
         raise
+    finally:
+        if egress_prepared:
+            remove_sandbox_egress(config.sandbox, sandbox_container)
 
 
 @app.command("exec", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
@@ -576,7 +619,10 @@ def exec_action(
         except SessionLimitError as exc:
             typer.echo(f"Execution stopped: {exc}", err=True)
             raise typer.Exit(code=124) from None
-        except (OSError, ValueError):
+        except subprocess.TimeoutExpired:
+            typer.echo("Execution stopped: sandbox time limit reached", err=True)
+            raise typer.Exit(code=124) from None
+        except (OSError, RuntimeError, ValueError):
             typer.echo("Command could not be started.", err=True)
             raise typer.Exit(code=127) from None
         raise typer.Exit(code=exit_code)
@@ -657,7 +703,10 @@ def exec_action(
     except SessionLimitError as exc:
         typer.echo(f"Execution stopped: {exc}", err=True)
         raise typer.Exit(code=124) from None
-    except (OSError, ValueError):
+    except subprocess.TimeoutExpired:
+        typer.echo("Execution stopped: sandbox time limit reached", err=True)
+        raise typer.Exit(code=124) from None
+    except (OSError, RuntimeError, ValueError):
         typer.echo("Command could not be started.", err=True)
         raise typer.Exit(code=127) from None
     raise typer.Exit(code=exit_code)

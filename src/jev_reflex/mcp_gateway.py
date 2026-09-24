@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -12,12 +14,35 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, BinaryIO
 
-from .config import ReflexConfig
+from jsonschema import Draft202012Validator, FormatChecker, ValidationError
+from referencing import Registry
+from referencing.exceptions import NoSuchResource
+
+from .config import MCPToolRule, ReflexConfig
 from .context import RepositoryContextProvider
 from .enterprise import authorize, verified_identity
 from .evaluator import evaluate_context
 from .models import ProposedAction
 from .session_limits import SessionStore
+
+
+def _finite_number(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("non-finite JSON number")
+    return number
+
+
+def _reject_constant(value: str) -> None:
+    raise ValueError("invalid JSON constant")
+
+
+def _no_remote_schema(uri: str) -> None:
+    raise NoSuchResource(ref=uri)
+
+
+def _load_message(raw: bytes) -> Any:
+    return json.loads(raw, parse_float=_finite_number, parse_constant=_reject_constant)
 
 
 def _tool_error(request_id: object, message: str) -> dict[str, Any]:
@@ -57,12 +82,140 @@ class MCPGateway:
             SessionStore._id(self.session_id)
         self._output_lock = threading.Lock()
         self._pending_lock = threading.Lock()
+        self._catalog_lock = threading.Lock()
         self._pending: dict[str, tuple[object, threading.Timer]] = {}
         self._expired_ids: set[str] = set()
         names = [(rule.server, rule.name) for rule in config.mcp.tools]
         if len(names) != len(set(names)):
             raise ValueError("MCP server and tool pairs must be unique")
         self._rules = {(rule.server, rule.name): rule for rule in config.mcp.tools}
+        self._pinned_schemas = {
+            rule.name: rule.expected_input_schema_sha256
+            for rule in config.mcp.tools
+            if rule.server == server_name and rule.expected_input_schema_sha256 is not None
+        }
+        self._validated_schemas: dict[str, str] = {}
+        self._catalog_generation = 0
+        self._catalog_cursors: dict[str, int] = {}
+        self._catalog_requests: dict[str, int | None] = {}
+        self._argument_validators = {
+            (rule.server, rule.name): Draft202012Validator(
+                rule.argument_schema,
+                format_checker=FormatChecker(),
+                registry=Registry(retrieve=_no_remote_schema),
+            )
+            for rule in config.mcp.tools
+            if rule.argument_schema is not None
+        }
+
+    def _invalidate_catalog_locked(self) -> None:
+        self._catalog_generation += 1
+        self._validated_schemas.clear()
+        self._catalog_cursors.clear()
+
+    def _validate_tool_catalog(
+        self, response: dict[str, Any], generation: int | None
+    ) -> str | None:
+        """Validate each catalog page atomically; rejection revokes the entire scan."""
+        if not self._pinned_schemas:
+            return None
+        with self._catalog_lock:
+            if generation is None or generation != self._catalog_generation:
+                return "MCP tool catalog scan is stale or unverified"
+
+            def reject(reason: str) -> str:
+                self._invalidate_catalog_locked()
+                return reason
+
+            if "error" in response:
+                self._invalidate_catalog_locked()
+                return None
+            result = response.get("result")
+            if not isinstance(result, dict) or not isinstance(result.get("tools"), list):
+                return reject("MCP tool catalog does not match policy")
+            validated = dict(self._validated_schemas)
+            for tool in result["tools"]:
+                if not isinstance(tool, dict) or not isinstance(tool.get("name"), str):
+                    return reject("MCP tool catalog does not match policy")
+                name = tool["name"]
+                if name not in self._pinned_schemas:
+                    continue
+                if name in validated:
+                    return reject("MCP tool catalog contains a duplicate pinned tool")
+                schema = tool.get("inputSchema")
+                if not isinstance(schema, dict):
+                    return reject("MCP tool catalog does not match policy")
+                try:
+                    canonical = json.dumps(
+                        schema,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                        allow_nan=False,
+                    ).encode("utf-8")
+                except (TypeError, ValueError, UnicodeError):
+                    return reject("MCP tool catalog does not match policy")
+                digest = hashlib.sha256(canonical).hexdigest()
+                if digest != self._pinned_schemas[name]:
+                    return reject("MCP tool schema changed from the pinned policy")
+                validated[name] = digest
+            next_cursor = result.get("nextCursor")
+            if next_cursor is not None:
+                if not isinstance(next_cursor, str) or not next_cursor:
+                    return reject("MCP tool catalog does not match policy")
+                self._catalog_cursors[next_cursor] = generation
+            elif set(self._pinned_schemas) - set(validated):
+                return reject("MCP tool catalog is missing a pinned tool")
+            self._validated_schemas = validated
+        return None
+
+    def _schema_is_verified(self, name: str) -> bool:
+        expected = self._pinned_schemas.get(name)
+        if expected is None:
+            return True
+        with self._catalog_lock:
+            return self._validated_schemas.get(name) == expected
+
+    @staticmethod
+    def _pointer_value(arguments: dict[str, Any], pointer: str) -> Any:
+        value: Any = arguments
+        for segment in pointer[1:].split("/"):
+            key = segment.replace("~1", "/").replace("~0", "~")
+            if isinstance(value, dict):
+                value = value[key]
+            elif (
+                isinstance(value, list)
+                and key.isdecimal()
+                and (key == "0" or not key.startswith("0"))
+            ):
+                value = value[int(key)]
+            else:
+                raise KeyError(pointer)
+        return value
+
+    @staticmethod
+    def _same_json_value(actual: object, allowed: object) -> bool:
+        if isinstance(actual, bool) or isinstance(allowed, bool):
+            return type(actual) is type(allowed) and actual == allowed
+        if isinstance(actual, int | float) and isinstance(allowed, int | float):
+            return actual == allowed
+        return type(actual) is type(allowed) and actual == allowed
+
+    def _arguments_match_policy(self, rule: MCPToolRule, arguments: dict[str, Any]) -> bool:
+        validator = self._argument_validators.get((rule.server, rule.name))
+        if validator is not None:
+            try:
+                validator.validate(arguments)
+            except ValidationError:
+                return False
+        for pointer, allowed_values in rule.argument_constraints.items():
+            try:
+                actual = self._pointer_value(arguments, pointer)
+            except (KeyError, IndexError, ValueError):
+                return False
+            if not any(self._same_json_value(actual, allowed) for allowed in allowed_values):
+                return False
+        return True
 
     def _send(self, message: Mapping[str, Any]) -> None:
         data = json.dumps(message, separators=(",", ":"), ensure_ascii=True).encode() + b"\n"
@@ -93,14 +246,22 @@ class MCPGateway:
                     process.terminate()
                     break
                 try:
-                    message = json.loads(raw)
-                except (ValueError, UnicodeDecodeError):
+                    message = _load_message(raw)
+                except (ValueError, UnicodeDecodeError, RecursionError):
                     process.terminate()
                     break
+                if (
+                    isinstance(message, dict)
+                    and message.get("method") == "notifications/tools/list_changed"
+                ):
+                    with self._catalog_lock:
+                        self._invalidate_catalog_locked()
                 if isinstance(message, dict) and "id" in message and "method" not in message:
                     key = json.dumps(message["id"], sort_keys=True)
                     with self._pending_lock:
                         pending = self._pending.pop(key, None)
+                        is_catalog_request = key in self._catalog_requests
+                        catalog_generation = self._catalog_requests.pop(key, None)
                         expired = key in self._expired_ids
                         self._expired_ids.discard(key)
                     if pending is not None:
@@ -108,6 +269,11 @@ class MCPGateway:
                     elif expired:
                         # The request timed out and already received an error.
                         continue
+                    if is_catalog_request:
+                        mismatch = self._validate_tool_catalog(message, catalog_generation)
+                        if mismatch:
+                            self._send(_rpc_error(message["id"], -32002, mismatch))
+                            continue
                 if isinstance(message, dict):
                     self._send(message)
         finally:
@@ -126,6 +292,10 @@ class MCPGateway:
             return False, "MCP destructive tool is blocked by policy"
         if rule.effect == "write" and not self.config.mcp.use_jev:
             return False, "MCP write tool requires semantic evaluation"
+        if not self._schema_is_verified(name):
+            return False, "MCP tool schema has not been verified against policy"
+        if not self._arguments_match_policy(rule, arguments):
+            return False, "MCP tool arguments do not match policy"
         provider = RepositoryContextProvider(cwd=Path.cwd())
         context = provider.build(
             user_task=f"MCP {self.server_name}.{name}",
@@ -165,20 +335,42 @@ class MCPGateway:
             self._send(_rpc_error(None, -32600, "MCP message exceeds configured limit"))
             return
         try:
-            message = json.loads(raw)
-        except (ValueError, UnicodeDecodeError):
+            message = _load_message(raw)
+        except (ValueError, UnicodeDecodeError, RecursionError):
             self._send(_rpc_error(None, -32700, "Invalid JSON"))
             return
         if not isinstance(message, dict):
             self._send(_rpc_error(None, -32600, "Invalid JSON-RPC message"))
             return
         if message.get("method") != "tools/call":
+            if message.get("method") == "tools/list" and message.get("id") is not None:
+                params = message.get("params")
+                key = json.dumps(message["id"], sort_keys=True)
+                with self._pending_lock:
+                    if key in self._catalog_requests or key in self._pending:
+                        self._send(_rpc_error(message["id"], -32600, "Duplicate request ID"))
+                        return
+                    with self._catalog_lock:
+                        cursor = params.get("cursor") if isinstance(params, dict) else None
+                        if cursor is None:
+                            self._invalidate_catalog_locked()
+                            generation = self._catalog_generation
+                        elif isinstance(cursor, str):
+                            generation = self._catalog_cursors.get(cursor)
+                        else:
+                            generation = None
+                    self._catalog_requests[key] = generation
             self._forward_upstream(process, raw)
             return
         request_id = message.get("id")
         if request_id is None:
             self._send(_rpc_error(None, -32600, "Tool call requires a request ID"))
             return
+        key = json.dumps(request_id, sort_keys=True)
+        with self._pending_lock:
+            if key in self._pending or key in self._catalog_requests:
+                self._send(_rpc_error(request_id, -32600, "Duplicate request ID"))
+                return
         params = message.get("params")
         if (
             not isinstance(params, dict)
@@ -208,7 +400,6 @@ class MCPGateway:
         if not allowed:
             self._send(_tool_error(request_id, reason))
             return
-        key = json.dumps(request_id, sort_keys=True)
         timeout = self.config.mcp.timeout_seconds
         if self.config.session.enabled:
             timeout = min(timeout, self.config.session.max_execution_seconds)
@@ -220,7 +411,22 @@ class MCPGateway:
             self._pending[key] = (request_id, timer)
         timer.start()
         try:
-            self._forward_upstream(process, raw)
+            # A catalog notification may arrive while semantic evaluation is running.
+            with self._catalog_lock:
+                expected = self._pinned_schemas.get(params["name"])
+                revoked = (
+                    expected is not None and self._validated_schemas.get(params["name"]) != expected
+                )
+                if not revoked:
+                    self._forward_upstream(process, raw)
+            if revoked:
+                with self._pending_lock:
+                    pending = self._pending.pop(key, None)
+                if pending is not None:
+                    pending[1].cancel()
+                self._send(
+                    _tool_error(request_id, "MCP tool schema has not been verified against policy")
+                )
         except (OSError, ValueError):
             with self._pending_lock:
                 pending = self._pending.pop(key, None)

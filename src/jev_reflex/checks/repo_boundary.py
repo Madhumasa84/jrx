@@ -138,6 +138,8 @@ def _candidate_paths(argv: list[str]) -> list[str]:
 def _input_paths(value: object) -> list[str]:
     """Extract only explicitly path-shaped tool-input fields."""
 
+    if isinstance(value, list | tuple):
+        return [path for item in value for path in _input_paths(item)]
     if not isinstance(value, Mapping):
         return []
     candidates: list[str] = []
@@ -148,7 +150,7 @@ def _input_paths(value: object) -> list[str]:
                 candidates.append(nested)
             elif isinstance(nested, list | tuple):
                 candidates.extend(str(item) for item in nested if isinstance(item, str))
-        elif isinstance(nested, Mapping):
+        if isinstance(nested, Mapping | list | tuple):
             candidates.extend(_input_paths(nested))
     return candidates
 

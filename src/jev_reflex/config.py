@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import ipaddress
+import re
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
+from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Mode = Literal["advisory", "review", "enforce"]
@@ -272,6 +276,39 @@ class MCPToolRule(BaseModel):
     server: str
     name: str
     effect: Literal["read", "write", "destructive"]
+    argument_schema: dict[str, Any] | None = None
+    expected_input_schema_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    argument_constraints: dict[str, list[str | int | float | bool | None]] = Field(
+        default_factory=dict
+    )
+
+    @model_validator(mode="after")
+    def _validate_argument_policy(self) -> MCPToolRule:
+        if self.argument_schema is not None:
+
+            def validate_refs(schema: object) -> None:
+                if isinstance(schema, Mapping):
+                    for key, value in schema.items():
+                        if key in {"$ref", "$dynamicRef", "$recursiveRef"} and (
+                            not isinstance(value, str) or not value.startswith("#")
+                        ):
+                            raise ValueError("MCP argument schemas cannot use remote references")
+                        validate_refs(value)
+                elif isinstance(schema, list):
+                    for item in schema:
+                        validate_refs(item)
+
+            validate_refs(self.argument_schema)
+            try:
+                Draft202012Validator.check_schema(self.argument_schema)
+            except Exception as exc:
+                raise ValueError("MCP argument_schema is not a valid JSON Schema") from exc
+        for pointer, allowed_values in self.argument_constraints.items():
+            if not pointer.startswith("/") or not allowed_values:
+                raise ValueError("MCP argument constraints need a JSON Pointer and allowed values")
+            if re.search(r"~(?![01])", pointer):
+                raise ValueError("MCP argument constraint has an invalid JSON Pointer escape")
+        return self
 
 
 class MCPGatewayConfig(BaseModel):
@@ -297,6 +334,116 @@ class SessionLimitsConfig(BaseModel):
     max_risky_attempts: int = Field(default=10, ge=1)
 
 
+class SandboxConfig(BaseModel):
+    """Resource limits and OCI settings for isolated command execution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    image: str | None = None
+    proxy_image: str | None = None
+    docker_binary: str = "docker"
+    runtime: str | None = None
+    allowed_hosts: list[str] = Field(default_factory=list)
+    allowed_private_networks: list[str] = Field(default_factory=list)
+    allowed_ports: list[int] = Field(default_factory=lambda: [443])
+    memory_limit: str = "1g"
+    cpus: float = Field(default=2.0, gt=0, le=64, allow_inf_nan=False)
+    pids_limit: int = Field(default=256, ge=16, le=65_536)
+    tmp_size: str = "256m"
+    max_execution_seconds: int = Field(default=300, ge=1, le=86_400)
+
+    @model_validator(mode="after")
+    def _validate_sandbox(self) -> SandboxConfig:
+        if self.enabled and not self.image:
+            raise ValueError("sandbox.image is required when sandbox.enabled is true")
+        if self.allowed_hosts and not self.enabled:
+            raise ValueError("sandbox.enabled is required when sandbox.allowed_hosts is set")
+        if self.allowed_hosts and not self.proxy_image:
+            raise ValueError("sandbox.proxy_image is required when sandbox.allowed_hosts is set")
+        for name, value in (
+            ("image", self.image),
+            ("proxy_image", self.proxy_image),
+            ("runtime", self.runtime),
+        ):
+            if value is not None and (
+                not value.strip()
+                or value.startswith("-")
+                or any(char.isspace() or ord(char) < 32 for char in value)
+            ):
+                raise ValueError(f"sandbox.{name} must be a non-empty token")
+        if (
+            not self.docker_binary.strip()
+            or self.docker_binary.startswith("-")
+            or any(char.isspace() or ord(char) < 32 for char in self.docker_binary)
+        ):
+            raise ValueError("sandbox.docker_binary must be a non-empty executable token")
+        for name, value in (("memory_limit", self.memory_limit), ("tmp_size", self.tmp_size)):
+            if not re.fullmatch(r"[1-9][0-9]*[bBkKmMgG]", value):
+                raise ValueError(f"sandbox.{name} must be a positive Docker size, such as 512m")
+        canonical_hosts: list[str] = []
+        for host in self.allowed_hosts:
+            if not host or any(char in host for char in "/:@*?#"):
+                raise ValueError(
+                    "sandbox.allowed_hosts must contain exact hostnames without wildcards"
+                )
+            try:
+                canonical = host.rstrip(".").encode("idna").decode("ascii").lower()
+            except UnicodeError as exc:
+                raise ValueError("sandbox.allowed_hosts contains an invalid hostname") from exc
+            try:
+                ipaddress.ip_address(canonical)
+            except ValueError:
+                pass
+            else:
+                raise ValueError(
+                    "sandbox.allowed_hosts must contain DNS hostnames, not IP addresses"
+                )
+            if len(canonical) > 253 or any(
+                not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                for label in canonical.split(".")
+            ):
+                raise ValueError("sandbox.allowed_hosts contains an invalid hostname")
+            canonical_hosts.append(canonical)
+        if len(canonical_hosts) != len(set(canonical_hosts)):
+            raise ValueError("sandbox.allowed_hosts contains duplicate hostnames")
+        self.allowed_hosts = canonical_hosts
+
+        private_networks: list[str] = []
+        for value in self.allowed_private_networks:
+            try:
+                network = ipaddress.ip_network(value, strict=True)
+            except ValueError as exc:
+                raise ValueError(
+                    "sandbox.allowed_private_networks must use strict CIDR notation"
+                ) from exc
+            first, last = network.network_address, network.broadcast_address
+            if (
+                not first.is_private
+                or not last.is_private
+                or first.is_global
+                or last.is_global
+                or first.is_loopback
+                or last.is_loopback
+                or first.is_link_local
+                or last.is_link_local
+                or first.is_multicast
+                or last.is_multicast
+                or first.is_reserved
+                or last.is_reserved
+            ):
+                raise ValueError("sandbox.allowed_private_networks may contain private CIDRs only")
+            private_networks.append(str(network))
+        if len(private_networks) != len(set(private_networks)):
+            raise ValueError("sandbox.allowed_private_networks contains duplicates")
+        self.allowed_private_networks = private_networks
+        if not self.allowed_ports or len(self.allowed_ports) != len(set(self.allowed_ports)):
+            raise ValueError("sandbox.allowed_ports must contain unique permitted ports")
+        if any(port < 1 or port > 65_535 for port in self.allowed_ports):
+            raise ValueError("sandbox.allowed_ports must be between 1 and 65535")
+        return self
+
+
 class ReflexConfig(BaseModel):
     """Validated user configuration. Untrusted evaluated state never changes this object."""
 
@@ -316,6 +463,7 @@ class ReflexConfig(BaseModel):
     access: AccessConfig | None = None
     mcp: MCPGatewayConfig = Field(default_factory=MCPGatewayConfig)
     session: SessionLimitsConfig = Field(default_factory=SessionLimitsConfig)
+    sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     jev: JEVConfig = Field(default_factory=JEVConfig)
     stability: StabilityConfig = Field(default_factory=StabilityConfig)
     stability_policy: StabilityPolicyConfig = Field(default_factory=StabilityPolicyConfig)

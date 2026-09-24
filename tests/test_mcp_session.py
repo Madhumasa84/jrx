@@ -75,6 +75,26 @@ def test_semantic_spend_and_tool_call_limits(tmp_path: Path) -> None:
         store.reserve("agent-1", semantic=0)
 
 
+def test_repeated_risk_limit_persistently_stops_session(tmp_path: Path) -> None:
+    config = _session(tmp_path, max_risky_attempts=2)
+    store = SessionStore(config)
+    store.reserve("agent-1", semantic=0)
+    store.record_risky("agent-1", "risky action")
+    assert store.status("agent-1")["stopped"] is False
+    with pytest.raises(SessionLimitError, match="repeated risky"):
+        store.record_risky("agent-1", "risky action")
+
+    reopened = SessionStore(config)
+    assert reopened.status("agent-1")["stopped"] is True
+    with pytest.raises(SessionLimitError, match="stopped"):
+        reopened.reserve("agent-1", semantic=0)
+    with pytest.raises(SessionLimitError, match="stopped"):
+        reopened.reserve("agent-1", semantic=0, tool_calls=0)
+    with pytest.raises(SessionLimitError, match="stopped"):
+        reopened.record_risky("agent-1", "different action")
+    reopened.reserve("agent-2", semantic=0)
+
+
 def test_exec_timeout_and_admin_stop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = ReflexConfig.model_validate(
         {"session": _session(tmp_path, max_execution_seconds=1).model_dump()}
@@ -155,7 +175,21 @@ def test_stdio_mcp_gateway_blocks_unknown_and_write_calls(tmp_path: Path) -> Non
                 "mcp": {
                     "use_jev": False,
                     "tools": [
-                        {"server": "data", "name": "db.read", "effect": "read"},
+                        {
+                            "server": "data",
+                            "name": "db.read",
+                            "effect": "read",
+                            "argument_schema": {
+                                "type": "object",
+                                "required": ["query", "database"],
+                                "properties": {
+                                    "query": {"type": "string", "pattern": "^SELECT [12]$"},
+                                    "database": {"type": "string"},
+                                },
+                                "additionalProperties": False,
+                            },
+                            "argument_constraints": {"/database": ["development"]},
+                        },
                         {"server": "data", "name": "db.update", "effect": "write"},
                         {"server": "data", "name": "cloud.delete", "effect": "destructive"},
                     ],
@@ -163,7 +197,7 @@ def test_stdio_mcp_gateway_blocks_unknown_and_write_calls(tmp_path: Path) -> Non
                 "session": {
                     "enabled": True,
                     "path": str(tmp_path / "sessions.sqlite3"),
-                    "max_tool_calls": 4,
+                    "max_tool_calls": 10,
                 },
             }
         )
@@ -174,7 +208,10 @@ def test_stdio_mcp_gateway_blocks_unknown_and_write_calls(tmp_path: Path) -> Non
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "db.read", "arguments": {"query": "SELECT 1"}},
+            "params": {
+                "name": "db.read",
+                "arguments": {"query": "SELECT 1", "database": "development"},
+            },
         },
         {
             "jsonrpc": "2.0",
@@ -198,7 +235,32 @@ def test_stdio_mcp_gateway_blocks_unknown_and_write_calls(tmp_path: Path) -> Non
             "jsonrpc": "2.0",
             "id": 5,
             "method": "tools/call",
-            "params": {"name": "db.read", "arguments": {"query": "SELECT 2"}},
+            "params": {
+                "name": "db.read",
+                "arguments": {
+                    "query": "SELECT 2",
+                    "database": "development",
+                    "admin": True,
+                },
+            },
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {
+                "name": "db.read",
+                "arguments": {"query": "SELECT 2", "database": "production"},
+            },
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {
+                "name": "db.read",
+                "arguments": {"query": "SELECT 2", "database": "development"},
+            },
         },
     ]
     completed = subprocess.run(
@@ -229,9 +291,11 @@ def test_stdio_mcp_gateway_blocks_unknown_and_write_calls(tmp_path: Path) -> Non
     responses = {item["id"]: item for item in map(json.loads, completed.stdout.splitlines())}
     assert responses[0]["result"]["content"][0]["text"] == "ok"
     assert responses[1]["result"]["content"][0]["text"] == "ok"
-    assert all(responses[index]["result"]["isError"] for index in (2, 3, 4, 5))
+    assert all(responses[index]["result"]["isError"] for index in (2, 3, 4, 5, 6))
+    assert responses[7]["result"]["content"][0]["text"] == "ok"
     assert [json.loads(line)["params"]["name"] for line in calls.read_text().splitlines()] == [
-        "db.read"
+        "db.read",
+        "db.read",
     ]
 
 
