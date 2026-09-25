@@ -357,3 +357,76 @@ def test_write_when_disabled(
 
     # File should not exist
     assert not temp_audit_path.exists()
+
+
+@pytest.mark.parametrize("suffix", ["{", "\n", "null\n", "[]\n"])
+@pytest.mark.parametrize("override", [False, True])
+def test_append_refuses_corrupt_tail_without_modifying_log(tmp_path, suffix, override):
+    config = ReflexConfig(audit={"enabled": True, "path": str(tmp_path / "audit.log")})
+    audit = AuditLog(config)
+    audit.write_entry("first", [], {}, PolicyDecision("ALLOW", (), ()))
+    path = tmp_path / "audit.log"
+    original = path.read_bytes() + suffix.encode()
+    path.write_bytes(original)
+    with pytest.raises(ValueError, match="audit"):
+        if override:
+            audit.write_human_override("reviewer", "REVIEW", "second")
+        else:
+            audit.write_entry("second", [], {}, PolicyDecision("ALLOW", (), ()))
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("payload", ["null\n", "[]\n", "1\n", '"text"\n'])
+def test_verify_rejects_non_object_records(tmp_path, payload):
+    config = ReflexConfig(audit={"path": str(tmp_path / "audit.log")})
+    (tmp_path / "audit.log").write_text(payload)
+    valid, _ = AuditLog(config).verify()
+    assert valid is False
+
+
+def test_verify_streams_large_chain_without_retaining_records(tmp_path):
+    import hashlib
+    import tracemalloc
+
+    path = tmp_path / "audit.log"
+    previous = "0" * 64
+    with path.open("w") as handle:
+        for sequence in range(1, 10_001):
+            payload = {
+                "seq": sequence,
+                "prev_hash": previous,
+                "action_summary": "x" * 512,
+            }
+            canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            previous = hashlib.sha256((previous + canonical).encode()).hexdigest()
+            handle.write(json.dumps({**payload, "entry_hash": previous}) + "\n")
+    audit = AuditLog(ReflexConfig(audit={"path": str(path)}))
+    tracemalloc.start()
+    try:
+        assert audit.verify() == (True, "chain intact, 10000 entries")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 3_000_000
+
+
+def test_verify_rejects_blank_and_truncated_records(tmp_path):
+    path = tmp_path / "audit.log"
+    audit = AuditLog(ReflexConfig(audit={"path": str(path)}))
+    for payload in ("\n", '{"seq": 1}'):
+        path.write_text(payload)
+        valid, _ = audit.verify()
+        assert not valid
+
+
+@pytest.mark.parametrize("signer_type", ["ed25519", "cosign"])
+def test_invalid_signing_key_refuses_unsigned_audit(tmp_path, signer_type):
+    key = tmp_path / "invalid-key"
+    key.write_text("not a private key")
+    config = ReflexConfig(
+        audit={"enabled": True, "path": str(tmp_path / "audit.log")},
+        signing={"private_key_path": str(key), "signer_type": signer_type},
+    )
+    with pytest.raises((OSError, ValueError)):
+        AuditLog(config)
+    assert not (tmp_path / "audit.log").exists()

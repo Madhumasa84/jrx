@@ -38,7 +38,7 @@ def _reject_constant(value: str) -> None:
 
 
 def _no_remote_schema(uri: str) -> None:
-    raise NoSuchResource(ref=uri)
+    raise NoSuchResource(uri)
 
 
 def _load_message(raw: bytes) -> Any:
@@ -102,7 +102,9 @@ class MCPGateway:
             (rule.server, rule.name): Draft202012Validator(
                 rule.argument_schema,
                 format_checker=FormatChecker(),
-                registry=Registry(retrieve=_no_remote_schema),
+                # The installed referencing runtime accepts retrieve; its
+                # bundled typing omits this constructor keyword.
+                registry=Registry(retrieve=_no_remote_schema),  # type: ignore[call-arg]
             )
             for rule in config.mcp.tools
             if rule.argument_schema is not None
@@ -352,6 +354,7 @@ class MCPGateway:
                         return
                     with self._catalog_lock:
                         cursor = params.get("cursor") if isinstance(params, dict) else None
+                        generation: int | None
                         if cursor is None:
                             self._invalidate_catalog_locked()
                             generation = self._catalog_generation

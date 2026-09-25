@@ -72,7 +72,7 @@ class JSONFormatter(logging.Formatter):
         if record.funcName:
             log_entry["fields"]["function"] = record.funcName
 
-        return json.dumps(log_entry, separators=(",", ":"))
+        return json.dumps(redact_obj(log_entry), separators=(",", ":"))
 
 
 class WebhookSink:
@@ -141,6 +141,8 @@ class WebhookSink:
         self._stop_event.set()
         self._worker_thread.join(timeout=5.0)
 
+    close = stop
+
 
 class StdoutSink:
     """Stdout log sink."""
@@ -208,6 +210,24 @@ class SyslogSink:
             self._socket = None
 
 
+class _SinkHandler(logging.Handler):
+    """Adapt LogRecord to the redacted JSON contract consumed by our sinks."""
+
+    def __init__(self, sink: SyslogSink | WebhookSink) -> None:
+        super().__init__()
+        self.sink = sink
+        self._sink_closed = False
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.sink.emit(json.loads(self.format(record)))
+
+    def close(self) -> None:
+        if not self._sink_closed:
+            self._sink_closed = True
+            self.sink.close()
+        super().close()
+
+
 def setup_logging(
     sink: str = "stdout",
     level: str = "INFO",
@@ -245,7 +265,10 @@ def setup_logging(
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, level.upper(), logging.INFO))
 
-    # Remove existing handlers
+    # Release our background workers and sockets when logging is reconfigured.
+    for previous in root_logger.handlers:
+        if isinstance(previous, _SinkHandler):
+            previous.close()
     root_logger.handlers.clear()
 
     # Create JSON formatter
@@ -253,28 +276,19 @@ def setup_logging(
 
     # Create handler based on sink type
     if sink == "stdout":
-        handler = logging.StreamHandler(sys.stdout)
+        handler: logging.Handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(formatter)
         root_logger.addHandler(handler)
-    elif sink == "syslog":
-        handler = logging.Handler()
+    else:
+        target: SyslogSink | WebhookSink
+        if sink == "syslog":
+            target = SyslogSink(ident=syslog_ident)
+        else:
+            if webhook_url is None:
+                raise ValueError("webhook_url is required when sink='webhook-url'")
+            target = WebhookSink(url=webhook_url)
+        handler = _SinkHandler(target)
         handler.setFormatter(formatter)
-        syslog_sink = SyslogSink(ident=syslog_ident)
-
-        def emit(syslog_entry: dict[str, Any]) -> None:
-            syslog_sink.emit(syslog_entry)
-
-        handler.emit = emit  # type: ignore[assignment]
-        root_logger.addHandler(handler)
-    elif sink == "webhook-url":
-        handler = logging.Handler()
-        handler.setFormatter(formatter)
-        webhook_sink = WebhookSink(url=webhook_url)
-
-        def emit(webhook_entry: dict[str, Any]) -> None:
-            webhook_sink.emit(webhook_entry)
-
-        handler.emit = emit  # type: ignore[assignment]
         root_logger.addHandler(handler)
 
     return root_logger

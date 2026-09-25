@@ -481,28 +481,24 @@ def load_config(
     """Load config, defaulting only when the implicit ``reflex.yaml`` is absent."""
 
     config_path = path if path is not None else Path("reflex.yaml")
-    data: object = {}
+    bootstrap = load_bootstrap_config()
+    raw = b""
     try:
-        with config_path.open("r", encoding="utf-8") as handle:
-            loaded = yaml.safe_load(handle)
+        raw = config_path.read_bytes()
     except FileNotFoundError:
         if path is not None:
             raise FileNotFoundError(f"Configuration file not found: {config_path}") from None
+    if bootstrap.require_signature:
+        _verify_config_signature(config_path, bootstrap, data=raw)
+    try:
+        loaded = yaml.safe_load(raw.decode("utf-8"))
     except yaml.YAMLError:
         raise ValueError("configuration YAML is invalid") from None
-    else:
-        if loaded is None:
-            loaded = {}
-        if not isinstance(loaded, dict):
-            raise ValueError("configuration root must be a YAML mapping")
-        data = loaded
-
-    config = ReflexConfig.model_validate(data)
-
-    # Check if signature verification is required by bootstrap config
-    bootstrap = load_bootstrap_config()
-    if bootstrap.require_signature:
-        _verify_config_signature(config_path, bootstrap)
+    if loaded is None:
+        loaded = {}
+    if not isinstance(loaded, dict):
+        raise ValueError("configuration root must be a YAML mapping")
+    config = ReflexConfig.model_validate(loaded)
 
     if bootstrap.rollout_state_path:
         from .policy_rollout import RolloutStore
@@ -519,7 +515,9 @@ def load_config(
     return config
 
 
-def _verify_config_signature(config_path: Path, bootstrap: BootstrapConfig) -> None:
+def _verify_config_signature(
+    config_path: Path, bootstrap: BootstrapConfig, *, data: bytes | None = None
+) -> None:
     """Verify the configuration file signature.
 
     Args:
@@ -558,7 +556,7 @@ def _verify_config_signature(config_path: Path, bootstrap: BootstrapConfig) -> N
         raise ValueError(f"Unsupported signer type: {bootstrap.signer_type}")
 
     # Verify the signature
-    if not verify_file(config_path, signature_path, public_key, signer):
+    if not verify_file(config_path, signature_path, public_key, signer, data=data):
         raise ValueError(f"Signature verification failed for configuration file: {config_path}")
 
 

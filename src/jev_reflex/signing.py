@@ -182,6 +182,8 @@ def verify_file(
     signature_path: Path,
     public_key: bytes,
     signer: Signer,
+    *,
+    data: bytes | None = None,
 ) -> bool:
     """Verify a file's signature.
 
@@ -200,7 +202,8 @@ def verify_file(
     if not signature_path.exists():
         raise FileNotFoundError(f"Signature file not found: {signature_path}")
 
-    data = file_path.read_bytes()
+    if data is None:
+        data = file_path.read_bytes()
     signature = signature_path.read_bytes()
 
     return signer.verify(data, signature, public_key)

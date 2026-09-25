@@ -40,17 +40,21 @@ class SessionStore:
         ):
             raise SessionLimitError("session database must be an owner-only regular file")
         connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
-        connection.execute("PRAGMA busy_timeout=10000")
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, started REAL NOT NULL, "
-            "stopped INTEGER NOT NULL, calls INTEGER NOT NULL, semantic INTEGER NOT NULL, "
-            "reserved_usd REAL NOT NULL)"
-        )
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS risky_attempts (session_id TEXT NOT NULL, "
-            "fingerprint TEXT NOT NULL, count INTEGER NOT NULL, "
-            "PRIMARY KEY (session_id, fingerprint))"
-        )
+        try:
+            connection.execute("PRAGMA busy_timeout=10000")
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, started REAL NOT NULL, "
+                "stopped INTEGER NOT NULL, calls INTEGER NOT NULL, semantic INTEGER NOT NULL, "
+                "reserved_usd REAL NOT NULL)"
+            )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS risky_attempts (session_id TEXT NOT NULL, "
+                "fingerprint TEXT NOT NULL, count INTEGER NOT NULL, "
+                "PRIMARY KEY (session_id, fingerprint))"
+            )
+        except sqlite3.Error:
+            connection.close()
+            raise
         return connection
 
     @staticmethod

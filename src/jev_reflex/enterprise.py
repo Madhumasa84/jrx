@@ -10,9 +10,9 @@ import math
 import os
 import sqlite3
 import stat
-import subprocess
 import time
 import uuid
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.hashes import SHA256
 
 from .config import AccessConfig, ReflexConfig
+from .git_inspection import inspect_git, status_paths
 from .redaction import redact_text
 
 
@@ -143,15 +144,7 @@ def authorize(
 
 
 def _git(cwd: Path, *args: str) -> bytes:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        timeout=5,
-        check=False,
-    )
+    result = inspect_git(cwd, *args)
     if result.returncode != 0:
         raise AccessDenied("A Git repository is required for action-bound approvals")
     return result.stdout
@@ -161,14 +154,10 @@ def action_binding(
     config: ReflexConfig, cwd: Path, argv: list[str], environment: str
 ) -> tuple[str, str]:
     """Bind approval to exact argv, Git state, effective policy, and environment."""
-    root = Path(os.fsdecode(_git(cwd, "rev-parse", "--show-toplevel")).strip()).resolve()
+    root = Path(os.fsdecode(_git(cwd, "rev-parse", "--show-toplevel")).removesuffix("\n")).resolve()
     head = _git(root, "rev-parse", "HEAD").strip()
     status = _git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
-    paths: set[str] = set()
-    entries = status.split(b"\0")
-    for entry in entries:
-        if len(entry) >= 4:
-            paths.add(os.fsdecode(entry[3:]))
+    paths = set(status_paths(status))
     changed: dict[str, str] = {}
     for path in sorted(paths):
         candidate = root / path
@@ -201,8 +190,12 @@ class ApprovalStore:
 
     def _connect(self) -> sqlite3.Connection:
         if not self.path.exists():
-            descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            os.close(descriptor)
+            try:
+                descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError:
+                pass
+            else:
+                os.close(descriptor)
         details = self.path.lstat()
         if (
             not stat.S_ISREG(details.st_mode)
@@ -212,16 +205,20 @@ class ApprovalStore:
         ):
             raise AccessDenied("Approval database must be a private, owned regular file")
         connection = sqlite3.connect(self.path, timeout=10)
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY, requester TEXT NOT NULL, "
-            "repository TEXT NOT NULL, environment TEXT NOT NULL, binding TEXT NOT NULL, "
-            "summary TEXT NOT NULL, expires REAL NOT NULL, required INTEGER NOT NULL, "
-            "consumed INTEGER NOT NULL DEFAULT 0)"
-        )
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS grants (approval_id TEXT NOT NULL, reviewer TEXT NOT NULL, "
-            "granted REAL NOT NULL, PRIMARY KEY (approval_id, reviewer))"
-        )
+        try:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY, requester TEXT NOT NULL, "
+                "repository TEXT NOT NULL, environment TEXT NOT NULL, binding TEXT NOT NULL, "
+                "summary TEXT NOT NULL, expires REAL NOT NULL, required INTEGER NOT NULL, "
+                "consumed INTEGER NOT NULL DEFAULT 0)"
+            )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS grants (approval_id TEXT NOT NULL, reviewer TEXT NOT NULL, "
+                "granted REAL NOT NULL, PRIMARY KEY (approval_id, reviewer))"
+            )
+        except sqlite3.Error:
+            connection.close()
+            raise
         return connection
 
     def request(
@@ -231,7 +228,7 @@ class ApprovalStore:
             raise AccessDenied("Approval command cannot be reviewed safely")
         approval_id = uuid.uuid4().hex
         required = 2 if environment in self.config.production_environments else 1
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 "INSERT INTO approvals VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
                 (
@@ -248,7 +245,7 @@ class ApprovalStore:
         return approval_id
 
     def pending(self, identity: Identity) -> list[dict[str, object]]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             rows = connection.execute(
                 "SELECT id, requester, repository, environment, summary, expires, required "
                 "FROM approvals WHERE consumed=0 AND expires>? ORDER BY expires",
@@ -281,7 +278,7 @@ class ApprovalStore:
         return pending
 
     def grant(self, approval_id: str, identity: Identity) -> tuple[int, int]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 "SELECT requester, repository, environment, expires, required, consumed "
@@ -307,7 +304,7 @@ class ApprovalStore:
         return count, required
 
     def consume(self, approval_id: str, identity: Identity, binding: str) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 "SELECT requester, binding, expires, required, consumed FROM approvals WHERE id=?",

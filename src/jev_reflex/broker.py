@@ -25,6 +25,7 @@ from .redaction import redact_text
 
 PROTOCOL_VERSION = 1
 MAX_BYTES = 262_144
+MAX_CLOCK_SKEW_SECONDS = 300
 ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 
 
@@ -67,14 +68,29 @@ def debug(**fields: Any) -> None:
         print(json.dumps(fields, separators=(",", ":")), file=sys.stderr, flush=True)
 
 
+def _validate_response(result: Any, request_id: str) -> dict[str, Any]:
+    if (
+        not isinstance(result, dict)
+        or result.get("protocol_version") != PROTOCOL_VERSION
+        or result.get("request_id") != request_id
+    ):
+        raise ValueError("invalid broker response")
+    server_time = result.get("server_time")
+    if not isinstance(server_time, (int, float)) or isinstance(server_time, bool):
+        raise ValueError("broker clock skew exceeds limit")
+    if not math.isfinite(server_time) or abs(time.time() - server_time) > MAX_CLOCK_SKEW_SECONDS:
+        raise ValueError("broker clock skew exceeds limit")
+    return result
+
+
 class BrokerClient:
     """SemanticEvaluator implementation. Never loads credentials or falls back to direct."""
 
     def __init__(self, config: ReflexConfig | None = None) -> None:
         self.config = config or ReflexConfig()
-        self.last_api_requests = 0
-        self.last_jev_latency_ms = None
-        self.last_usage = None
+        self.last_api_requests: int | None = 0
+        self.last_jev_latency_ms: float | None = None
+        self.last_usage: dict[str, int] | None = None
 
     def request(self, operation: str, **fields: Any) -> dict[str, Any]:
         if self.config.jev.transport == "broker-tls":
@@ -111,12 +127,7 @@ class BrokerClient:
                 if len(data) > MAX_BYTES:
                     raise ValueError("oversized broker response")
         result = json.loads(data)
-        if (
-            not isinstance(result, dict)
-            or result.get("protocol_version") != 1
-            or result.get("request_id") != request_id
-        ):
-            raise ValueError("invalid broker response")
+        result = _validate_response(result, request_id)
         debug(
             request_id=request_id, broker_latency_ms=round((time.monotonic() - started) * 1000, 2)
         )
@@ -151,7 +162,6 @@ class BrokerClient:
             cafile=str(client_ca_path),
         )
         ssl_context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
-        ssl_context.check_hostname = False  # Don't verify hostname for simplicity
 
         request_id = uuid.uuid4().hex
         message = encode(
@@ -160,47 +170,31 @@ class BrokerClient:
         started = time.monotonic()
 
         # Create TCP socket and wrap with SSL
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(self.config.jev.connect_timeout)
-        try:
-            sock.connect((host, port))
-            ssl_sock = ssl_context.wrap_socket(sock, server_hostname=host)
-
-            deadline = time.monotonic() + self.config.jev.request_timeout
-            ssl_sock.settimeout(self.config.jev.request_timeout)
-            ssl_sock.sendall(message)
-            if operation == "evaluate":
-                # If the response is lost, an API call may still have been started.
-                self.last_api_requests = None
-            data = bytearray()
-            while b"\n" not in data:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("broker deadline exceeded")
-                ssl_sock.settimeout(remaining)
-                chunk = ssl_sock.recv(min(4096, MAX_BYTES + 1 - len(data)))
-                if not chunk:
-                    raise ValueError("incomplete broker response")
-                data.extend(chunk)
-                if len(data) > MAX_BYTES:
-                    raise ValueError("oversized broker response")
-        finally:
-            try:
-                ssl_sock.close()
-            except Exception:
-                pass
-            try:
-                sock.close()
-            except Exception:
-                pass
+        with socket.create_connection(
+            (host, port), timeout=self.config.jev.connect_timeout
+        ) as sock:
+            with ssl_context.wrap_socket(sock, server_hostname=host) as ssl_sock:
+                deadline = time.monotonic() + self.config.jev.request_timeout
+                ssl_sock.settimeout(self.config.jev.request_timeout)
+                ssl_sock.sendall(message)
+                if operation == "evaluate":
+                    # If the response is lost, an API call may still have been started.
+                    self.last_api_requests = None
+                data = bytearray()
+                while b"\n" not in data:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("broker deadline exceeded")
+                    ssl_sock.settimeout(remaining)
+                    chunk = ssl_sock.recv(min(4096, MAX_BYTES + 1 - len(data)))
+                    if not chunk:
+                        raise ValueError("incomplete broker response")
+                    data.extend(chunk)
+                    if len(data) > MAX_BYTES:
+                        raise ValueError("oversized broker response")
 
         result = json.loads(data)
-        if (
-            not isinstance(result, dict)
-            or result.get("protocol_version") != 1
-            or result.get("request_id") != request_id
-        ):
-            raise ValueError("invalid broker response")
+        result = _validate_response(result, request_id)
         debug(
             request_id=request_id, broker_latency_ms=round((time.monotonic() - started) * 1000, 2)
         )
@@ -462,7 +456,7 @@ class BrokerServer:
             )
             if "error_code" in response:
                 response.update(status="error", degraded=True)
-            response.update(protocol_version=1, request_id=request_id)
+            response.update(protocol_version=1, request_id=request_id, server_time=time.time())
             try:
                 writer.write(encode(response))
                 await asyncio.wait_for(writer.drain(), 1)
@@ -655,7 +649,6 @@ class BrokerServer:
         )
         ssl_context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
         ssl_context.verify_mode = ssl.CERT_REQUIRED
-        ssl_context.check_hostname = False  # Don't verify hostname for simplicity
 
         # Create server with SSL context
         tls_server = await asyncio.start_server(

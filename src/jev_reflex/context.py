@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Protocol
 
+from .git_inspection import inspect_git, status_paths
 from .models import EvaluationContext, ProposedAction
 
 
@@ -62,23 +63,15 @@ class RepositoryContextProvider:
 
     def _git(self, *args: str) -> str:
         try:
-            completed = subprocess.run(
-                ["git", *args],
-                cwd=str(self.working_directory),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                check=False,
-                timeout=3,
-                shell=False,
-            )
-        except (OSError, subprocess.SubprocessError):
+            completed = inspect_git(self.working_directory, *args, timeout=3)
+        except (OSError, subprocess.SubprocessError, ValueError):
             return ""
-        return completed.stdout.strip("\x00\n")
+        if completed.returncode != 0:
+            return ""
+        return completed.stdout.decode("utf-8", errors="surrogateescape")
 
     def repository_root(self) -> Path | None:
-        root = self._git("rev-parse", "--show-toplevel").strip()
+        root = self._git("rev-parse", "--show-toplevel").removesuffix("\n")
         if not root:
             return None
         try:
@@ -88,23 +81,10 @@ class RepositoryContextProvider:
 
     def _changed_files(self, root: Path) -> list[str]:
         del root  # The Git command runs relative to the provider's canonical directory.
-        values: list[str] = []
-        for args in (
-            ("status", "--porcelain=v1", "-z", "--untracked-files=all"),
-            ("diff", "--name-only", "-z"),
-            ("diff", "--cached", "--name-only", "-z"),
-        ):
-            output = self._git(*args)
-            for item in output.split("\x00"):
-                if not item:
-                    continue
-                if args[0] == "status" and len(item) >= 3:
-                    item = item[3:]
-                if item and item not in values:
-                    values.append(item)
-                if len(values) >= 500:
-                    return values
-        return values
+        output = self._git("status", "--porcelain=v1", "-z", "--untracked-files=all")
+        return list(dict.fromkeys(status_paths(output.encode("utf-8", errors="surrogateescape"))))[
+            :500
+        ]
 
     def build(
         self,
@@ -125,7 +105,7 @@ class RepositoryContextProvider:
 
         diff = stdin_diff
         if not diff and self.include_git_diff:
-            diff = self._git("--no-ext-diff", "--unified=3", "diff")
+            diff = self._git("diff", "--unified=3")
 
         return EvaluationContext(
             user_task=bounded_text(user_task, self.max_context_chars),

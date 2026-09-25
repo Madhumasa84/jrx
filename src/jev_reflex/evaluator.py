@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Mapping
 from statistics import mean, median
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, cast
 
 from .audit import AuditLog
 from .checks import has_blocking_finding, run_deterministic_checks
@@ -35,6 +35,7 @@ from .metrics import (
 from .models import (
     EvaluationContext,
     EvaluationResult,
+    RiskChoice,
     RiskInfo,
     SemanticSignals,
 )
@@ -138,7 +139,7 @@ def parse_system_one_response(raw: Any) -> tuple[dict[str, float], RiskInfo]:
 def _redacted_context(context: EvaluationContext) -> EvaluationContext:
     dumped = redact_obj(context.model_dump(mode="json"))
     action = dumped.get("proposed_action")
-    if isinstance(action, Mapping) and isinstance(action.get("argv"), list):
+    if isinstance(action, dict) and isinstance(action.get("argv"), list):
         action["argv"] = redact_argv(action["argv"])
     return EvaluationContext.model_validate(dumped)
 
@@ -163,7 +164,7 @@ def _redacted_context_with_gitleaks(context: EvaluationContext) -> tuple[Evaluat
             gitleaks_failed = gitleaks_failed or failed
 
     action = dumped.get("proposed_action")
-    if isinstance(action, Mapping):
+    if isinstance(action, dict):
         if isinstance(action.get("argv"), list):
             action["argv"] = redact_argv(action["argv"])
         if isinstance(action.get("command"), str):
@@ -182,10 +183,9 @@ def compact_state(context: EvaluationContext, max_chars: int) -> dict[str, Any]:
     """Bound the complete serialized state before it reaches the SDK."""
 
     state = _redacted_context(context).to_jev_state()
-    separator_kwargs = {"ensure_ascii": False, "separators": (",", ":")}
 
     def size() -> int:
-        return len(json.dumps(state, **separator_kwargs))
+        return len(json.dumps(state, ensure_ascii=False, separators=(",", ":")))
 
     if size() <= max_chars:
         return state
@@ -278,7 +278,11 @@ def compact_state(context: EvaluationContext, max_chars: int) -> dict[str, Any]:
     # A very small caller-supplied limit cannot fit the complete state schema. Return a
     # valid minimal object rather than sending an unbounded request.
     minimal = {"proposed_action": {"type": bounded_text(action_type, max(0, max_chars - 25))}}
-    return minimal if len(json.dumps(minimal, **separator_kwargs)) <= max_chars else {}
+    return (
+        minimal
+        if len(json.dumps(minimal, ensure_ascii=False, separators=(",", ":"))) <= max_chars
+        else {}
+    )
 
 
 def build_questions() -> dict[str, Any]:
@@ -312,7 +316,7 @@ class JEVSemanticEvaluator:
         self.gateway = gateway or TypeSafeIntegration(timeout=self.config.jev.api_timeout)
         self.last_api_requests = 0
         self.last_jev_latency_ms = 0.0
-        self.last_usage = None
+        self.last_usage: dict[str, int] | None = None
 
     def evaluate(self, context: EvaluationContext) -> SemanticSignals:
         started = time.monotonic()
@@ -376,7 +380,9 @@ def aggregate_semantic_samples(
     scores = [sample.risk.score for sample in samples if sample.risk.score is not None]
     if scores:
         risk_score = _aggregate([float(value) for value in scores], aggregation)
-        risk_choice = "low" if risk_score < 0.67 else "medium" if risk_score < 1.34 else "high"
+        risk_choice: RiskChoice = (
+            "low" if risk_score < 0.67 else "medium" if risk_score < 1.34 else "high"
+        )
     else:
         rank = {"low": 0, "medium": 1, "high": 2}
         risk_score = None
@@ -420,6 +426,7 @@ def evaluate_context(
     aggregation = aggregation or config.jev.aggregation
     if aggregation not in {"median", "mean", "max"}:
         raise ValueError("aggregation must be median, mean, or max")
+    aggregation = cast(Literal["median", "mean", "max"], aggregation)
     if use_jev and config.stability_policy.mode == "majority" and samples < 2:
         raise ValueError("stability_policy majority requires at least two JEV samples")
     session_store = None
@@ -534,9 +541,9 @@ def evaluate_context(
             degraded=semantic.degraded and use_jev,
             forced_review=gitleaks_failed and policy.decision == "REVIEW",
         )
-    except Exception:
-        # Audit logging failures should not block policy decisions
-        pass
+    except (OSError, ValueError, TypeError):
+        warnings.append("Audit logging failed; the decision was not recorded.")
+        log_structured(level="ERROR", event="audit_write_failed", fields={})
 
     from .broker import debug
 
@@ -561,6 +568,7 @@ def evaluate_context(
         action=safe_action,
     )
     if session_store is not None:
+        assert session_id is not None
         if result.decision != "ALLOW" or result.degraded:
             session_store.record_risky(
                 session_id, context.proposed_action.model_dump_json(exclude_none=True)
@@ -692,6 +700,7 @@ class DemoSemanticEvaluator:
             ):
                 signals["external_side_effect_risk"] = 0.78
 
+        risk_choice: RiskChoice
         if any(
             signals[name] >= 0.90
             for name in ("destructive", "secret_exposure", "prompt_injection", "fail_open")

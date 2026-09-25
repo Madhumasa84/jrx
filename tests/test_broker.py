@@ -344,3 +344,27 @@ def test_status_and_check_cli_with_mocked_broker(tmp_path):
         body = json.loads(result.stdout)
         assert body["semantic_source"] == "broker/live" and not body["degraded"]
         assert body["decision"] == "REVIEW"
+
+
+def test_status_returns_nonzero_when_broker_is_unavailable(tmp_path):
+    result = CliRunner().invoke(
+        app, ["broker", "status", "--socket", str(tmp_path / "missing.sock"), "--json"]
+    )
+    assert json.loads(result.stdout)["running"] is False
+    assert result.exit_code == 1
+
+
+def test_broker_rejects_stale_response_over_socket(tmp_path, monkeypatch):
+    from jev_reflex import broker
+
+    real_encode = broker.encode
+
+    def stale_response(value):
+        if "server_time" in value:
+            value = {**value, "server_time": value["server_time"] - 301}
+        return real_encode(value)
+
+    monkeypatch.setattr(broker, "encode", stale_response)
+    with running_broker(tmp_path) as (config, _):
+        assert BrokerClient(config).evaluate(context()).degraded
+        assert not BrokerClient(config).health()["running"]

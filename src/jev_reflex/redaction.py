@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 import warnings
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 REDACTED_SECRET = "<REDACTED_SECRET>"
@@ -43,7 +46,7 @@ _SECRET_ASSIGNMENT_RE = re.compile(
     r"authorization|aws_access_key_id|aws_secret_access_key|"
     r"[a-z][a-z0-9_]*(?:_token|_secret|_key|_password|_passwd|_credential)s?"
     r")\b\s*(?:=|:)\s*)"
-    r"(?P<value>\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;}\"']+(?=[\s,;}]|$))"
+    r"(?P<value>\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,;}\"']+(?=[\s,;}\"']|$))"
     r"(?!\s*=)"
 )
 _SECRET_FLAG_RE = re.compile(
@@ -218,66 +221,55 @@ class GitleaksRedactor:
             return redact_text(text), False
 
         try:
-            # Run gitleaks detect on stdin
-            result = subprocess.run(
-                ["gitleaks", "detect", "--no-git", "--report-format", "json", "--source", "-"],
-                input=text,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-            )
-
+            # Gitleaks scans files, not stdin. Keep the input in a private
+            # temporary directory and remove it before returning.
+            with tempfile.TemporaryDirectory(prefix="jrx-redact-") as directory:
+                source = Path(directory) / "input.txt"
+                descriptor = os.open(source, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    handle.write(text)
+                env = {
+                    key: value
+                    for key, value in os.environ.items()
+                    if key not in {"GITLEAKS_CONFIG", "GITLEAKS_CONFIG_TOML"}
+                }
+                result = subprocess.run(
+                    [
+                        "gitleaks",
+                        "dir",
+                        "--no-banner",
+                        "--log-level",
+                        "error",
+                        "--exit-code",
+                        "0",
+                        "--report-format",
+                        "json",
+                        "--report-path",
+                        "-",
+                        str(source),
+                    ],
+                    cwd=directory,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout,
+                )
             if result.returncode != 0:
-                # Gitleaks failed - fail toward more redaction
                 return REDACTED_SECRET, True
-
-            # Parse JSON output
-            try:
-                findings = json.loads(result.stdout)
-            except json.JSONDecodeError:
-                # Invalid JSON - fail toward more redaction
-                return REDACTED_SECRET, True
-
+            findings = json.loads(result.stdout)
             if not isinstance(findings, list):
                 return REDACTED_SECRET, True
-
-            # Apply redactions based on findings
             redacted = text
-            offset = 0
-
-            # Sort findings by start position to apply in order
-            findings.sort(key=lambda f: f.get("startLine", 0) * 1000 + f.get("startColumn", 0))
-
             for finding in findings:
-                start_line = finding.get("startLine", 0)
-                start_column = finding.get("startColumn", 0)
-                end_line = finding.get("endLine", 0)
-                end_column = finding.get("endColumn", 0)
-
-                # Convert line/column to character offsets
-                lines = redacted.split("\n")
-                if start_line >= len(lines) or end_line >= len(lines):
-                    continue
-
-                # Calculate start position
-                start_pos = sum(len(line) + 1 for line in lines[:start_line]) + start_column
-                # Calculate end position
-                end_pos = sum(len(line) + 1 for line in lines[:end_line]) + end_column
-
-                if start_pos >= len(redacted) or end_pos > len(redacted):
-                    continue
-
-                # Redact the span
-                redacted = redacted[:start_pos] + REDACTED_SECRET + redacted[end_pos:]
-                offset += len(REDACTED_SECRET) - (end_pos - start_pos)
-
+                if not isinstance(finding, dict):
+                    return REDACTED_SECRET, True
+                secret = finding.get("Secret", finding.get("secret"))
+                if not isinstance(secret, str) or not secret or secret not in text:
+                    return REDACTED_SECRET, True
+                redacted = redacted.replace(secret, REDACTED_SECRET)
             return redacted, False
-
-        except subprocess.TimeoutExpired:
-            # Timeout - fail toward more redaction
-            return REDACTED_SECRET, True
-        except Exception:
-            # Any other error - fail toward more redaction
+        except (OSError, subprocess.TimeoutExpired, UnicodeError, ValueError):
             return REDACTED_SECRET, True
 
 

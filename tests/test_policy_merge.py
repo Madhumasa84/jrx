@@ -223,3 +223,19 @@ def test_merge_threshold_invariant_for_all_supported_boundaries() -> None:
 
         assert merged.thresholds.strong == min(central_strong, local_strong)
         assert merged.thresholds.review == min(central_review, local_review)
+
+
+def test_hold_alias_does_not_undo_stricter_local_threshold():
+    central = ReflexConfig(thresholds={"hold": 0.95, "review": 0.70})
+    local = ReflexConfig(thresholds={"hold": 0.80, "review": 0.60})
+    merged = PolicyMerger.merge_policies(central, local)
+    assert merged.thresholds.strong == 0.80
+    assert ReflexConfig.model_validate(merged.model_dump()).thresholds.strong == 0.80
+
+
+def test_merge_rule_order_is_canonical():
+    central = ReflexConfig(hold_on=["z", "a"], review_on=["y", "b"])
+    local = ReflexConfig(hold_on=["m"], review_on=["n"])
+    merged = PolicyMerger.merge_policies(central, local)
+    assert merged.hold_on == ["a", "m", "z"]
+    assert merged.review_on == ["b", "n", "y"]

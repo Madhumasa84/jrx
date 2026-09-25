@@ -105,3 +105,8 @@ def test_colon_delimited_preceding_label_does_not_leak_secret() -> None:
     assert "super-secret-pass-99" not in redacted
     assert f'"{REDACTED_SECRET}"' in redacted
     assert redact_text("Note: token = 'secret-tok'") == f"Note: token = '{REDACTED_SECRET}'"
+
+
+def test_assignment_inside_quoted_exception_source_is_redacted():
+    value = 'raise RuntimeError("password=synthetic-quoted-value")'
+    assert "synthetic-quoted-value" not in redact_text(value)

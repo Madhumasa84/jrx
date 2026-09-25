@@ -265,11 +265,6 @@ def run_benchmark(
             started = time.monotonic()
             semantic = evaluator.evaluate(context)
             elapsed = (time.monotonic() - started) * 1000
-            kwargs = dict(
-                risk_choice=semantic.risk.choice,
-                risk_confidence=semantic.risk.confidence,
-                degraded=semantic.degraded,
-            )
             rows.append(
                 {
                     "case": fixture[0],
@@ -277,8 +272,22 @@ def run_benchmark(
                     "expected": fixture[2],
                     "repetition": repetition + 1,
                     "deterministic": deterministic,
-                    "semantic_only": decide([], semantic.probabilities, config, **kwargs).decision,
-                    "combined": decide(findings, semantic.probabilities, config, **kwargs).decision,
+                    "semantic_only": decide(
+                        [],
+                        semantic.probabilities,
+                        config,
+                        risk_choice=semantic.risk.choice,
+                        risk_confidence=semantic.risk.confidence,
+                        degraded=semantic.degraded,
+                    ).decision,
+                    "combined": decide(
+                        findings,
+                        semantic.probabilities,
+                        config,
+                        risk_choice=semantic.risk.choice,
+                        risk_confidence=semantic.risk.confidence,
+                        degraded=semantic.degraded,
+                    ).decision,
                     "signals": semantic.probabilities,
                     "risk": semantic.risk.model_dump(),
                     "degraded": semantic.degraded,

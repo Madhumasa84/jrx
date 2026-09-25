@@ -15,7 +15,17 @@ import time
 from collections import defaultdict
 from collections.abc import Callable
 from threading import Lock
-from typing import Any
+from typing import Any, TypedDict
+
+
+class _HistogramData(TypedDict):
+    sum: float
+    count: int
+    buckets: list[int]
+
+
+def _label_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
 
 
 class Counter:
@@ -42,16 +52,18 @@ class Counter:
 
     def _render(self) -> str:
         """Render the counter in Prometheus exposition format."""
-        lines = [f"# HELP {self.name} {self.help_text}", f"# TYPE {self.name} counter"]
-        if self._value > 0:
-            lines.append(f"{self.name} {self._value}")
-        for label_tuple, value in self._label_values.items():
-            if value > 0:
-                label_str = ",".join(
-                    f'{k}="{v}"' for k, v in zip(self.labels, label_tuple, strict=True)
-                )
-                lines.append(f"{self.name}{{{label_str}}} {value}")
-        return "\n".join(lines)
+        with self._lock:
+            lines = [f"# HELP {self.name} {self.help_text}", f"# TYPE {self.name} counter"]
+            if self._value > 0:
+                lines.append(f"{self.name} {self._value}")
+            for label_tuple, value in self._label_values.items():
+                if value > 0:
+                    label_str = ",".join(
+                        f'{k}="{_label_value(v)}"'
+                        for k, v in zip(self.labels, label_tuple, strict=True)
+                    )
+                    lines.append(f"{self.name}{{{label_str}}} {value}")
+            return "\n".join(lines)
 
 
 class Histogram:
@@ -73,7 +85,7 @@ class Histogram:
         self._sum: float = 0.0
         self._count: int = 0
         self._bucket_counts: list[int] = [0] * len(buckets)
-        self._label_data: dict[tuple[str, ...], dict[str, float | int]] = defaultdict(
+        self._label_data: dict[tuple[str, ...], _HistogramData] = defaultdict(
             lambda: {"sum": 0.0, "count": 0, "buckets": [0] * len(buckets)}
         )
         self._lock = Lock()
@@ -86,11 +98,11 @@ class Histogram:
             if labels:
                 label_tuple = tuple(labels.get(k, "") for k in self.labels)
                 data = self._label_data[label_tuple]
-                data["sum"] += value  # type: ignore[assignment]
-                data["count"] += 1  # type: ignore[assignment]
+                data["sum"] += value
+                data["count"] += 1
                 for i, bucket in enumerate(self.buckets):
                     if value <= bucket:
-                        data["buckets"][i] += 1  # type: ignore[index]
+                        data["buckets"][i] += 1
             else:
                 self._sum += value
                 self._count += 1
@@ -100,38 +112,42 @@ class Histogram:
 
     def _render(self) -> str:
         """Render the histogram in Prometheus exposition format."""
-        lines = [f"# HELP {self.name} {self.help_text}", f"# TYPE {self.name} histogram"]
+        with self._lock:
+            lines = [f"# HELP {self.name} {self.help_text}", f"# TYPE {self.name} histogram"]
 
-        def render_label_data(
-            label_str: str, sum_val: float, count: int, bucket_counts: list[int]
-        ) -> list[str]:
-            label_prefix = f"{self.name}{label_str}"
-            result = []
-            for i, bucket in enumerate(self.buckets):
-                le = "+Inf" if bucket == float("inf") else str(bucket)
-                result.append(f'{label_prefix}_bucket{{le="{le}"}} {bucket_counts[i]}')
-            result.append(f"{label_prefix}_sum {sum_val}")
-            result.append(f"{label_prefix}_count {count}")
-            return result
-
-        if self._count > 0:
-            lines.extend(render_label_data("", self._sum, self._count, self._bucket_counts))
-
-        for label_tuple, data in self._label_data.items():
-            if data["count"] > 0:  # type: ignore[comparison-overlap]
-                label_str = ",".join(
-                    f'{k}="{v}"' for k, v in zip(self.labels, label_tuple, strict=True)
-                )
-                lines.extend(
-                    render_label_data(
-                        f"{{{label_str}}}",
-                        data["sum"],  # type: ignore[arg-type]
-                        data["count"],  # type: ignore[arg-type]
-                        data["buckets"],  # type: ignore[arg-type]
+            def render_label_data(
+                label_str: str, sum_val: float, count: int, bucket_counts: list[int]
+            ) -> list[str]:
+                label_prefix = label_str[1:-1] + "," if label_str else ""
+                result = []
+                for i, bucket in enumerate(self.buckets):
+                    le = "+Inf" if bucket == float("inf") else str(bucket)
+                    result.append(
+                        f'{self.name}_bucket{{{label_prefix}le="{le}"}} {bucket_counts[i]}'
                     )
-                )
+                result.append(f"{self.name}_sum{label_str} {sum_val}")
+                result.append(f"{self.name}_count{label_str} {count}")
+                return result
 
-        return "\n".join(lines)
+            if self._count > 0:
+                lines.extend(render_label_data("", self._sum, self._count, self._bucket_counts))
+
+            for label_tuple, data in self._label_data.items():
+                if data["count"] > 0:
+                    label_str = ",".join(
+                        f'{k}="{_label_value(v)}"'
+                        for k, v in zip(self.labels, label_tuple, strict=True)
+                    )
+                    lines.extend(
+                        render_label_data(
+                            f"{{{label_str}}}",
+                            data["sum"],
+                            data["count"],
+                            data["buckets"],
+                        )
+                    )
+
+            return "\n".join(lines)
 
 
 class Gauge:
@@ -174,14 +190,16 @@ class Gauge:
 
     def _render(self) -> str:
         """Render the gauge in Prometheus exposition format."""
-        lines = [f"# HELP {self.name} {self.help_text}", f"# TYPE {self.name} gauge"]
-        lines.append(f"{self.name} {self._value}")
-        for label_tuple, value in self._label_values.items():
-            label_str = ",".join(
-                f'{k}="{v}"' for k, v in zip(self.labels, label_tuple, strict=True)
-            )
-            lines.append(f"{self.name}{{{label_str}}} {value}")
-        return "\n".join(lines)
+        with self._lock:
+            lines = [f"# HELP {self.name} {self.help_text}", f"# TYPE {self.name} gauge"]
+            lines.append(f"{self.name} {self._value}")
+            for label_tuple, value in self._label_values.items():
+                label_str = ",".join(
+                    f'{k}="{_label_value(v)}"'
+                    for k, v in zip(self.labels, label_tuple, strict=True)
+                )
+                lines.append(f"{self.name}{{{label_str}}} {value}")
+            return "\n".join(lines)
 
 
 class MetricsRegistry:

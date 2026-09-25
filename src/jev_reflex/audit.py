@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,31 @@ from .redaction import redact_obj
 from .signing import Ed25519Signer
 
 GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000"
+
+
+def _chain_tip(lines: Iterable[str]) -> tuple[str, int]:
+    """Refuse to append to a damaged chain; leave recovery to its owner."""
+    previous = GENESIS_HASH
+    seq = 1
+    for line in lines:
+        if not line.endswith("\n") or not line.strip():
+            raise ValueError("audit log contains an incomplete or empty record")
+        try:
+            data = json.loads(line)
+        except ValueError as exc:
+            raise ValueError("audit log contains invalid JSON") from exc
+        if not isinstance(data, dict) or type(data.get("seq")) is not int:
+            raise ValueError("audit log contains an invalid record")
+        if data["seq"] != seq or data.get("prev_hash") != previous:
+            raise ValueError("audit log chain is broken")
+        payload = {k: v for k, v in data.items() if k not in ("entry_hash", "decision_signature")}
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        expected = hashlib.sha256((previous + canonical).encode()).hexdigest()
+        if data.get("entry_hash") != expected:
+            raise ValueError("audit log hash is invalid")
+        previous = expected
+        seq += 1
+    return previous, seq
 
 
 class AuditEntry:
@@ -116,13 +142,11 @@ class AuditLog:
         self._signer = None
 
         # Initialize signer if signing is configured
-        if config.signing.private_key_path and config.signing.signer_type == "ed25519":
-            try:
-                key_path = Path(config.signing.private_key_path).expanduser()
-                self._signer = Ed25519Signer(private_key_path=key_path)
-            except Exception:
-                # Signing failures should not block audit logging
-                pass
+        if config.signing.private_key_path:
+            if config.signing.signer_type != "ed25519":
+                raise ValueError("audit signing requires a supported Ed25519 signer")
+            key_path = Path(config.signing.private_key_path).expanduser()
+            self._signer = Ed25519Signer(private_key_path=key_path)
 
     def _ensure_log_directory(self) -> None:
         """Create the log directory if it doesn't exist."""
@@ -278,18 +302,7 @@ class AuditLog:
             try:
                 # Read the last entry to get the previous hash and sequence number
                 f.seek(0)
-                lines = f.readlines()
-                last_hash = GENESIS_HASH
-                seq = 1
-                if lines:
-                    try:
-                        last_line = lines[-1].strip()
-                        if last_line:
-                            data = json.loads(last_line)
-                            last_hash = data.get("entry_hash", GENESIS_HASH)
-                            seq = data.get("seq", 0) + 1
-                    except (json.JSONDecodeError, KeyError):
-                        pass
+                last_hash, seq = _chain_tip(f)
 
                 # Create new entry (without signature first)
                 entry = AuditEntry(
@@ -338,18 +351,7 @@ class AuditLog:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
                 f.seek(0)
-                lines = f.readlines()
-                last_hash = GENESIS_HASH
-                seq = 1
-                if lines:
-                    try:
-                        last_line = lines[-1].strip()
-                        if last_line:
-                            data = json.loads(last_line)
-                            last_hash = data.get("entry_hash", GENESIS_HASH)
-                            seq = data.get("seq", 0) + 1
-                    except (json.JSONDecodeError, KeyError):
-                        pass
+                last_hash, seq = _chain_tip(f)
 
                 entry = AuditEntry(
                     seq=seq,
@@ -440,91 +442,50 @@ class AuditLog:
                 return False, f"failed to load public key from {public_key_path}"
 
         try:
-            with log_path.open("r", encoding="utf-8") as f:
-                lines = f.readlines()
-
-            if not lines:
-                return True, "chain intact, 0 entries"
-
-            entries = []
-            for i, line in enumerate(lines):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                    entries.append(data)
-                except json.JSONDecodeError:
-                    return False, f"invalid JSON at line {i + 1}"
-
-            if not entries:
-                return True, "chain intact, 0 entries"
-
-            # Verify chain integrity
             prev_hash = GENESIS_HASH
-            for i, entry_data in enumerate(entries):
-                expected_seq = i + 1
-                if entry_data.get("seq") != expected_seq:
-                    return (
-                        False,
-                        f"sequence mismatch at index {i}: expected {expected_seq}, got {entry_data.get('seq')}",
-                    )
-
-                if entry_data.get("prev_hash") != prev_hash:
-                    return (
-                        False,
-                        f"chain broken at index {i}: expected prev_hash {prev_hash}, got {entry_data.get('prev_hash')}",
-                    )
-
-                # Recompute entry hash and verify
-                entry_without_hash = {
-                    k: v
-                    for k, v in entry_data.items()
-                    if k not in ("entry_hash", "decision_signature")
-                }
-                canonical = json.dumps(entry_without_hash, sort_keys=True, separators=(",", ":"))
-                combined = prev_hash + canonical
-                expected_hash = hashlib.sha256(combined.encode()).hexdigest()
-
-                actual_hash = entry_data.get("entry_hash")
-                if actual_hash != expected_hash:
-                    return (
-                        False,
-                        f"chain broken at index {i}: expected hash {expected_hash}, got {actual_hash}",
-                    )
-
-                # Verify decision signature if public key is provided
-                if signer is not None:
-                    decision_signature = entry_data.get("decision_signature")
-                    if decision_signature is None:
-                        return (
-                            False,
-                            f"missing decision signature at index {i}",
-                        )
-
-                    # Verify the signature
-                    import base64
-
+            count = 0
+            with log_path.open("r", encoding="utf-8") as f:
+                for i, line in enumerate(f):
+                    if not line.endswith("\n") or not line.strip():
+                        return False, f"incomplete audit record at line {i + 1}"
                     try:
-                        signature_bytes = base64.b64decode(decision_signature)
-                    except Exception:
-                        return (
-                            False,
-                            f"invalid base64 signature at index {i}",
-                        )
+                        entry_data = json.loads(line)
+                    except json.JSONDecodeError:
+                        return False, f"invalid JSON at line {i + 1}"
+                    if not isinstance(entry_data, dict):
+                        return False, f"invalid audit record at line {i + 1}"
+                    if type(entry_data.get("seq")) is not int or entry_data["seq"] != i + 1:
+                        return False, f"sequence mismatch at index {i}: expected {i + 1}"
+                    if entry_data.get("prev_hash") != prev_hash:
+                        return False, f"chain broken at index {i}: invalid prev_hash"
+                    payload = {
+                        k: v
+                        for k, v in entry_data.items()
+                        if k not in ("entry_hash", "decision_signature")
+                    }
+                    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+                    expected_hash = hashlib.sha256((prev_hash + canonical).encode()).hexdigest()
+                    if entry_data.get("entry_hash") != expected_hash:
+                        return False, f"chain broken at index {i}: invalid entry_hash"
+                    if signer is not None:
+                        signature = entry_data.get("decision_signature")
+                        if signature is None:
+                            return False, f"missing decision signature at index {i}"
+                        import base64
 
-                    if not signer.verify(expected_hash.encode(), signature_bytes, public_key):
-                        return (
-                            False,
-                            f"invalid decision signature at index {i}",
-                        )
-
-                prev_hash = actual_hash
+                        try:
+                            signature_bytes = base64.b64decode(signature)
+                        except (ValueError, TypeError):
+                            return False, f"invalid base64 signature at index {i}"
+                        if not signer.verify(expected_hash.encode(), signature_bytes, public_key):
+                            return False, f"invalid decision signature at index {i}"
+                    prev_hash = expected_hash
+                    count += 1
 
             signature_status = " (signatures verified)" if signer else ""
-            return True, f"chain intact, {len(entries)} entries{signature_status}"
+            return True, f"chain intact, {count} entries{signature_status}"
 
-        except OSError as e:
+        except (OSError, UnicodeError) as e:
             return False, f"error reading log: {e}"
 
     def tail(self, n: int = 10) -> list[dict[str, Any]]:

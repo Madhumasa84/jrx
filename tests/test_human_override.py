@@ -314,26 +314,26 @@ audit:
     assert "Justification: Emergency incident mitigation" in report.output
 
 
-def test_audit_overrides_since_filter(tmp_path: Path) -> None:
+def test_audit_overrides_since_filter(tmp_path: Path, monkeypatch) -> None:
     """Test filtering audit overrides by --since DATE."""
     audit_file = tmp_path / "audit.log"
     cfg = ReflexConfig(audit={"path": str(audit_file)})
     audit_log = AuditLog(cfg)
 
-    # Write override from yesterday
-    yesterday = (datetime.now(UTC) - timedelta(days=2)).isoformat()
-    audit_log.write_human_override(
-        identity="user1",
-        original_decision="REVIEW",
-        action_summary="action1",
-        justification="justification1",
-    )
-    # Manually tamper timestamp of first entry in file to be 2 days ago
-    lines = audit_file.read_text().splitlines()
-    data0 = json.loads(lines[0])
-    data0["timestamp_utc"] = yesterday
-    data0["timestamp"] = yesterday
-    audit_file.write_text(json.dumps(data0) + "\n")
+    # Create a genuine old entry without corrupting its authenticated timestamp.
+    class EarlierDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) - timedelta(days=2)
+
+    with monkeypatch.context() as patch:
+        patch.setattr("jev_reflex.audit.datetime", EarlierDatetime)
+        audit_log.write_human_override(
+            identity="user1",
+            original_decision="REVIEW",
+            action_summary="action1",
+            justification="justification1",
+        )
 
     # Write override today
     audit_log.write_human_override(

@@ -442,3 +442,45 @@ def test_concurrent_consumers_cannot_reuse_approval(tmp_path: Path) -> None:
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: consume(), range(2)))
     assert results.count(True) == 1
+
+
+def test_approval_operations_close_connections_on_success_and_failure(tmp_path, monkeypatch):
+    config = AccessConfig(
+        issuer="https://idp.example",
+        audience="jrx",
+        jwks_uri="https://idp.example/jwks",
+        approval_db=str(tmp_path / "approvals.sqlite3"),
+        environment="development",
+        rules=[
+            {
+                "role": "reviewer",
+                "actions": ["review"],
+                "repositories": ["*"],
+                "environments": ["*"],
+            }
+        ],
+    )
+    store = ApprovalStore(config)
+    connections = []
+    original = store._connect
+
+    def connect():
+        connection = original()
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(store, "_connect", connect)
+    identity = Identity("requester", frozenset())
+    approval_id = store.request(identity, "repo", "development", "binding", "summary")
+    assert store.pending(identity) == []
+    with pytest.raises(AccessDenied):
+        store.grant(approval_id, identity)
+    with pytest.raises(AccessDenied):
+        store.consume(approval_id, identity, "binding")
+    try:
+        for connection in connections:
+            with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+                connection.execute("SELECT 1")
+    finally:
+        for connection in connections:
+            connection.close()

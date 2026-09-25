@@ -6,6 +6,7 @@ import json
 import sqlite3
 import time
 from collections import Counter
+from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -56,7 +57,7 @@ def _pending(path: str | None, repository: str) -> list[dict[str, Any]]:
     if not path or not Path(path).expanduser().exists():
         return []
     uri = Path(path).expanduser().resolve().as_uri() + "?mode=ro"
-    with sqlite3.connect(uri, uri=True, timeout=2) as connection:
+    with closing(sqlite3.connect(uri, uri=True, timeout=2)) as connection:
         rows = connection.execute(
             "SELECT id, requester, repository, environment, summary, expires, required "
             "FROM approvals WHERE consumed=0 AND expires>? AND repository=? ORDER BY expires LIMIT 100",

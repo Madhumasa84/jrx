@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import random
+import shutil
+import string
 import warnings
 from unittest.mock import MagicMock, patch
 
@@ -11,6 +14,7 @@ import pytest
 from jev_reflex.evaluator import _redacted_context_with_gitleaks
 from jev_reflex.models import EvaluationContext, ProposedAction
 from jev_reflex.redaction import (
+    REDACTED_SECRET,
     GitleaksRedactor,
     _check_gitleaks_available,
     _get_gitleaks_redactor,
@@ -323,3 +327,23 @@ def test_gitleaks_finds_secrets_regex_misses() -> None:
             assert "custom_secret_key" not in redacted
             assert "<REDACTED_SECRET>" in redacted
             assert failed is False
+
+
+@pytest.mark.skipif(shutil.which("gitleaks") is None, reason="real gitleaks binary unavailable")
+def test_real_gitleaks_redacts_reported_secret_without_leaving_input_file(tmp_path, monkeypatch):
+    token = "ghp_" + "".join(random.Random(42).choices(string.ascii_letters + string.digits, k=36))
+    monkeypatch.setattr("jev_reflex.redaction.tempfile.tempdir", str(tmp_path))
+    redacted, failed = GitleaksRedactor().redact("🙂\ngithub_token = " + token + "\n")
+    assert not failed
+    assert token not in redacted
+    assert REDACTED_SECRET in redacted
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.skipif(shutil.which("gitleaks") is None, reason="real gitleaks binary unavailable")
+def test_real_gitleaks_handles_repeated_secret_without_false_failure():
+    token = "ghp_" + "".join(random.Random(42).choices(string.ascii_letters + string.digits, k=36))
+    redacted, failed = GitleaksRedactor().redact(f"first {token}\nsecond {token}\n")
+    assert not failed
+    assert token not in redacted
+    assert redacted.count(REDACTED_SECRET) == 2

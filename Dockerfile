@@ -8,6 +8,8 @@ WORKDIR /build
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    curl \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy source code
@@ -15,6 +17,18 @@ COPY . .
 
 # Install the package with runtime dependencies only
 RUN pip install --no-cache-dir --prefix /install .
+
+# Bundle the optional deep secret scanner in the production image. Verify
+# the upstream archive before placing the binary in the copied install tree.
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) asset=linux_x64; checksum=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;; \
+      arm64) asset=linux_arm64; checksum=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080 ;; \
+      *) echo "unsupported gitleaks architecture" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_${asset}.tar.gz" -o /tmp/gitleaks.tar.gz; \
+    echo "${checksum}  /tmp/gitleaks.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/gitleaks.tar.gz -C /install/bin gitleaks
 
 # Stage 2: Runtime image with minimal dependencies
 FROM python:3.11-slim
@@ -30,6 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy installed package from builder
 COPY --from=builder /install /usr/local
+RUN gitleaks version
 
 # Create directory for broker socket and data
 RUN mkdir -p /home/jrx/.jev-reflex && \

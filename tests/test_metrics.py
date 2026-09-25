@@ -315,3 +315,76 @@ class TestStructuredLogging:
     def test_setup_logging_webhook_without_url(self) -> None:
         with pytest.raises(ValueError, match="webhook_url is required"):
             setup_logging(sink="webhook-url")
+
+
+def test_labeled_histogram_uses_valid_sample_names_and_one_label_set():
+    metric = Histogram("duration", "Duration", labels=["route"], buckets=(1.0, float("inf")))
+    metric.observe(0.5, route='a"b\\c\nd')
+    output = metric._render().splitlines()
+    assert 'duration_bucket{route="a\\"b\\\\c\\nd",le="1.0"} 1' in output
+    assert 'duration_sum{route="a\\"b\\\\c\\nd"} 0.5' in output
+    assert 'duration_count{route="a\\"b\\\\c\\nd"} 1' in output
+
+
+@pytest.mark.parametrize("kind", [Counter, Gauge])
+def test_metric_label_values_are_escaped(kind):
+    metric = kind("metric", "Help", labels=["label"])
+    metric.inc(label='a"b\\c\nd')
+    assert 'metric{label="a\\"b\\\\c\\nd"} 1.0' in metric._render().splitlines()
+
+
+def test_json_formatter_redacts_messages_and_exception_tracebacks():
+    import sys
+
+    try:
+        raise RuntimeError("password=synthetic-exception-credential")
+    except RuntimeError:
+        record = logging.LogRecord(
+            "test",
+            logging.ERROR,
+            "test.py",
+            1,
+            "request failed: token=synthetic-message-credential",
+            (),
+            sys.exc_info(),
+        )
+    output = JSONFormatter().format(record)
+    assert "synthetic-exception-credential" not in output
+    assert "synthetic-message-credential" not in output
+    assert json.loads(output)["fields"]["exception"]
+
+
+@pytest.mark.parametrize(
+    "sink_type,sink_class", [("syslog", "SyslogSink"), ("webhook-url", "WebhookSink")]
+)
+def test_non_stdout_handlers_format_and_redact_records(monkeypatch, sink_type, sink_class):
+    entries = []
+
+    class Sink:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def emit(self, entry):
+            assert isinstance(entry, dict)
+            entries.append(entry)
+
+        def close(self):
+            pass
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(f"jev_reflex.logging_config.{sink_class}", Sink)
+    root = logging.getLogger()
+    old_handlers, old_level = root.handlers[:], root.level
+    try:
+        setup_logging(sink=sink_type, webhook_url="https://logs.example.invalid")
+        log_structured("ERROR", "token=synthetic-log-value", {"password": "synthetic-field-value"})
+        assert len(entries) == 1
+        assert "synthetic-log-value" not in json.dumps(entries)
+        assert "synthetic-field-value" not in json.dumps(entries)
+    finally:
+        for handler in root.handlers:
+            handler.close()
+        root.handlers[:] = old_handlers
+        root.setLevel(old_level)

@@ -10,9 +10,10 @@ import sqlite3
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 import typer
 import yaml
@@ -94,7 +95,7 @@ def benchmark_live(
         raise typer.BadParameter("transport must be direct, broker, or broker-tls")
     try:
         loaded = _load(config, None)
-        loaded.jev.transport = transport
+        loaded.jev.transport = cast(Literal["direct", "broker", "broker-tls"], transport)
         if output is not None and output.exists():
             raise ValueError("output already exists")
         report = run_benchmark(loaded, runs, cases=case or None)
@@ -385,7 +386,7 @@ def check(
         if transport is not None:
             if transport not in {"direct", "broker", "broker-tls"}:
                 raise typer.BadParameter("transport must be direct, broker, or broker-tls")
-            loaded.jev.transport = transport
+            loaded.jev.transport = cast(Literal["direct", "broker", "broker-tls"], transport)
         context = _build_context(
             config=loaded,
             cwd=cwd,
@@ -482,6 +483,7 @@ def _execute_argv(argv: list[str], cwd: Path, config: ReflexConfig) -> int:
             except subprocess.TimeoutExpired:
                 if deadline is not None and time.monotonic() >= deadline:
                     if config.sandbox.enabled:
+                        assert timeout is not None
                         raise subprocess.TimeoutExpired(command, timeout) from None
                     raise SessionLimitError("session execution time limit reached") from None
                 if store is not None:
@@ -505,6 +507,7 @@ def _execute_argv(argv: list[str], cwd: Path, config: ReflexConfig) -> int:
         raise
     finally:
         if egress_prepared:
+            assert sandbox_container is not None
             remove_sandbox_egress(config.sandbox, sandbox_container)
 
 
@@ -599,7 +602,11 @@ def exec_action(
                 typer.echo("Execution requires a reviewed approval ID.", err=True)
                 raise typer.Exit(code=2)
             try:
-                assert enterprise_identity is not None and enterprise_binding is not None
+                assert (
+                    enterprise_identity is not None
+                    and enterprise_binding is not None
+                    and environment is not None
+                )
                 _, current_binding = action_binding(
                     loaded, (cwd or Path.cwd()).resolve(), argv, environment
                 )
@@ -809,8 +816,10 @@ def stability(
         single_config = _effective_config(loaded, samples=1)
         if no_jev:
 
-            def evaluate_once(value: EvaluationContext) -> EvaluationResult:
+            def no_jev_evaluation(value: EvaluationContext) -> EvaluationResult:
                 return evaluate_context(value, config=single_config, use_jev=False)
+
+            evaluate_once: Callable[[EvaluationContext], EvaluationResult] = no_jev_evaluation
         else:
             evaluator = DemoEvaluator(single_config) if demo else DefaultEvaluator(single_config)
             evaluate_once = evaluator.evaluate
@@ -831,6 +840,11 @@ def _benchmark_root() -> Path:
     source_tree = Path(__file__).resolve().parents[2] / "benchmarks" / "stability"
     if source_tree.exists():
         return source_tree
+    target_data = (
+        Path(__file__).resolve().parents[1] / "share" / "jev-reflex" / "benchmarks" / "stability"
+    )
+    if target_data.exists():
+        return target_data
     installed_data = Path(sys.prefix) / "share" / "jev-reflex" / "benchmarks" / "stability"
     if installed_data.exists():
         return installed_data
@@ -858,6 +872,13 @@ def benchmark_stability(
         if not files:
             raise ValueError("no benchmark cases found")
         single_config = _effective_config(loaded, samples=1)
+        fixture_config = single_config.model_copy(
+            update={
+                "context": single_config.context.model_copy(
+                    update={"include_git_diff": False, "include_changed_files": False}
+                )
+            }
+        )
         rows: list[dict[str, Any]] = []
         for case_path in files:
             with case_path.open("r", encoding="utf-8") as handle:
@@ -865,7 +886,7 @@ def benchmark_stability(
             if not isinstance(case, dict) or not isinstance(case.get("command"), str):
                 raise ValueError("benchmark case must contain a command")
             context = _build_context(
-                config=single_config,
+                config=fixture_config,
                 cwd=None,
                 task=str(case.get("task", "")),
                 command=case["command"],
@@ -1320,7 +1341,7 @@ def _run_fail_closed_check() -> None:
         row = {"mode": failure_mode, "advisory": "PASS", "review": "PASS", "enforce": "PASS"}
 
         for mode in ["advisory", "review", "enforce"]:
-            config = ReflexConfig(mode=mode)
+            config = ReflexConfig(mode=cast(Mode, mode))
             gateway = MockGateway(failure_mode=failure_mode)
             evaluator = DefaultEvaluator(config=config, gateway=gateway)
 
@@ -1361,7 +1382,7 @@ def _run_fail_closed_check() -> None:
 
         for mode in ["advisory", "review", "enforce"]:
             config = ReflexConfig(
-                mode=mode,
+                mode=cast(Mode, mode),
                 jev=JEVConfig(
                     transport="broker",
                     socket="/tmp/nonexistent.sock",

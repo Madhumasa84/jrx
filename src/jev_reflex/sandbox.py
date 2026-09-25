@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 from .config import SandboxConfig
+from .git_inspection import inspect_git
 
 
 def _workspace(cwd: Path) -> tuple[Path, Path]:
@@ -18,18 +19,9 @@ def _workspace(cwd: Path) -> tuple[Path, Path]:
     if not working_directory.is_dir():
         raise ValueError("sandbox working directory must be a directory")
     try:
-        result = subprocess.run(
-            ["git", "-C", str(working_directory), "rev-parse", "--show-toplevel"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=False,
-            timeout=3,
-            shell=False,
-        )
+        result = inspect_git(working_directory, "rev-parse", "--show-toplevel", timeout=3)
         root = (
-            Path(result.stdout.strip()).resolve(strict=True)
+            Path(os.fsdecode(result.stdout).removesuffix("\n")).resolve(strict=True)
             if result.returncode == 0
             else working_directory
         )
@@ -87,7 +79,7 @@ def build_sandbox_command(
         "--mount",
         f"type=bind,src={root},dst={root}",
         "--workdir",
-        workdir,
+        str(workdir),
     ]
     if config.runtime:
         command.extend(["--runtime", config.runtime])

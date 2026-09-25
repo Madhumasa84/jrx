@@ -176,7 +176,9 @@ def decide(
 class Policy(DeterministicPolicyEngine):
     """Compatibility facade for the original ``Policy().decide(signals, ...)`` API."""
 
-    def decide(
+    # This facade accepts both the legacy signals-first call and the engine's
+    # findings-first call, so the override has a deliberately wider signature.
+    def decide(  # type: ignore[override]
         self,
         signals_or_findings: Mapping[str, float] | Sequence[DeterministicFinding] = (),
         jev_signals: Mapping[str, float] | None = None,

@@ -38,7 +38,9 @@ def _connect_allowed(
     denied_destination = False
     last_error: OSError | None = None
     for family, socktype, protocol, _, address in records:
-        if not _destination_allowed(address[0], allowed_networks):
+        if not isinstance(address[0], str) or not _destination_allowed(
+            address[0], allowed_networks
+        ):
             denied_destination = True
             continue
         upstream = socket.socket(family, socktype, protocol)
@@ -160,7 +162,11 @@ class _ProxyServer(socketserver.ThreadingTCPServer):
         self._workers = threading.BoundedSemaphore(self.max_workers)
         super().__init__(address, _Handler)
 
-    def process_request(self, request: socket.socket, client_address: tuple[str, int]) -> None:
+    def process_request(
+        self, request: socket.socket | tuple[bytes, socket.socket], client_address: tuple[str, int]
+    ) -> None:
+        if not isinstance(request, socket.socket):
+            raise TypeError("TCP proxy requires a socket request")
         if not self._workers.acquire(blocking=False):
             try:
                 request.sendall(
@@ -178,14 +184,20 @@ class _ProxyServer(socketserver.ThreadingTCPServer):
             raise
 
     def process_request_thread(
-        self, request: socket.socket, client_address: tuple[str, int]
+        self,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: tuple[str, int],
     ) -> None:
+        if not isinstance(request, socket.socket):
+            raise TypeError("TCP proxy requires a socket request")
         try:
             super().process_request_thread(request, client_address)
         finally:
             self._workers.release()
 
-    def handle_error(self, request: socket.socket, client_address: tuple[str, int]) -> None:
+    def handle_error(
+        self, request: socket.socket | tuple[bytes, socket.socket], client_address: tuple[str, int]
+    ) -> None:
         del request, client_address
 
 

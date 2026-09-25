@@ -109,3 +109,68 @@ def test_summary_ignores_malformed_event_lines(tmp_path: Path) -> None:
 
     assert summary["labeled_cases"] == 1
     assert summary["accuracy_at_strong"] == 1.0
+
+
+def test_feedback_does_not_lose_concurrent_append(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    path = tmp_path / "events.jsonl"
+    feedback_store = CalibrationStore(path)
+    recorder = CalibrationStore(path)
+    recorder.record(_result("first"))
+    snapshot_ready = Event()
+    release_feedback = Event()
+    writer_started = Event()
+    writer_finished = Event()
+    read = feedback_store._read
+
+    def paused_read():
+        rows = read()
+        snapshot_ready.set()
+        assert release_feedback.wait(5)
+        return rows
+
+    def record():
+        writer_started.set()
+        recorder.record(_result("second"))
+        writer_finished.set()
+
+    monkeypatch.setattr(feedback_store, "_read", paused_read)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        feedback = pool.submit(feedback_store.add_feedback, "first", "correct")
+        try:
+            assert snapshot_ready.wait(5)
+            append = pool.submit(record)
+            assert writer_started.wait(5)
+            # A competing writer must wait until the read-modify-replace completes.
+            assert not writer_finished.wait(0.2)
+        finally:
+            release_feedback.set()
+        assert feedback.result(timeout=5)
+        append.result(timeout=5)
+    rows = recorder._read()
+    assert [row["decision_id"] for row in rows] == ["first", "second"]
+    assert rows[0]["feedback"] == "correct"
+
+
+def test_failed_feedback_replace_preserves_data_and_releases_lock(tmp_path, monkeypatch):
+    import os
+
+    store = CalibrationStore(tmp_path / "events.jsonl")
+    store.record(_result("first"))
+    original = store.path.read_bytes()
+    replace = os.replace
+
+    def fail_replace(*args):
+        raise OSError("injected write failure")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(OSError, match="injected"):
+        store.add_feedback("first", "correct")
+    assert store.path.read_bytes() == original
+    assert not list(tmp_path.glob("events-*.jsonl"))
+    monkeypatch.setattr(os, "replace", replace)
+    assert store.add_feedback("first", "correct")
+    store.record(_result("second"))
+    assert len(store._read()) == 2

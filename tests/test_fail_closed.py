@@ -332,15 +332,30 @@ def test_broker_socket_hangs(
             temp_socket_path.unlink()
 
 
-def test_broker_clock_skew_not_implemented(
-    mock_broker_config: ReflexConfig,
-    safe_context: EvaluationContext,
-) -> None:
-    """Test clock skew detection - stubbed until signing lands in 1.3."""
-    # TODO: Implement this test once Prompt 1.3's signing is implemented
-    # This should test that broker responses with timestamps outside acceptable window
-    # are rejected and marked as degraded
-    pytest.skip("Clock skew detection not implemented until Prompt 1.3 signing")
+@pytest.mark.parametrize(
+    "server_time,accepted",
+    [
+        (1000, True),
+        (700, True),
+        (1300, True),
+        (699.999, False),
+        (1300.001, False),
+        (float("nan"), False),
+        (float("inf"), False),
+        (True, False),
+        (None, False),
+    ],
+)
+def test_broker_response_clock_skew_boundaries(monkeypatch, server_time, accepted) -> None:
+    from jev_reflex.broker import _validate_response
+
+    monkeypatch.setattr("jev_reflex.broker.time.time", lambda: 1000)
+    response = {"protocol_version": 1, "request_id": "bound", "server_time": server_time}
+    if accepted:
+        assert _validate_response(response, "bound") == response
+    else:
+        with pytest.raises(ValueError, match="clock skew"):
+            _validate_response(response, "bound")
 
 
 @pytest.mark.parametrize("mode", ["advisory", "review", "enforce"])

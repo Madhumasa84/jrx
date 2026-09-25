@@ -14,7 +14,7 @@ import yaml
 
 from .config import ReflexConfig, load_config
 from .evaluator import DemoEvaluator, DemoSemanticEvaluator, evaluate_context
-from .models import EvaluationContext, ProposedAction, RiskInfo, SemanticSignals
+from .models import EvaluationContext, ProposedAction, RiskChoice, RiskInfo, SemanticSignals
 
 _PKG_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "policy_golden"
 _REPO_FIXTURES = (
@@ -44,6 +44,7 @@ class MockSemanticEvaluator:
         strong = self.config.thresholds.strong
         review = self.config.thresholds.review
 
+        risk_choice: RiskChoice
         if any(
             signals.get(name, 0.0) >= strong
             for name in ("destructive", "secret_exposure", "prompt_injection", "fail_open")

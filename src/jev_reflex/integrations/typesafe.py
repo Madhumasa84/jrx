@@ -153,7 +153,7 @@ class TypeSafeIntegration:
         safe_state = redact_obj(state)
         if isinstance(safe_state, Mapping):
             action = safe_state.get("proposed_action")
-            if isinstance(action, Mapping) and isinstance(action.get("argv"), list):
+            if isinstance(action, dict) and isinstance(action.get("argv"), list):
                 action["argv"] = redact_argv(action["argv"])
         try:
             if self._client_factory is None:

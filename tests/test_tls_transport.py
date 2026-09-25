@@ -1,6 +1,7 @@
 """Tests for TLS transport with mutual authentication."""
 
 import asyncio
+import ipaddress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -151,6 +152,11 @@ def _make_certificate(
         .not_valid_after(now + timedelta(days=1))
         .add_extension(x509.BasicConstraints(ca=is_ca, path_length=None), critical=True)
     )
+    if not is_ca:
+        names = [x509.DNSName(common_name)]
+        if common_name == "localhost":
+            names.append(x509.IPAddress(ipaddress.ip_address("127.0.0.1")))
+        builder = builder.add_extension(x509.SubjectAlternativeName(names), critical=False)
     if extended_usage is not None:
         builder = builder.add_extension(x509.ExtendedKeyUsage([extended_usage]), critical=False)
     return builder.sign(private_key=issuer_key, algorithm=hashes.SHA256())
@@ -170,8 +176,13 @@ def _write_certificate(path: Path, certificate: x509.Certificate) -> None:
     path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
 
 
+@pytest.mark.parametrize(
+    "server_name,expected_running", [("localhost", True), ("other.example", False)]
+)
 def test_tls_broker_accepts_trusted_client_and_rejects_untrusted_client(
     tmp_path: Path,
+    server_name: str,
+    expected_running: bool,
 ) -> None:
     trusted_ca_key = _new_private_key()
     trusted_ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "JRX test CA")])
@@ -197,7 +208,7 @@ def test_tls_broker_accepts_trusted_client_and_rejects_untrusted_client(
 
     server_key = _new_private_key()
     server_certificate = _make_certificate(
-        common_name="localhost",
+        common_name=server_name,
         public_key=server_key.public_key(),
         issuer=trusted_ca.subject,
         issuer_key=trusted_ca_key,
@@ -277,8 +288,8 @@ def test_tls_broker_accepts_trusted_client_and_rejects_untrusted_client(
                 ).health
             )
 
-            assert trusted_health["running"] is True
-            assert trusted_health["jev_configured"] is True
+            assert trusted_health["running"] is expected_running
+            assert trusted_health["jev_configured"] is expected_running
             assert untrusted_health["running"] is False
         finally:
             server.close()

@@ -282,3 +282,44 @@ class _FakeResponse:
 
     def raise_for_status(self) -> None:
         return None
+
+
+def test_https_signature_uses_original_bytes_not_http_text_decoding(tmp_path, monkeypatch):
+    signer = Ed25519Signer()
+    raw = "mode: enforce\n# café\n".encode()
+    policy_response = requests.Response()
+    policy_response.status_code = 200
+    policy_response._content = raw
+    policy_response.encoding = "iso-8859-1"
+    signature_response = requests.Response()
+    signature_response.status_code = 200
+    signature_response._content = signer.sign(raw)
+    responses = iter([policy_response, signature_response])
+    monkeypatch.setattr("jev_reflex.policy_source.requests.get", lambda *a, **k: next(responses))
+    fetcher = PolicyFetcher(
+        PolicySourceConfig(
+            type="https",
+            uri="https://policy.example/reflex.yaml",
+            pinned_signature_pubkey=signer.get_public_key_pem(),
+        ),
+        cache_dir=tmp_path / "cache",
+    )
+    policy, _ = fetcher.fetch()
+    assert policy.mode == "enforce"
+
+
+def test_successful_policy_reload_writes_auditable_event(tmp_path, monkeypatch):
+    from jev_reflex.audit import AuditLog
+    from jev_reflex.policy_source import PolicyReloader
+
+    config = ReflexConfig(audit={"enabled": True, "path": str(tmp_path / "audit.log")})
+    audit = AuditLog(config)
+    reloader = PolicyReloader(PolicySourceConfig(), audit_log=audit)
+    monkeypatch.setattr(
+        reloader.fetcher,
+        "fetch_with_cache",
+        lambda: (ReflexConfig(), "a" * 64, True),
+    )
+    reloader._reload_policy()
+    assert audit.verify() == (True, "chain intact, 1 entries")
+    assert audit.tail(1)[0]["action_summary"] == "policy_reload"

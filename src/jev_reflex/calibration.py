@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +23,17 @@ class CalibrationStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or default_events_path()
 
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        # Lock a stable sidecar, since feedback atomically replaces the data inode.
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.with_suffix(self.path.suffix + ".lock").open("a") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
     def record(self, result: EvaluationResult) -> None:
         """Append only the approved anonymous fields."""
 
@@ -32,7 +46,7 @@ class CalibrationStore:
             "feedback": None,
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
+        with self._locked(), self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
     def _read(self) -> list[dict[str, Any]]:
@@ -55,32 +69,36 @@ class CalibrationStore:
     def add_feedback(self, decision_id: str, feedback: str) -> bool:
         if feedback not in {"correct", "incorrect"}:
             raise ValueError("feedback must be correct or incorrect")
-        rows = self._read()
-        found = False
-        for row in rows:
-            if row.get("decision_id") == decision_id:
-                row["feedback"] = feedback
-                found = True
-        if not found:
-            return False
+        with self._locked():
+            rows = self._read()
+            found = False
+            for row in rows:
+                if row.get("decision_id") == decision_id:
+                    row["feedback"] = feedback
+                    found = True
+            if not found:
+                return False
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(prefix="events-", suffix=".jsonl", dir=self.path.parent)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                for row in rows:
-                    handle.write(json.dumps(row, sort_keys=True) + "\n")
-            os.replace(temporary, self.path)
-        except Exception:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd, temporary = tempfile.mkstemp(
+                prefix="events-", suffix=".jsonl", dir=self.path.parent
+            )
             try:
-                os.unlink(temporary)
-            except OSError:
-                pass
-            raise
-        return True
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    for row in rows:
+                        handle.write(json.dumps(row, sort_keys=True) + "\n")
+                os.replace(temporary, self.path)
+            except Exception:
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
+                raise
+            return True
 
     def summary(self) -> dict[str, Any]:
-        rows = self._read()
+        with self._locked():
+            rows = self._read()
         labeled = [row for row in rows if row.get("feedback") in {"correct", "incorrect"}]
 
         def accuracy(cases: list[dict[str, Any]]) -> float | None:

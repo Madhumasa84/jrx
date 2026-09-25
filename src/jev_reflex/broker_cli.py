@@ -50,7 +50,10 @@ def status(
     socket: Path | None = None,
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
-    display(BrokerClient(configuration(config, socket)).health(), json_output)
+    health = BrokerClient(configuration(config, socket)).health()
+    display(health, json_output)
+    if not health["running"]:
+        raise typer.Exit(1)
 
 
 @app.command()
