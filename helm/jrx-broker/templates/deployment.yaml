@@ -66,16 +66,14 @@ spec:
               mountPath: /home/jrx/reflex.yaml
               subPath: reflex.yaml
             - name: tmp
-              mountPath: /home/jrx/.jev-reflex
+              mountPath: /tmp
             {{- if .Values.volumes.tls.enabled }}
             - name: tls
               mountPath: {{ .Values.volumes.tls.mountPath }}
               readOnly: true
             {{- end }}
-            {{- if .Values.volumes.data.enabled }}
             - name: data
               mountPath: {{ .Values.volumes.data.mountPath }}
-            {{- end }}
           {{- if .Values.livenessProbe.enabled }}
           livenessProbe:
             exec:
@@ -111,8 +109,7 @@ spec:
           configMap:
             name: {{ include "jrx-broker.fullname" . }}-config
         - name: tmp
-          emptyDir:
-            medium: Memory
+          emptyDir: {}
         {{- if .Values.volumes.tls.enabled }}
         - name: tls
           {{- if .Values.volumes.tls.existingClaim }}
@@ -124,15 +121,13 @@ spec:
             defaultMode: 0400
           {{- end }}
         {{- end }}
-        {{- if .Values.volumes.data.enabled }}
         - name: data
-          {{- if .Values.volumes.data.existingClaim }}
+          {{- if .Values.volumes.data.enabled }}
           persistentVolumeClaim:
-            claimName: {{ .Values.volumes.data.existingClaim }}
+            claimName: {{ .Values.volumes.data.existingClaim | default (printf "%s-data" (include "jrx-broker.fullname" .)) }}
           {{- else }}
           emptyDir: {}
           {{- end }}
-        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

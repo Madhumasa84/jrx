@@ -67,16 +67,14 @@ spec:
               mountPath: /home/jrx/reflex.yaml
               subPath: reflex.yaml
             - name: tmp
-              mountPath: /home/jrx/.jev-reflex
+              mountPath: /tmp
             {{- if .Values.volumes.tls.enabled }}
             - name: tls
               mountPath: {{ .Values.volumes.tls.mountPath }}
               readOnly: true
             {{- end }}
-            {{- if .Values.volumes.data.enabled }}
             - name: data
               mountPath: {{ .Values.volumes.data.mountPath }}
-            {{- end }}
           {{- if .Values.livenessProbe.enabled }}
           livenessProbe:
             exec:
@@ -112,8 +110,7 @@ spec:
           configMap:
             name: {{ include "jrx-broker.fullname" . }}-config
         - name: tmp
-          emptyDir:
-            medium: Memory
+          emptyDir: {}
         {{- if .Values.volumes.tls.enabled }}
         - name: tls
           {{- if .Values.volumes.tls.existingClaim }}
@@ -125,14 +122,13 @@ spec:
             defaultMode: 0400
           {{- end }}
         {{- end }}
-        {{- if .Values.volumes.data.enabled }}
+        {{- if and .Values.volumes.data.enabled .Values.volumes.data.existingClaim }}
         - name: data
-          {{- if .Values.volumes.data.existingClaim }}
           persistentVolumeClaim:
             claimName: {{ .Values.volumes.data.existingClaim }}
-          {{- else }}
+        {{- else if not .Values.volumes.data.enabled }}
+        - name: data
           emptyDir: {}
-          {{- end }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
@@ -152,7 +148,9 @@ spec:
         name: data
       spec:
         accessModes: ["ReadWriteOnce"]
-        storageClassName: {{ .Values.volumes.data.storageClass | default "" }}
+        {{- if .Values.volumes.data.storageClass }}
+        storageClassName: {{ .Values.volumes.data.storageClass | quote }}
+        {{- end }}
         resources:
           requests:
             storage: {{ .Values.volumes.data.size }}

@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from jev_reflex.cli import app
@@ -261,3 +262,34 @@ def test_broker_cli_rejects_missing_config(tmp_path: Path) -> None:
     result = runner.invoke(broker_app, ["run", "--config", str(tmp_path / "missing.yaml")])
     assert result.exit_code == 2
     assert "Configuration file not found" in result.output
+
+
+def test_child_process_does_not_inherit_jrx_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+    import sys
+
+    from jev_reflex.cli import _execute_argv
+    from jev_reflex.config import ReflexConfig
+
+    out_file = tmp_path / "child_env.json"
+    code = f"import json, os; json.dump(dict(os.environ), open({repr(str(out_file))}, 'w'))"
+    monkeypatch.setenv("JRX_ID_TOKEN", "sensitive-oidc-identity-token")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sensitive-typesafe-api-key")
+    monkeypatch.setenv("JRX_SECRET_KEY", "sensitive-internal-key")
+    monkeypatch.setenv("JRX_CUSTOM_TOKEN", "sensitive-custom-token")
+    monkeypatch.setenv("JRX_SESSION_ID", "session-identifier-123")
+    monkeypatch.setenv("USER_CUSTOM_ENV_VAR", "unaffected-user-value")
+
+    config = ReflexConfig()
+    exit_code = _execute_argv([sys.executable, "-c", code], tmp_path, config)
+    assert exit_code == 0
+
+    captured = json.loads(out_file.read_text())
+    assert "JRX_ID_TOKEN" not in captured
+    assert "TYPESAFE_API_KEY" not in captured
+    assert "JRX_SECRET_KEY" not in captured
+    assert "JRX_CUSTOM_TOKEN" not in captured
+    assert captured.get("JRX_SESSION_ID") == "session-identifier-123"
+    assert captured.get("USER_CUSTOM_ENV_VAR") == "unaffected-user-value"

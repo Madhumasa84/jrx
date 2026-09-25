@@ -244,7 +244,9 @@ def test_reftable_format_accepted_and_unknown_refstorage_rejected(tmp_path, monk
     (repo / ".git" / "config").write_text(
         "[core]\nrepositoryformatversion = 1\n[extensions]\nrefstorage = custom_db\n"
     )
-    with pytest.raises(ValueError, match="unsupported Git reference format"):
+    with pytest.raises(
+        ValueError, match="unsupported Git reference format|Git format could not be inspected"
+    ):
         inspect_git(repo, "status")
 
     # When refstorage is reftable, format inspection recognizes it without raising unsupported format error

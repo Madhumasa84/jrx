@@ -8,7 +8,9 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: {{ .Values.volumes.data.storageClass | default "" }}
+  {{- if .Values.volumes.data.storageClass }}
+  storageClassName: {{ .Values.volumes.data.storageClass | quote }}
+  {{- end }}
   resources:
     requests:
       storage: {{ .Values.volumes.data.size }}

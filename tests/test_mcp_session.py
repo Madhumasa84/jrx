@@ -345,3 +345,35 @@ def test_mcp_gateway_times_out_upstream_tool(tmp_path: Path) -> None:
     response = json.loads(completed.stdout.splitlines()[0])
     assert response["result"]["isError"] is True
     assert "time limit" in response["result"]["content"][0]["text"]
+
+
+def test_mcp_gateway_upstream_process_does_not_inherit_jrx_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from io import BytesIO
+
+    from jev_reflex.mcp_gateway import MCPGateway
+
+    out_file = tmp_path / "mcp_child_env.json"
+    code = f"import json, os; json.dump(dict(os.environ), open({repr(str(out_file))}, 'w'))"
+    monkeypatch.setenv("JRX_ID_TOKEN", "mcp-secret-oidc-identity")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "mcp-secret-typesafe-key")
+    monkeypatch.setenv("JRX_API_KEY", "mcp-jrx-api-key")
+    monkeypatch.setenv("JRX_SECRET_TOKEN", "mcp-jrx-secret-token")
+    monkeypatch.setenv("USER_ALLOWED_VAR", "mcp-allowed-value")
+
+    gw = MCPGateway(
+        config=ReflexConfig(),
+        server_name="test-server",
+        command=[sys.executable, "-c", code],
+        source=BytesIO(),
+        sink=BytesIO(),
+    )
+    gw.run()
+
+    captured = json.loads(out_file.read_text())
+    assert "JRX_ID_TOKEN" not in captured
+    assert "TYPESAFE_API_KEY" not in captured
+    assert "JRX_API_KEY" not in captured
+    assert "JRX_SECRET_TOKEN" not in captured
+    assert captured.get("USER_ALLOWED_VAR") == "mcp-allowed-value"

@@ -19,7 +19,7 @@ from referencing import Registry
 from referencing.exceptions import NoSuchResource
 
 from .config import MCPToolRule, ReflexConfig
-from .context import RepositoryContextProvider
+from .context import RepositoryContextProvider, sanitized_child_env
 from .enterprise import authorize, verified_identity
 from .evaluator import evaluate_context
 from .models import ProposedAction
@@ -438,11 +438,13 @@ class MCPGateway:
             self._send(_tool_error(request_id, "upstream MCP server is unavailable"))
 
     def run(self) -> int:
+        child_env = sanitized_child_env()
         with subprocess.Popen(
             self.command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=sys.stderr,
+            env=child_env,
             shell=False,
         ) as process:
             reader = threading.Thread(target=self._read_upstream, args=(process,), daemon=True)

@@ -297,13 +297,15 @@ def build_questions() -> dict[str, Any]:
     )
 
 
-def _zero_semantic(*, source: str, warning: str | None = None) -> SemanticSignals:
+def _zero_semantic(
+    *, source: str, warning: str | None = None, degraded: bool | None = None
+) -> SemanticSignals:
     warnings = [warning] if warning else []
     return SemanticSignals(
         probabilities={name: 0.0 for name in JUDGMENT_NAMES} | {"tests_needed": 0.0},
         risk=RiskInfo(choice="medium" if source == "jev" else "low"),
         source=source,  # type: ignore[arg-type]
-        degraded=source == "jev",
+        degraded=source == "jev" if degraded is None else degraded,
         warnings=warnings,
     )
 
@@ -323,8 +325,15 @@ class JEVSemanticEvaluator:
         self.last_api_requests = 0
         self.last_usage = None
         try:
+            redacted_ctx, gitleaks_failed = _redacted_context_with_gitleaks(context)
+            if gitleaks_failed:
+                return _zero_semantic(
+                    source="jev",
+                    warning="JEV evaluation skipped because secret redaction failed.",
+                    degraded=True,
+                )
             state = compact_state(
-                _redacted_context(context),
+                redacted_ctx,
                 self.config.context.max_context_chars,
             )
             raw = self.gateway.system_one(state, build_questions())
@@ -455,7 +464,15 @@ def evaluate_context(
         if finding.triggered:
             hard_rule_triggers_total.inc(rule_name=finding.check)
 
-    if not use_jev:
+    if gitleaks_failed:
+        semantic = _zero_semantic(
+            source="none",
+            warning="JEV skipped because secret redaction failed.",
+            degraded=True,
+        )
+        samples = 1
+        aggregation_used = None
+    elif not use_jev:
         semantic = _zero_semantic(
             source="none",
             warning="JEV disabled; only deterministic checks were evaluated.",
@@ -475,7 +492,7 @@ def evaluate_context(
         aggregation_used = None
     else:
         evaluator = semantic_evaluator or semantic_backend(config)
-        semantic_samples = [evaluator.evaluate(context) for _ in range(samples)]
+        semantic_samples = [evaluator.evaluate(redacted_context) for _ in range(samples)]
         semantic = aggregate_semantic_samples(semantic_samples, aggregation=aggregation)
         aggregation_used = aggregation if samples > 1 else None
         warnings.extend(semantic.warnings)
@@ -490,18 +507,29 @@ def evaluate_context(
         config,
         risk_choice=semantic.risk.choice,
         risk_confidence=semantic.risk.confidence,
-        degraded=semantic.degraded and use_jev,
+        degraded=(semantic.degraded and use_jev) or gitleaks_failed,
     )
     warnings.extend(semantic.warnings)
+
+    # If gitleaks failed, force REVIEW for safety before recording metrics and logs
+    if gitleaks_failed and policy.decision != "HOLD":
+        warnings.append("Forced to REVIEW due to gitleaks redaction failure.")
+        from .policy import PolicyDecision
+
+        policy = PolicyDecision(
+            decision="REVIEW",
+            triggered_rules=policy.triggered_rules,
+            reasons=policy.reasons,
+        )
 
     # Track decision metrics
     decisions_total.inc(decision=policy.decision)
 
     # Track degraded evaluations
-    if semantic.degraded and use_jev:
-        degraded_evaluations_total.inc(reason="jev_unavailable")
-    if gitleaks_failed:
-        degraded_evaluations_total.inc(reason="gitleaks_failed")
+    if (semantic.degraded and use_jev) or gitleaks_failed:
+        degraded_evaluations_total.inc(
+            reason="gitleaks_failed" if gitleaks_failed else "jev_unavailable"
+        )
 
     # Log structured decision event
     log_structured(
@@ -510,23 +538,11 @@ def evaluate_context(
         fields={
             "decision": policy.decision,
             "action": safe_action,
-            "degraded": semantic.degraded and use_jev,
+            "degraded": (semantic.degraded and use_jev) or gitleaks_failed,
             "semantic_source": semantic.source,
             "triggered_rules": list(policy.triggered_rules),
         },
     )
-
-    # If gitleaks failed, force REVIEW for safety
-    if gitleaks_failed and policy.decision != "HOLD":
-        warnings.append("Forced to REVIEW due to gitleaks redaction failure.")
-        # Override the decision in the policy object
-        from .policy import PolicyDecision
-
-        policy = PolicyDecision(
-            decision="REVIEW",
-            triggered_rules=policy.triggered_rules,
-            reasons=policy.reasons,
-        )
 
     # Write to audit log if enabled
     try:
@@ -538,7 +554,7 @@ def evaluate_context(
             policy_decision=policy,
             risk_choice=semantic.risk.choice,
             risk_confidence=semantic.risk.confidence,
-            degraded=semantic.degraded and use_jev,
+            degraded=(semantic.degraded and use_jev) or gitleaks_failed,
             forced_review=gitleaks_failed and policy.decision == "REVIEW",
         )
     except (OSError, ValueError, TypeError):

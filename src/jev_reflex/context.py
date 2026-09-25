@@ -1,13 +1,31 @@
 """Repository context collection with bounded, shell-free Git calls."""
 
-from __future__ import annotations
-
+import os
 import subprocess
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
 from .git_inspection import inspect_git, status_paths
 from .models import EvaluationContext, ProposedAction
+
+
+def sanitized_child_env(
+    base_env: Mapping[str, str] | None = None,
+    extra_strip: Sequence[str] = (),
+) -> dict[str, str]:
+    """Strip JRX credentials and sensitive API keys before launching child processes."""
+    source = os.environ if base_env is None else base_env
+    stripped = {"JRX_ID_TOKEN", "TYPESAFE_API_KEY", *extra_strip}
+    return {
+        key: value
+        for key, value in source.items()
+        if key not in stripped
+        and not (
+            key.startswith("JRX_")
+            and any(term in key for term in ("TOKEN", "KEY", "SECRET", "PASSWORD", "CREDENTIAL"))
+        )
+    }
 
 
 def bounded_text(value: str | None, limit: int) -> str:

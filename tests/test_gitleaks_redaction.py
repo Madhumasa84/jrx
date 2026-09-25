@@ -347,3 +347,123 @@ def test_real_gitleaks_handles_repeated_secret_without_false_failure():
     assert not failed
     assert token not in redacted
     assert redacted.count(REDACTED_SECRET) == 2
+
+
+def test_gitleaks_redacted_context_is_sent_to_gateway(monkeypatch):
+    import jev_reflex.evaluator as ev
+    from jev_reflex.config import ReflexConfig
+    from jev_reflex.evaluator import JEVSemanticEvaluator, evaluate_context
+    from jev_reflex.models import EvaluationContext, ProposedAction
+
+    class CapturingGateway:
+        def __init__(self):
+            self.captured_state = None
+
+        def system_one(self, state, questions):
+            self.captured_state = state
+            return {
+                "answers": {
+                    "risk": {"choice": "low", "confidence": 0.95},
+                    "destructive": 0.01,
+                    "secret_exposure": 0.01,
+                    "prompt_injection": 0.01,
+                    "wrong_repo": 0.01,
+                    "wrong_repo_semantic": 0.01,
+                    "fail_open": 0.01,
+                    "irreversible": 0.01,
+                    "security_sensitive": 0.01,
+                    "concurrency_sensitive": 0.01,
+                    "persistence_sensitive": 0.01,
+                    "backwards_compatibility": 0.01,
+                    "human_review": 0.01,
+                    "tests_needed": 0.01,
+                    "untrusted_input_path": 0.01,
+                    "dependency_risk": 0.01,
+                    "external_side_effect_risk": 0.01,
+                    "scope_creep": 0.01,
+                    "suspicious_intent": 0.01,
+                }
+            }
+
+    secret_token = "gitleaks_custom_pat_value_9999"
+    monkeypatch.setattr(
+        ev,
+        "redact_text_with_gitleaks",
+        lambda text: (text.replace(secret_token, "<REDACTED_SECRET>"), False),
+    )
+
+    gateway = CapturingGateway()
+    config = ReflexConfig(mode="enforce")
+    ctx = EvaluationContext(
+        user_task=f"Task with {secret_token}",
+        proposed_action=ProposedAction(command=f"echo {secret_token}"),
+    )
+    evaluator = JEVSemanticEvaluator(config=config, gateway=gateway)
+    res = evaluate_context(ctx, config=config, semantic_evaluator=evaluator)
+
+    assert gateway.captured_state is not None
+    assert secret_token not in str(gateway.captured_state)
+    assert "<REDACTED_SECRET>" in gateway.captured_state.get("user_task", "")
+    assert res.decision in {"ALLOW", "REVIEW"}
+
+
+def test_gitleaks_failure_skips_external_evaluation_and_aligns_telemetry(monkeypatch):
+    import jev_reflex.evaluator as ev
+    from jev_reflex.config import ReflexConfig
+    from jev_reflex.evaluator import JEVSemanticEvaluator, evaluate_context
+    from jev_reflex.metrics import decisions_total
+    from jev_reflex.models import EvaluationContext, ProposedAction
+
+    class SpyGateway:
+        def __init__(self):
+            self.called = False
+
+        def system_one(self, state, questions):
+            self.called = True
+            return {"answers": {"risk": {"choice": "low", "confidence": 0.9}}}
+
+    monkeypatch.setattr(
+        ev,
+        "redact_text_with_gitleaks",
+        lambda text: (text, True),
+    )
+
+    logged_events = []
+    monkeypatch.setattr(
+        ev,
+        "log_structured",
+        lambda level, event, fields: logged_events.append((event, fields)),
+    )
+
+    gateway = SpyGateway()
+    config = ReflexConfig(mode="enforce")
+    ctx = EvaluationContext(
+        user_task="Safe task",
+        proposed_action=ProposedAction(command="echo safe"),
+    )
+
+    before_review = decisions_total._label_values.get(("REVIEW",), 0.0)
+    before_allow = decisions_total._label_values.get(("ALLOW",), 0.0)
+
+    evaluator = JEVSemanticEvaluator(config=config, gateway=gateway)
+    res = evaluate_context(ctx, config=config, semantic_evaluator=evaluator)
+
+    after_review = decisions_total._label_values.get(("REVIEW",), 0.0)
+    after_allow = decisions_total._label_values.get(("ALLOW",), 0.0)
+
+    # 1. External evaluation must be skipped on redaction failure
+    assert not gateway.called
+
+    # 2. Decision must be forced to REVIEW and marked degraded
+    assert res.decision == "REVIEW"
+    assert res.degraded is True
+
+    # 3. Decision metric must increment REVIEW, NOT ALLOW
+    assert after_review - before_review == 1.0
+    assert after_allow - before_allow == 0.0
+
+    # 4. Structured log event must report REVIEW and degraded: True
+    decision_events = [fields for event, fields in logged_events if event == "policy_decision"]
+    assert len(decision_events) == 1
+    assert decision_events[0]["decision"] == "REVIEW"
+    assert decision_events[0]["degraded"] is True

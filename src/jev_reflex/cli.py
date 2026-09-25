@@ -35,7 +35,7 @@ from .audit import AuditLog
 from .broker_cli import app as broker_app
 from .calibration import CalibrationStore
 from .config import JEVConfig, Mode, ReflexConfig, load_config
-from .context import RepositoryContextProvider
+from .context import RepositoryContextProvider, sanitized_child_env
 from .enterprise import AccessDenied, ApprovalStore, action_binding, authorize, verified_identity
 from .evaluator import DefaultEvaluator, DemoEvaluator, evaluate_context
 from .formatters import format_compare, format_human, format_json, format_stability
@@ -447,10 +447,13 @@ def _execute_argv(argv: list[str], cwd: Path, config: ReflexConfig) -> int:
     """Run a command directly or in the configured isolated container."""
     sandbox_container: str | None = None
     command = argv
+    child_env = sanitized_child_env()
     if config.sandbox.enabled:
         command, sandbox_container = build_sandbox_command(argv, cwd, config.sandbox)
     if not config.session.enabled and not config.sandbox.enabled:
-        return subprocess.run(argv, cwd=str(cwd), check=False, shell=False).returncode
+        return subprocess.run(
+            argv, cwd=str(cwd), env=child_env, check=False, shell=False
+        ).returncode
 
     store = None
     session_id = ""
@@ -468,7 +471,9 @@ def _execute_argv(argv: list[str], cwd: Path, config: ReflexConfig) -> int:
             egress_prepared = True
         if store is not None:
             store.reserve(session_id, semantic=0, tool_calls=0)
-        process = subprocess.Popen(command, cwd=str(cwd), shell=False, start_new_session=True)
+        process = subprocess.Popen(
+            command, cwd=str(cwd), env=child_env, shell=False, start_new_session=True
+        )
         timeout = config.sandbox.max_execution_seconds if config.sandbox.enabled else None
         if config.session.enabled:
             timeout = (
