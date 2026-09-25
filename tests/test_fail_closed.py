@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -149,9 +150,11 @@ def safe_context() -> EvaluationContext:
 
 
 @pytest.fixture
-def temp_socket_path(tmp_path: Path) -> Path:
+def temp_socket_path() -> Any:
     """Create a temporary path for broker socket."""
-    return tmp_path / "broker.sock"
+    base = Path("/tmp").resolve()
+    with tempfile.TemporaryDirectory(prefix="jrx-", dir=base) as td:
+        yield Path(td) / "broker.sock"
 
 
 # TypeSafe API failure modes

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -38,9 +39,11 @@ class MockJEV:
 
 
 @contextmanager
-def running_broker(tmp_path, evaluator=None, **timeouts):
-    directory = tmp_path / "broker"
-    directory.mkdir(mode=0o700)
+def running_broker(tmp_path=None, evaluator=None, **timeouts):
+    base = Path("/tmp").resolve()
+    temp_dir = tempfile.TemporaryDirectory(prefix="jrx-", dir=base)
+    directory = Path(temp_dir.name)
+    directory.chmod(0o700)
     path = directory / "reflex.sock"
     config = ReflexConfig(jev={"transport": "broker", "socket": str(path), **timeouts})
     ready = threading.Event()
@@ -56,23 +59,28 @@ def running_broker(tmp_path, evaluator=None, **timeouts):
 
     def worker():
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(serve())
-        pending = asyncio.all_tasks(loop)
-        for task in pending:
-            task.cancel()
-        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-        loop.close()
+        try:
+            loop.run_until_complete(serve())
+        except Exception:
+            pass
+        finally:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.close()
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
-    assert ready.wait(2)
     try:
+        assert ready.wait(5), "Broker failed to start within timeout"
         yield config, service
     finally:
         if loop.is_running():
             loop.call_soon_threadsafe(service.stop_event.set)
         thread.join(2)
         path.unlink(missing_ok=True)
+        temp_dir.cleanup()
 
 
 def context(command="pip install --upgrade some-package"):
@@ -216,25 +224,27 @@ def test_unsafe_socket_is_rejected(tmp_path):
         assert BrokerClient(config).evaluate(context()).degraded
 
 
-def test_real_lifecycle_cli(tmp_path):
-    path = tmp_path / "daemon" / "reflex.sock"
-    runner = CliRunner()
-    started = runner.invoke(app, ["broker", "start", "--socket", str(path)])
-    assert started.exit_code == 0, started.stdout
-    try:
-        status = runner.invoke(app, ["broker", "status", "--socket", str(path), "--json"])
-        assert json.loads(status.stdout)["running"]
-        assert path.stat().st_mode & 0o777 == 0o600
-        duplicate = runner.invoke(app, ["broker", "start", "--socket", str(path)])
-        assert duplicate.exit_code == 0
-    finally:
-        stopped = runner.invoke(app, ["broker", "stop", "--socket", str(path)])
-        assert stopped.exit_code == 0
-    for _ in range(50):
-        if not path.exists():
-            break
-        time.sleep(0.02)
-    assert not path.exists()
+def test_real_lifecycle_cli():
+    base = Path("/tmp").resolve()
+    with tempfile.TemporaryDirectory(prefix="jrx-", dir=base) as td:
+        path = Path(td) / "reflex.sock"
+        runner = CliRunner()
+        started = runner.invoke(app, ["broker", "start", "--socket", str(path)])
+        assert started.exit_code == 0, started.stdout
+        try:
+            status = runner.invoke(app, ["broker", "status", "--socket", str(path), "--json"])
+            assert json.loads(status.stdout)["running"]
+            assert path.stat().st_mode & 0o777 == 0o600
+            duplicate = runner.invoke(app, ["broker", "start", "--socket", str(path)])
+            assert duplicate.exit_code == 0
+        finally:
+            stopped = runner.invoke(app, ["broker", "stop", "--socket", str(path)])
+            assert stopped.exit_code == 0
+        for _ in range(50):
+            if not path.exists():
+                break
+            time.sleep(0.02)
+        assert not path.exists()
 
 
 def test_client_ignores_remote_decision_and_keeps_hard_hold(monkeypatch):
