@@ -556,6 +556,7 @@ def evaluate_context(
             risk_confidence=semantic.risk.confidence,
             degraded=(semantic.degraded and use_jev) or gitleaks_failed,
             forced_review=gitleaks_failed and policy.decision == "REVIEW",
+            hook_correlation=context.hook_audit,
         )
     except (OSError, ValueError, TypeError):
         warnings.append("Audit logging failed; the decision was not recorded.")

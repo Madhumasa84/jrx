@@ -89,6 +89,17 @@ pip install -e ".[dev]"
 
 Both `jrx` and `jev-reflex` CLI commands will be available in your `$PATH`.
 
+Run bare `jrx` from an interactive terminal to open the unified Codex CLI,
+Claude Code CLI, and Antigravity CLI workspace. Provider CLIs keep their native
+subscription authentication; JRX does not require an OpenAI, Anthropic, or
+Gemini inference API key. See the [unified agent workspace guide](docs/unified-agent-workspace.md)
+for supported versions, model selection, reviewed handoffs, and enforcement limits.
+
+```bash
+jrx doctor
+jrx setup --provider codex --workspace .  # preview only
+```
+
 ### 2. Configure credentials
 
 For live semantic evaluation, provide a TypeSafe API key through the process environment or your secret manager:
@@ -454,6 +465,9 @@ agent hooks or upstream MCP servers.
 
 | Command | Usage | Description |
 | :--- | :--- | :--- |
+| `jrx` | `jrx` | Open the interactive agent workspace when stdin/stdout are TTYs. |
+| `jrx doctor` | `jrx doctor [--provider NAME] [--models]` | Inspect installed CLIs, safe authentication status, hook files, JEV status, and policy coverage. |
+| `jrx setup` | `jrx setup --provider NAME [--apply\|--rollback]` | Preview or apply a merged provider hook configuration, or narrowly remove JRX's entry. |
 | `jrx check` | `jrx check --command "<cmd>"` | Analyze proposed action without executing. Supports `--json`, `--task`, `--stdin-diff`. |
 | `jrx exec` | `jrx exec --mode enforce -- <cmd>` | Evaluate and execute according to mode, access rules, and session limits; optionally use Docker isolation. |
 | `jrx approval` | `jrx approval [request\|pending\|grant]` | Request an action-bound approval, show a reviewer's queue, or grant approval. |
@@ -560,6 +574,7 @@ helm install jrx-broker ./helm/jrx-broker \
 | Guide | Content |
 | :--- | :--- |
 | **[System Architecture](docs/architecture.md)** | Evaluation pipeline, context bounding, and pure policy logic. |
+| **[Unified Agent Workspace](docs/unified-agent-workspace.md)** | Native CLI selection, model/session references, reviewed context handoffs, streaming limits, and provider capability matrix. |
 | **[Harness Integrations](docs/harnesses.md)** | Comprehensive setup guides for Codex, Claude Code, Antigravity, OpenRouter, Pi, and DeepSeek. |
 | **[Security Architecture](docs/security.md)** | Hard check mechanics, secret redaction engine, Ed25519 signing, and boundary traversal defenses. |
 | **[Enterprise Threat Model](docs/threat-model.md)** | Formal security boundaries, 12 attacker personas, and negative security findings. |

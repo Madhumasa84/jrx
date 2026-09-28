@@ -168,6 +168,17 @@ contracts are intentionally reusable for future MCP firewalls, research
 agents, browser agents, and CI/PR gates. The first product stays focused on
 coding-agent execution control.
 
+The bare `jrx` terminal workspace is a separate user interface over the
+existing CLI, provider hook adapters, policy engine, and broker. Provider
+process management and portable handoff records live under
+`src/jev_reflex/workspace/`; provider-specific flags and event parsing stay in
+those adapters. The UI does not decide policy actions. Until each installed
+provider version passes real shell and file-edit denial checks through its
+trusted hook path, the workspace blocks non-advisory launches. Advisory mode
+requires an explicit confirmation and leaves the provider's native permission
+controls in place. See the [workspace guide](unified-agent-workspace.md) for
+the tested capability matrix and current limitations.
+
 ## Policy Golden Regression Suite
 
 JEV Reflex maintains a golden fixture regression suite under `tests/fixtures/policy_golden/`
@@ -186,4 +197,3 @@ Or via `make policy-test` (automatically executed during `make test`).
 > or the policy engine (`src/jev_reflex/policy.py`) **must** include a fixture update
 > in `tests/fixtures/policy_golden/` explaining the intended behavior change and the
 > expected decision differences.
-

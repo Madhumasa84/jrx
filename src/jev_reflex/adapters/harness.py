@@ -17,10 +17,11 @@ def evaluate_harness_hook(
     *,
     config: ReflexConfig,
     demo: bool = False,
+    provider_key: str | None = None,
 ) -> tuple[EvaluationResult, str]:
     """Evaluate one native tool event and return its safe hook explanation."""
 
-    context = context_from_hook_payload(payload, config=config)
+    context = context_from_hook_payload(payload, config=config, provider_key=provider_key)
     evaluator = DemoEvaluator(config) if demo else DefaultEvaluator(config)
     result = evaluator.evaluate(context)
     return result, hook_context(result)
