@@ -39,6 +39,7 @@ from .context import RepositoryContextProvider, sanitized_child_env
 from .enterprise import AccessDenied, ApprovalStore, action_binding, authorize, verified_identity
 from .evaluator import DefaultEvaluator, DemoEvaluator, evaluate_context
 from .formatters import format_compare, format_human, format_json, format_stability
+from .harness_cli import app as harness_app
 from .identity import resolve_approver
 from .logging_config import log_structured
 from .models import EvaluationContext, EvaluationResult, ProposedAction
@@ -79,6 +80,7 @@ app.add_typer(approval_app, name="approval")
 app.add_typer(dashboard_app, name="dashboard")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(session_app, name="session")
+app.add_typer(harness_app, name="harness")
 
 
 @app.callback()

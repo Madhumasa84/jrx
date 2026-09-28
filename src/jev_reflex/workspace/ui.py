@@ -1365,6 +1365,64 @@ def _handoff_screen(
         lock.release()
 
 
+def _managed_harness_screen(window: Any, root: Path, config: ReflexConfig, objective: str) -> None:
+    """Run the managed coordinator with its durable approval UI in the terminal."""
+    if config.mode != "enforce":
+        _message(window, "The managed harness requires mode: enforce in reflex.yaml.")
+        return
+    model = _prompt(window, "Managed model (provider:model; uses model API credentials):")
+    task = objective or _prompt(window, "Task for the planning coordinator:")
+    if not model or not task:
+        return
+    if not _confirm(
+        window,
+        "Start this model API session with planning and read-only research/review workers?\n"
+        "Provider API billing applies. Edits, commands and memory writes pause for approval.",
+    ):
+        return
+    curses.def_prog_mode()
+    curses.endwin()
+    try:
+        import typer
+
+        from ..harness_cli import _display, _model
+        from .deep_harness import HarnessSession
+
+        session = HarnessSession(root, config, _model(model, 600), model_name=model)
+        print(f"Managed session: {session.session_id}")
+        record = session.run(task, on_event=lambda event: print(_display(event)))
+        while record.get("pending"):
+            print(_display(record["pending"]))
+            if not typer.confirm("Decide these pending actions now?", default=False):
+                break
+            decision = (
+                "approve"
+                if typer.confirm("Approve the displayed actions once?", default=False)
+                else "reject"
+            )
+            record = session.run(decision=decision, on_event=lambda event: print(_display(event)))
+        print(
+            _display(
+                {
+                    "session_id": session.session_id,
+                    "state": record["state"],
+                    "summary": record.get("summary", ""),
+                }
+            )
+        )
+        print(f"Resume later: jrx harness resume {session.session_id} --workspace {root}")
+        input("Press Enter to return to the workspace.")
+    except (ImportError, ValueError, RuntimeError, OSError) as exc:
+        print(f"Managed harness stopped: {sanitize_terminal_text(str(exc))}")
+        input("Press Enter to return to the workspace.")
+    except (KeyboardInterrupt, EOFError):
+        pass
+    finally:
+        curses.reset_prog_mode()
+        window.clearok(True)
+        window.refresh()
+
+
 def _main(window: Any, workspace: Path, config_path: Path | None) -> None:
     try:
         root = validate_workspace(workspace)
@@ -1432,6 +1490,7 @@ def _main(window: Any, workspace: Path, config_path: Path | None) -> None:
                 "",
                 "↑/↓ or 1-3 select • m models • t task • Enter native CLI • r resume",
                 "s preview/apply hooks • h reviewed handoff • i structured stream (advisory only) • q quit",
+                "p managed plan/research/review (Deep Agents; approvals and durable checkpoints)",
             ]
         )
         _draw_lines(window, lines, "JRX terminal workspace")
@@ -1448,6 +1507,8 @@ def _main(window: Any, workspace: Path, config_path: Path | None) -> None:
             next_index = key - ord("1")
             if next_index < len(statuses):
                 active_index = next_index
+        elif key == ord("p"):
+            _managed_harness_screen(window, root, config, objective)
         elif key == ord("m"):
             provider_key = statuses[active_index].provider.key
             selected_models[provider_key] = _model_menu(window, provider_key, root)

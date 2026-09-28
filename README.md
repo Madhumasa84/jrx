@@ -95,6 +95,11 @@ subscription authentication; JRX does not require an OpenAI, Anthropic, or
 Gemini inference API key. See the [unified agent workspace guide](docs/unified-agent-workspace.md)
 for supported versions, model selection, reviewed handoffs, and enforcement limits.
 
+For managed planning, durable checkpoints, reviewable approvals, workspace
+memory and read-only research/review workers, install the optional harness
+extra with `pip install -e ".[harness]"` and press `p` in the workspace. See
+the [managed harness guide](docs/agent-harness.md) for CLI and ACP use.
+
 ```bash
 jrx doctor
 jrx setup --provider codex --workspace .  # preview only
