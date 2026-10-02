@@ -27,8 +27,10 @@ def codex_hook_response(result: EvaluationResult, config: ReflexConfig) -> dict[
 
     reason = hook_context(result)
     should_block = result.decision == "HOLD" or (result.degraded and config.mode != "advisory")
-    # Codex currently documents deny/allow for PreToolUse; ask is parsed but not supported.
-    if config.mode == "review" and result.decision == "REVIEW":
+    # Codex PreToolUse parses but does not support "ask". In either
+    # non-advisory mode, REVIEW must therefore fail closed; additionalContext
+    # is informational and does not stop the tool call.
+    if config.mode != "advisory" and result.decision == "REVIEW":
         should_block = True
     if config.mode == "advisory":
         should_block = False
@@ -57,7 +59,7 @@ def evaluate_codex_hook(
     config: ReflexConfig,
     demo: bool = False,
 ) -> tuple[EvaluationResult, dict[str, Any]]:
-    context = context_from_hook_payload(payload, config=config)
+    context = context_from_hook_payload(payload, config=config, provider_key="codex")
     evaluator = DemoEvaluator(config) if demo else DefaultEvaluator(config)
     result = evaluator.evaluate(context)
     return result, codex_hook_response(result, config)

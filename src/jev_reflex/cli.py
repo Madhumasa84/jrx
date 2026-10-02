@@ -10,7 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -39,6 +39,7 @@ from .context import RepositoryContextProvider, sanitized_child_env
 from .enterprise import AccessDenied, ApprovalStore, action_binding, authorize, verified_identity
 from .evaluator import DefaultEvaluator, DemoEvaluator, evaluate_context
 from .formatters import format_compare, format_human, format_json, format_stability
+from .harness_cli import app as harness_app
 from .identity import resolve_approver
 from .logging_config import log_structured
 from .models import EvaluationContext, EvaluationResult, ProposedAction
@@ -56,7 +57,8 @@ from .stability import StabilityRunner
 app = typer.Typer(
     name="jev-reflex",
     help="Deterministic execution control for probabilistic coding agents.",
-    no_args_is_help=True,
+    no_args_is_help=False,
+    invoke_without_command=True,
     add_completion=False,
 )
 benchmark_app = typer.Typer(name="benchmark", help="Run offline or live benchmark suites.")
@@ -78,6 +80,93 @@ app.add_typer(approval_app, name="approval")
 app.add_typer(dashboard_app, name="dashboard")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(session_app, name="session")
+app.add_typer(harness_app, name="harness")
+
+
+@app.callback()
+def _default_workspace(ctx: typer.Context) -> None:
+    """Open the interactive workspace when jrx is run without a subcommand."""
+    if ctx.invoked_subcommand is not None:
+        return
+    from .workspace.ui import run_workspace
+
+    raise typer.Exit(run_workspace())
+
+
+@app.command("doctor")
+def workspace_doctor(
+    workspace: Path = typer.Option(Path.cwd(), "--workspace", help="Workspace to inspect."),
+    config: Path | None = typer.Option(None, "--config", help="Path to reflex.yaml."),
+    provider: str | None = typer.Option(None, "--provider", help="Inspect one provider."),
+    models: bool = typer.Option(False, "--models", help="Ask installed CLIs for model choices."),
+    json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable report."),
+) -> None:
+    """Show provider, authentication, hook, JEV, and policy status."""
+    from .workspace.providers import PROVIDERS
+    from .workspace.ui import doctor_report
+
+    if provider is not None and provider not in {item.key for item in PROVIDERS}:
+        raise typer.BadParameter("provider must be codex, claude, or antigravity")
+    try:
+        typer.echo(
+            doctor_report(
+                workspace,
+                config_path=config,
+                provider_filter=provider,
+                include_models=models,
+                json_output=json_output,
+            )
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        typer.echo(f"JRX diagnostics failed: {exc}", err=True)
+        raise typer.Exit(2) from None
+
+
+@app.command("setup")
+def workspace_setup(
+    provider: str = typer.Option(..., "--provider", help="codex, claude, or antigravity."),
+    workspace: Path = typer.Option(Path.cwd(), "--workspace", help="Workspace to configure."),
+    apply: bool = typer.Option(False, "--apply", help="Apply the previewed change."),
+    rollback: bool = typer.Option(False, "--rollback", help="Remove only JRX's hook entry."),
+) -> None:
+    """Preview, apply, or narrowly roll back a provider hook configuration."""
+    from .workspace.hooks import apply_hook_change, preview_hook_change
+    from .workspace.providers import PROVIDERS, provider_by_key
+
+    if provider not in {item.key for item in PROVIDERS}:
+        raise typer.BadParameter("provider must be codex, claude, or antigravity")
+    if apply and rollback:
+        raise typer.BadParameter("--apply and --rollback cannot be used together")
+    spec = provider_by_key(provider)
+    try:
+        path, preview, changed = preview_hook_change(workspace, spec, rollback=rollback)
+        typer.echo(f"Target: {path}")
+        typer.echo(preview, nl=False)
+        if not apply and not rollback:
+            typer.echo("Preview only. Re-run with --apply to write this merged configuration.")
+            return
+        if not changed:
+            typer.echo("No JRX hook change is needed.")
+            return
+        if not sys.stdin.isatty():
+            typer.echo(
+                "Applying hook configuration requires an interactive confirmation.", err=True
+            )
+            raise typer.Exit(2)
+        if not typer.confirm(
+            "Apply this targeted JRX hook change? Existing settings will be backed up and retained.",
+            default=False,
+        ):
+            typer.echo("Cancelled; configuration was not changed.")
+            return
+        path, backup, changed = apply_hook_change(workspace, spec, rollback=rollback)
+        typer.echo(f"{'Updated' if changed else 'Unchanged'} {path}")
+        if backup:
+            typer.echo(f"Original configuration backup: {backup}")
+        typer.echo("Open the provider's native trust/settings screen and verify JRX is active.")
+    except (OSError, ValueError, RuntimeError) as exc:
+        typer.echo(f"JRX setup failed: {exc}", err=True)
+        raise typer.Exit(2) from None
 
 
 @benchmark_app.command("live")
@@ -980,12 +1069,70 @@ def benchmark_stability(
     typer.echo("\n".join(lines))
 
 
+def _antigravity_hook_workspace(payload: dict[str, Any]) -> Path:
+    """Resolve the active Antigravity workspace from its documented hook event."""
+    paths = payload.get("workspacePaths")
+    if not isinstance(paths, Sequence) or isinstance(paths, str | bytes) or not paths:
+        raise ValueError("Antigravity hook input is missing workspacePaths")
+
+    roots: list[Path] = []
+    for raw_path in paths:
+        if not isinstance(raw_path, str) or not raw_path:
+            raise ValueError("Antigravity hook input contains an invalid workspace path")
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            raise ValueError("Antigravity workspace paths must be absolute")
+        root = candidate.resolve(strict=True)
+        if not root.is_dir():
+            raise ValueError("Antigravity workspace path is not a directory")
+        if root not in roots:
+            roots.append(root)
+
+    tool_call = payload.get("toolCall")
+    args = tool_call.get("args") if isinstance(tool_call, dict) else None
+    action_paths: list[Path] = []
+    if isinstance(payload.get("cwd"), str):
+        action_paths.append(Path(payload["cwd"]))
+    if isinstance(args, dict):
+        for key in ("Cwd", "cwd", "TargetFile", "AbsolutePath", "path", "file_path"):
+            value = args.get(key)
+            if isinstance(value, str) and value:
+                action_paths.append(Path(value))
+
+    matched_roots: set[Path] = set()
+    for action_path in action_paths:
+        if not action_path.is_absolute():
+            continue
+        resolved = action_path.resolve(strict=False)
+        matches = [root for root in roots if resolved == root or root in resolved.parents]
+        if len(matches) > 1:
+            raise ValueError("Antigravity action path matches multiple workspaces")
+        matched_roots.update(matches)
+    if len(matched_roots) > 1:
+        raise ValueError("Antigravity action does not identify one workspace")
+    if matched_roots:
+        return matched_roots.pop()
+    if len(roots) == 1:
+        return roots[0]
+    raise ValueError("Antigravity hook input does not identify the action workspace")
+
+
 def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool) -> None:
     try:
         payload = read_hook_payload()
         hook_cwd = payload.get("cwd")
+        selected_config = config_path
+        if kind == "antigravity":
+            workspace_root = _antigravity_hook_workspace(payload)
+            hook_cwd = str(workspace_root)
+            if selected_config is None:
+                selected_config = workspace_root / "reflex.yaml"
+                if not selected_config.is_file():
+                    raise FileNotFoundError(
+                        "workspace reflex.yaml is required for Antigravity hooks"
+                    )
         loaded = _load(
-            config_path,
+            selected_config,
             mode,
             Path(hook_cwd) if isinstance(hook_cwd, str) and hook_cwd else None,
         )

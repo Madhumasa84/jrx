@@ -41,7 +41,9 @@ def evaluate_antigravity_hook(
 ) -> tuple[EvaluationResult, dict[str, Any]]:
     """Evaluate an Antigravity hook event."""
 
-    result, reason = evaluate_harness_hook(payload, config=config, demo=demo)
+    result, reason = evaluate_harness_hook(
+        payload, config=config, demo=demo, provider_key="antigravity"
+    )
     return result, antigravity_hook_response(result, config, reason=reason)
 
 

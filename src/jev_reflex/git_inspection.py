@@ -159,6 +159,12 @@ def inspect_git(
             )
         if args[0] == "status":
             args = (*args, "--ignore-submodules=dirty")
+        if args[0] in {"status", "diff"} and (shadow / "index").exists():
+            # Treat cached stat entries as racily clean so Git compares content.
+            # Copying the index otherwise gives it a fresh timestamp, which can
+            # hide same-size edits with restored mtimes on coarse-clock filesystems.
+            # Do this after flag normalization, which may rewrite the private index.
+            os.utime(shadow / "index", (1, 1))
         result = subprocess.run([*command, *args], **options)
         if args[0] == "status" and result.returncode == 0:
             # Do not let Git recursively inspect submodules with their own config.

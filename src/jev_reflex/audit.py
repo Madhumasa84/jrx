@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ReflexConfig
-from .models import DeterministicFinding
+from .models import DeterministicFinding, HookAuditCorrelation
 from .policy import PolicyDecision
 from .redaction import redact_obj
 from .signing import Ed25519Signer
@@ -66,6 +66,7 @@ class AuditEntry:
         risk_confidence: float | None = None,
         degraded: bool | None = None,
         forced_review: bool | None = None,
+        hook_correlation: dict[str, Any] | None = None,
     ) -> None:
         self.seq = seq
         self.timestamp_utc = timestamp_utc
@@ -84,6 +85,7 @@ class AuditEntry:
         self.risk_confidence = risk_confidence
         self.degraded = degraded
         self.forced_review = forced_review
+        self.hook_correlation = hook_correlation
         self.entry_hash = self._compute_hash()
 
     def _get_hash_dict(self) -> dict[str, Any]:
@@ -116,6 +118,8 @@ class AuditEntry:
             data["risk_confidence"] = self.risk_confidence
             data["degraded"] = self.degraded
             data["forced_review"] = self.forced_review
+        if self.hook_correlation is not None:
+            data["hook_correlation"] = self.hook_correlation
         return data
 
     def _compute_hash(self) -> str:
@@ -202,6 +206,7 @@ class AuditLog:
                     identity=data.get("identity"),
                     original_decision=data.get("original_decision"),
                     justification=data.get("justification"),
+                    hook_correlation=data.get("hook_correlation"),
                 )
                 if "entry_hash" in data:
                     entry.entry_hash = data["entry_hash"]
@@ -241,10 +246,20 @@ class AuditLog:
         risk_confidence: float | None = None,
         degraded: bool | None = None,
         forced_review: bool | None = None,
+        hook_correlation: HookAuditCorrelation | dict[str, Any] | None = None,
     ) -> None:
         """Write a new entry to the audit log with file locking."""
         if not self.should_log():
             return
+
+        if isinstance(hook_correlation, HookAuditCorrelation):
+            safe_hook_correlation = hook_correlation.model_dump(mode="json")
+        elif hook_correlation is not None:
+            safe_hook_correlation = HookAuditCorrelation.model_validate(
+                hook_correlation
+            ).model_dump(mode="json")
+        else:
+            safe_hook_correlation = None
 
         # Apply redaction before writing
         redacted_summary = redact_obj(action_summary)
@@ -275,6 +290,7 @@ class AuditLog:
             risk_confidence,
             degraded,
             forced_review,
+            safe_hook_correlation,
         )
 
     def _write_with_lock_atomic(
@@ -289,6 +305,7 @@ class AuditLog:
         risk_confidence: float | None,
         degraded: bool | None,
         forced_review: bool | None,
+        hook_correlation: dict[str, Any] | None,
     ) -> None:
         """Atomically read last entry, compute next sequence, and write with file locking."""
         log_path = self._get_log_path()
@@ -318,6 +335,7 @@ class AuditLog:
                     risk_confidence=risk_confidence,
                     degraded=degraded,
                     forced_review=forced_review,
+                    hook_correlation=hook_correlation,
                 )
 
                 # Add signature if signer is configured

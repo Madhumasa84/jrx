@@ -476,7 +476,11 @@ class ReflexConfig(BaseModel):
 
 
 def load_config(
-    path: Path | None = None, *, mode_override: Mode | None = None, scope: str | None = None
+    path: Path | None = None,
+    *,
+    mode_override: Mode | None = None,
+    scope: str | None = None,
+    default_if_missing: bool = False,
 ) -> ReflexConfig:
     """Load config, defaulting only when the implicit ``reflex.yaml`` is absent."""
 
@@ -486,7 +490,7 @@ def load_config(
     try:
         raw = config_path.read_bytes()
     except FileNotFoundError:
-        if path is not None:
+        if path is not None and not default_if_missing:
             raise FileNotFoundError(f"Configuration file not found: {config_path}") from None
     if bootstrap.require_signature:
         _verify_config_signature(config_path, bootstrap, data=raw)

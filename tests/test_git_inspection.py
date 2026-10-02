@@ -1,6 +1,9 @@
 """Exercise Git trust boundaries using actual repositories and executable helpers."""
 
+import hashlib
+import os
 import shlex
+import struct
 import subprocess
 from pathlib import Path
 
@@ -40,6 +43,40 @@ def context(repo: Path):
 
 def test_context_includes_real_worktree_diff(repo: Path):
     assert "+after" in context(repo).git_diff
+
+
+@pytest.mark.parametrize("split_index", [False, True])
+def test_inspection_detects_content_changes_with_matching_cached_stat(repo, split_index):
+    # Model a filesystem whose cached timestamps cannot distinguish two writes.
+    # Keep the index's original blob ID but make its stat fields match the edit.
+    tracked = repo / "tracked"
+    tracked.write_text("change\n")
+    info = tracked.stat()
+    index = repo / ".git" / "index"
+    data = bytearray(index.read_bytes())
+    assert data[:4] == b"DIRC" and int.from_bytes(data[8:12], "big") == 1
+    values = (
+        info.st_ctime_ns // 1_000_000_000,
+        info.st_ctime_ns % 1_000_000_000,
+        info.st_mtime_ns // 1_000_000_000,
+        info.st_mtime_ns % 1_000_000_000,
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_uid,
+        info.st_gid,
+        info.st_size,
+    )
+    data[12:52] = struct.pack("!10I", *(value & 0xFFFFFFFF for value in values))
+    data[-20:] = hashlib.sha1(data[:-20]).digest()
+    index.write_bytes(data)
+    os.utime(index, (info.st_mtime + 10, info.st_mtime + 10))
+    if split_index:
+        git(repo, "update-index", "--split-index")
+    original = index.read_bytes()
+    assert "tracked" in context(repo).changed_files
+    assert "+change" in context(repo).git_diff
+    assert index.read_bytes() == original
 
 
 @pytest.mark.parametrize("operation", ["context", "approval"])

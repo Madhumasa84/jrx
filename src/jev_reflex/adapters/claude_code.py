@@ -51,7 +51,7 @@ def evaluate_claude_code_hook(
     config: ReflexConfig,
     demo: bool = False,
 ) -> tuple[EvaluationResult, dict[str, Any]]:
-    context = context_from_hook_payload(payload, config=config)
+    context = context_from_hook_payload(payload, config=config, provider_key="claude")
     evaluator = DemoEvaluator(config) if demo else DefaultEvaluator(config)
     result = evaluator.evaluate(context)
     return result, claude_code_hook_response(result, config)

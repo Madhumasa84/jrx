@@ -59,6 +59,18 @@ class ProposedAction(BaseModel):
         return self.type
 
 
+class HookAuditCorrelation(BaseModel):
+    """Credential-free identifiers used only to correlate native hook audits."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: Literal["codex", "claude", "antigravity"]
+    session_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    tool_name: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+    action_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    call_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
 class EvaluationContext(BaseModel):
     """Small, explicit state passed to an evaluator."""
 
@@ -74,6 +86,10 @@ class EvaluationContext(BaseModel):
     test_results: str = ""
     recent_context: str = ""
     external_content: str = ""
+    # Native identifiers are used for local audit correlation only. Exclusion
+    # here also protects generic model_dump() callers; to_jev_state() is an
+    # explicit allow-list and never includes this field.
+    hook_audit: HookAuditCorrelation | None = Field(default=None, exclude=True, repr=False)
 
     @field_validator("changed_files", mode="before")
     @classmethod

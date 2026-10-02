@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import sys
 from collections.abc import Mapping, Sequence
-from typing import Any, Protocol, TextIO
+from typing import Any, Literal, Protocol, TextIO
 
 from ..config import ReflexConfig
 from ..context import ContextProvider, RepositoryContextProvider
-from ..models import EvaluationContext, EvaluationResult, ProposedAction
+from ..models import EvaluationContext, EvaluationResult, HookAuditCorrelation, ProposedAction
 
 MAX_HOOK_CHARS = 1_048_576
+_SAFE_HOOK_TOOL = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
 
 class Adapter(Protocol):
@@ -122,11 +125,71 @@ def _changed_files(payload: Mapping[str, Any]) -> list[str] | None:
     return None
 
 
+def _hook_audit_correlation(
+    payload: Mapping[str, Any],
+    *,
+    provider: str | None,
+    tool_name: str,
+    tool_input: Mapping[str, Any],
+) -> HookAuditCorrelation | None:
+    """Build local audit identifiers without retaining native IDs or arguments."""
+    native_provider: Literal["codex", "claude", "antigravity"]
+    if provider == "codex":
+        native_provider = "codex"
+    elif provider == "claude":
+        native_provider = "claude"
+    elif provider == "antigravity":
+        native_provider = "antigravity"
+    else:
+        return None
+    session_field = "conversationId" if native_provider == "antigravity" else "session_id"
+    session = payload.get(session_field)
+    if not isinstance(session, str) or not session or len(session) > 512:
+        return None
+    if not _SAFE_HOOK_TOOL.fullmatch(tool_name):
+        return None
+    try:
+        canonical_action = json.dumps(
+            {"tool": tool_name, "input": tool_input},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+    except (TypeError, ValueError):
+        return None
+    if len(canonical_action) > MAX_HOOK_CHARS:
+        return None
+    action_hash = hashlib.sha256(
+        (native_provider + "\0" + session + "\0" + canonical_action).encode("utf-8")
+    ).hexdigest()
+    call_id: Any = None
+    for key in ("tool_use_id", "tool_call_id", "toolCallId", "stepIdx"):
+        candidate = payload.get(key)
+        if candidate is not None and isinstance(candidate, str | int):
+            call_id = str(candidate)
+            break
+    call_hash = (
+        hashlib.sha256(
+            (native_provider + "\0" + session + "\0" + call_id).encode("utf-8")
+        ).hexdigest()
+        if call_id is not None and len(call_id) <= 512
+        else None
+    )
+    return HookAuditCorrelation(
+        provider=native_provider,
+        session_sha256=hashlib.sha256(session.encode("utf-8")).hexdigest(),
+        tool_name=tool_name,
+        action_sha256=action_hash,
+        call_sha256=call_hash,
+    )
+
+
 def context_from_hook_payload(
     payload: Mapping[str, Any],
     *,
     config: ReflexConfig,
     provider: ContextProvider | None = None,
+    provider_key: str | None = None,
 ) -> EvaluationContext:
     """Convert native agent hook payloads into the public context contract.
 
@@ -172,7 +235,7 @@ def context_from_hook_payload(
         max_diff_chars=config.context.max_diff_chars,
         max_context_chars=config.context.max_context_chars,
     )
-    return context_provider.build(
+    context = context_provider.build(
         user_task=_task_text(payload),
         proposed_action=action,
         recent_context=_context_text(
@@ -184,6 +247,13 @@ def context_from_hook_payload(
         test_results=_context_text(payload, "test_results", "testResults"),
         changed_files=_changed_files(payload),
     )
+    correlation = _hook_audit_correlation(
+        payload,
+        provider=provider_key,
+        tool_name=tool_name,
+        tool_input=tool_input,
+    )
+    return context.model_copy(update={"hook_audit": correlation})
 
 
 def _path_or_none(value: str) -> Any:
