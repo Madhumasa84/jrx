@@ -1,0 +1,282 @@
+FFFFFFFFFFF                                                              [100%]
+=================================== FAILURES ===================================
+_________ test_enforce_unavailable_judge_cannot_be_overridden_with_yes _________
+
+tmp_path = PosixPath('/tmp/pytest-of-masa84/pytest-2/test_enforce_unavailable_judge0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x74552ef4da90>
+
+    def test_enforce_unavailable_judge_cannot_be_overridden_with_yes(tmp_path, monkeypatch):
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        marker = tmp_path / "executed"
+        result = CliRunner().invoke(
+            app,
+            ["exec", "--mode", "enforce", "--cwd", str(tmp_path), "--yes", "--",
+             "touch", str(marker)],
+        )
+>       assert result.exit_code == 2, result.output
+E       AssertionError: JEV Reflex
+E
+E         Action:
+E           touch /tmp/pytest-of-masa84/pytest-2/test_enforce_unavailable_judge0/executed
+E
+E         HARD RULES
+E
+E           secret_pattern     clear
+E           known_destructive  clear
+E           repo_boundary      clear
+E           git_risk           clear
+E           filesystem         clear
+E           safe_command       clear
+E
+E         JEV SIGNALS
+E           destructive                0.00  ·
+E           secret_exposure            0.00  ·
+E           scope_creep                0.00  ·
+E           security_sensitive         0.00  ·
+E           irreversible               0.00  ·
+E           needs_tests                0.00  ·
+E           prompt_injection           0.00  ·
+E           dependency_risk            0.00  ·
+E           wrong_repo                 0.00  ·
+E           human_review               0.00  ·
+E           concurrency_sensitive      0.00  ·
+E           persistence_sensitive      0.00  ·
+E           backwards_compatibility    0.00  ·
+E           untrusted_input_path       0.00  ·
+E           fail_open                  0.00  ·
+E           wrong_repo_semantic        0.00  ·
+E           suspicious_intent          0.00  ·
+E           external_side_effect_risk  0.00  ·
+E
+E         Source: jev
+E         Samples: 1
+E         Estimated JEV requests: 1
+E
+E         POLICY
+E           risk_level == medium
+E           evaluation_unavailable
+E
+E         FINAL
+E           Risk: MEDIUM
+E           REVIEW
+E
+E         WARNINGS
+E           JEV evaluation was unavailable; no model judgment was accepted.
+E
+E         Decision ID: 3d207d5f3055429091595c6810a29d67
+E         Warning: could not write override to audit log: [Errno 30] Read-only file system: '/home/masa84/.jev-reflex/audit.log'
+E
+E       assert 0 == 2
+E        +  where 0 = <Result okay>.exit_code
+
+tests/test_production_audit_v2.py:27: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     jrx::0 policy_decision
+WARNING  jrx::0 human_override
+___________ test_redaction_failure_remains_degraded_without_semantic ___________
+
+tmp_path = PosixPath('/tmp/pytest-of-masa84/pytest-2/test_redaction_failure_remains0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x74552ef4ce90>
+
+    def test_redaction_failure_remains_degraded_without_semantic(tmp_path, monkeypatch):
+        import jev_reflex.evaluator as evaluator
+
+        context = RepositoryContextProvider(cwd=tmp_path).build(
+            user_task="", proposed_action=ProposedAction(command="echo hello")
+        )
+        monkeypatch.setattr(evaluator, "_redacted_context_with_gitleaks", lambda ctx: (ctx, True))
+        config = ReflexConfig(mode="enforce")
+        result = evaluate_context(context, config=config, use_jev=False)
+>       assert result.degraded
+E       AssertionError: assert False
+E        +  where False = EvaluationResult(decision_id='aaa0086a56b34c78931976f8b35bc308', decision='REVIEW', risk=RiskInfo(choice='low', score=...LOWLISTED', blocking=False)], semantic_source='none', samples=1, aggregation=None, degraded=False, action='echo hello').degraded
+
+tests/test_production_audit_v2.py:40: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     jrx::0 policy_decision
+______________________ test_audit_append_rejects_symlink _______________________
+
+tmp_path = PosixPath('/tmp/pytest-of-masa84/pytest-2/test_audit_append_rejects_syml0')
+
+    def test_audit_append_rejects_symlink(tmp_path):
+        target = tmp_path / "target"
+        target.touch(mode=0o600)
+        link = tmp_path / "audit"
+        link.symlink_to(target)
+        log = AuditLog(ReflexConfig(audit={"enabled": True, "path": str(link)}))
+>       with pytest.raises((OSError, ValueError)):
+E       Failed: DID NOT RAISE any of (OSError, ValueError)
+
+tests/test_production_audit_v2.py:50: Failed
+_________________ test_config_rejects_duplicate_security_keys __________________
+
+tmp_path = PosixPath('/tmp/pytest-of-masa84/pytest-2/test_config_rejects_duplicate_0')
+
+    def test_config_rejects_duplicate_security_keys(tmp_path):
+        path = tmp_path / "policy.yaml"
+        path.write_text("mode: enforce\nmode: advisory\n")
+>       with pytest.raises(ValueError):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_production_audit_v2.py:58: Failed
+_________________ test_config_rejects_misspelled_security_keys _________________
+
+tmp_path = PosixPath('/tmp/pytest-of-masa84/pytest-2/test_config_rejects_misspelled0')
+
+    def test_config_rejects_misspelled_security_keys(tmp_path):
+        path = tmp_path / "policy.yaml"
+        path.write_text("mode: enforce\npolicy:\n  allow_hold_overide: true\n")
+>       with pytest.raises(ValueError):
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_production_audit_v2.py:65: Failed
+_ test_destructive_git_variants_hold_in_full_pipeline[git -c color.ui=false reset --hard] _
+
+tmp_path = PosixPath('/tmp/pytest-of-masa84/pytest-2/test_destructive_git_variants_0')
+command = 'git -c color.ui=false reset --hard'
+
+    @pytest.mark.parametrize("command", [
+        "git -c color.ui=false reset --hard",
+        "git branch --force --delete old",
+        "git -c color.ui=false branch -D old",
+        "git -c color.ui=false push --force",
+    ])
+    def test_destructive_git_variants_hold_in_full_pipeline(tmp_path, command):
+        context = RepositoryContextProvider(cwd=tmp_path).build(
+            user_task="", proposed_action=ProposedAction(command=command)
+        )
+        result = evaluate_context(context, config=ReflexConfig(mode="enforce"), use_jev=False)
+>       assert result.decision == "HOLD"
+E       AssertionError: assert 'ALLOW' == 'HOLD'
+E
+E         - HOLD
+E         + ALLOW
+
+tests/test_production_audit_v2.py:80: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     jrx::0 policy_decision
+_ test_destructive_git_variants_hold_in_full_pipeline[git branch --force --delete old] _
+
+tmp_path = PosixPath('/tmp/pytest-of-masa84/pytest-2/test_destructive_git_variants_1')
+command = 'git branch --force --delete old'
+
+    @pytest.mark.parametrize("command", [
+        "git -c color.ui=false reset --hard",
+        "git branch --force --delete old",
+        "git -c color.ui=false branch -D old",
+        "git -c color.ui=false push --force",
+    ])
+    def test_destructive_git_variants_hold_in_full_pipeline(tmp_path, command):
+        context = RepositoryContextProvider(cwd=tmp_path).build(
+            user_task="", proposed_action=ProposedAction(command=command)
+        )
+        result = evaluate_context(context, config=ReflexConfig(mode="enforce"), use_jev=False)
+>       assert result.decision == "HOLD"
+E       AssertionError: assert 'ALLOW' == 'HOLD'
+E
+E         - HOLD
+E         + ALLOW
+
+tests/test_production_audit_v2.py:80: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     jrx::0 policy_decision
+_ test_destructive_git_variants_hold_in_full_pipeline[git -c color.ui=false branch -D old] _
+
+tmp_path = PosixPath('/tmp/pytest-of-masa84/pytest-2/test_destructive_git_variants_2')
+command = 'git -c color.ui=false branch -D old'
+
+    @pytest.mark.parametrize("command", [
+        "git -c color.ui=false reset --hard",
+        "git branch --force --delete old",
+        "git -c color.ui=false branch -D old",
+        "git -c color.ui=false push --force",
+    ])
+    def test_destructive_git_variants_hold_in_full_pipeline(tmp_path, command):
+        context = RepositoryContextProvider(cwd=tmp_path).build(
+            user_task="", proposed_action=ProposedAction(command=command)
+        )
+        result = evaluate_context(context, config=ReflexConfig(mode="enforce"), use_jev=False)
+>       assert result.decision == "HOLD"
+E       AssertionError: assert 'ALLOW' == 'HOLD'
+E
+E         - HOLD
+E         + ALLOW
+
+tests/test_production_audit_v2.py:80: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     jrx::0 policy_decision
+_ test_destructive_git_variants_hold_in_full_pipeline[git -c color.ui=false push --force] _
+
+tmp_path = PosixPath('/tmp/pytest-of-masa84/pytest-2/test_destructive_git_variants_3')
+command = 'git -c color.ui=false push --force'
+
+    @pytest.mark.parametrize("command", [
+        "git -c color.ui=false reset --hard",
+        "git branch --force --delete old",
+        "git -c color.ui=false branch -D old",
+        "git -c color.ui=false push --force",
+    ])
+    def test_destructive_git_variants_hold_in_full_pipeline(tmp_path, command):
+        context = RepositoryContextProvider(cwd=tmp_path).build(
+            user_task="", proposed_action=ProposedAction(command=command)
+        )
+        result = evaluate_context(context, config=ReflexConfig(mode="enforce"), use_jev=False)
+>       assert result.decision == "HOLD"
+E       AssertionError: assert 'ALLOW' == 'HOLD'
+E
+E         - HOLD
+E         + ALLOW
+
+tests/test_production_audit_v2.py:80: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     jrx::0 policy_decision
+_______________ test_mcp_duplicate_method_cannot_bypass_gateway ________________
+
+tmp_path = PosixPath('/tmp/pytest-of-masa84/pytest-2/test_mcp_duplicate_method_cann0')
+
+    def test_mcp_duplicate_method_cannot_bypass_gateway(tmp_path):
+        # A parser accepting the last duplicate sees ping; another upstream parser
+        # may see tools/call. Ambiguous protocol messages must never be forwarded.
+        instance = MCPGateway(ReflexConfig(), "test", ["unused"], sink=BytesIO())
+        downstream = BytesIO()
+        process = SimpleNamespace(stdin=downstream, poll=lambda: None)
+        instance._handle(process, b'{"id":1,"method":"tools/call","method":"ping"}\n')
+>       assert not downstream.getvalue()
+E       assert not b'{"id":1,"method":"tools/call","method":"ping"}\n'
+E        +  where b'{"id":1,"method":"tools/call","method":"ping"}\n' = <built-in method getvalue of _io.BytesIO object at 0x74552ee8ade0>()
+E        +    where <built-in method getvalue of _io.BytesIO object at 0x74552ee8ade0> = <_io.BytesIO object at 0x74552ee8ade0>.getvalue
+
+tests/test_production_audit_v2.py:90: AssertionError
+__________________ test_required_audit_failure_blocks_enforce __________________
+
+tmp_path = PosixPath('/tmp/pytest-of-masa84/pytest-2/test_required_audit_failure_bl0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x74552eeae910>
+
+    def test_required_audit_failure_blocks_enforce(tmp_path, monkeypatch):
+        context = RepositoryContextProvider(cwd=tmp_path).build(
+            user_task="", proposed_action=ProposedAction(command="echo hello")
+        )
+        monkeypatch.setattr(AuditLog, "write_entry", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+        config = ReflexConfig(mode="enforce", audit={"enabled": True, "path": str(tmp_path / "audit")})
+        result = evaluate_context(context, config=config, use_jev=False)
+>       assert result.degraded
+E       AssertionError: assert False
+E        +  where False = EvaluationResult(decision_id='e5960342943d45a98491651a5e7157eb', decision='ALLOW', risk=RiskInfo(choice='low', score=N...LOWLISTED', blocking=False)], semantic_source='none', samples=1, aggregation=None, degraded=False, action='echo hello').degraded
+
+tests/test_production_audit_v2.py:100: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     jrx::0 policy_decision
+ERROR    jrx::0 audit_write_failed
+=========================== short test summary info ============================
+FAILED tests/test_production_audit_v2.py::test_enforce_unavailable_judge_cannot_be_overridden_with_yes
+FAILED tests/test_production_audit_v2.py::test_redaction_failure_remains_degraded_without_semantic
+FAILED tests/test_production_audit_v2.py::test_audit_append_rejects_symlink
+FAILED tests/test_production_audit_v2.py::test_config_rejects_duplicate_security_keys
+FAILED tests/test_production_audit_v2.py::test_config_rejects_misspelled_security_keys
+FAILED tests/test_production_audit_v2.py::test_destructive_git_variants_hold_in_full_pipeline[git -c color.ui=false reset --hard]
+FAILED tests/test_production_audit_v2.py::test_destructive_git_variants_hold_in_full_pipeline[git branch --force --delete old]
+FAILED tests/test_production_audit_v2.py::test_destructive_git_variants_hold_in_full_pipeline[git -c color.ui=false branch -D old]
+FAILED tests/test_production_audit_v2.py::test_destructive_git_variants_hold_in_full_pipeline[git -c color.ui=false push --force]
+FAILED tests/test_production_audit_v2.py::test_mcp_duplicate_method_cannot_bypass_gateway
+FAILED tests/test_production_audit_v2.py::test_required_audit_failure_blocks_enforce
+11 failed in 2.88s

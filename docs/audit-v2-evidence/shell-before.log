@@ -1,0 +1,104 @@
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+__ test_explicit_nested_destructive_commands_hold[echo ready\nrm -rf ./cache] __
+
+tmp_path = PosixPath('/tmp/pytest-of-masa84/pytest-4/test_explicit_nested_destructi0')
+command = 'echo ready\nrm -rf ./cache'
+
+    @pytest.mark.parametrize("command", [
+        "echo ready\nrm -rf ./cache",
+        "find . -exec rm -r {} +",
+        "echo $(rm -rf ./cache)",
+        "sh -c 'git -c color.ui=false reset --hard'",
+    ])
+    def test_explicit_nested_destructive_commands_hold(tmp_path, command):
+        context = RepositoryContextProvider(cwd=tmp_path).build(
+            user_task="", proposed_action=ProposedAction(command=command)
+        )
+>       assert evaluate_context(context, config=ReflexConfig(mode="enforce"), use_jev=False).decision == "HOLD"
+E       AssertionError: assert 'ALLOW' == 'HOLD'
+E
+E         - HOLD
+E         + ALLOW
+
+tests/test_production_audit_v2.py:116: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     jrx::0 policy_decision
+___ test_explicit_nested_destructive_commands_hold[find . -exec rm -r {} +] ____
+
+tmp_path = PosixPath('/tmp/pytest-of-masa84/pytest-4/test_explicit_nested_destructi1')
+command = 'find . -exec rm -r {} +'
+
+    @pytest.mark.parametrize("command", [
+        "echo ready\nrm -rf ./cache",
+        "find . -exec rm -r {} +",
+        "echo $(rm -rf ./cache)",
+        "sh -c 'git -c color.ui=false reset --hard'",
+    ])
+    def test_explicit_nested_destructive_commands_hold(tmp_path, command):
+        context = RepositoryContextProvider(cwd=tmp_path).build(
+            user_task="", proposed_action=ProposedAction(command=command)
+        )
+>       assert evaluate_context(context, config=ReflexConfig(mode="enforce"), use_jev=False).decision == "HOLD"
+E       AssertionError: assert 'ALLOW' == 'HOLD'
+E
+E         - HOLD
+E         + ALLOW
+
+tests/test_production_audit_v2.py:116: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     jrx::0 policy_decision
+____ test_explicit_nested_destructive_commands_hold[echo $(rm -rf ./cache)] ____
+
+tmp_path = PosixPath('/tmp/pytest-of-masa84/pytest-4/test_explicit_nested_destructi2')
+command = 'echo $(rm -rf ./cache)'
+
+    @pytest.mark.parametrize("command", [
+        "echo ready\nrm -rf ./cache",
+        "find . -exec rm -r {} +",
+        "echo $(rm -rf ./cache)",
+        "sh -c 'git -c color.ui=false reset --hard'",
+    ])
+    def test_explicit_nested_destructive_commands_hold(tmp_path, command):
+        context = RepositoryContextProvider(cwd=tmp_path).build(
+            user_task="", proposed_action=ProposedAction(command=command)
+        )
+>       assert evaluate_context(context, config=ReflexConfig(mode="enforce"), use_jev=False).decision == "HOLD"
+E       AssertionError: assert 'ALLOW' == 'HOLD'
+E
+E         - HOLD
+E         + ALLOW
+
+tests/test_production_audit_v2.py:116: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     jrx::0 policy_decision
+_ test_explicit_nested_destructive_commands_hold[sh -c 'git -c color.ui=false reset --hard'] _
+
+tmp_path = PosixPath('/tmp/pytest-of-masa84/pytest-4/test_explicit_nested_destructi3')
+command = "sh -c 'git -c color.ui=false reset --hard'"
+
+    @pytest.mark.parametrize("command", [
+        "echo ready\nrm -rf ./cache",
+        "find . -exec rm -r {} +",
+        "echo $(rm -rf ./cache)",
+        "sh -c 'git -c color.ui=false reset --hard'",
+    ])
+    def test_explicit_nested_destructive_commands_hold(tmp_path, command):
+        context = RepositoryContextProvider(cwd=tmp_path).build(
+            user_task="", proposed_action=ProposedAction(command=command)
+        )
+>       assert evaluate_context(context, config=ReflexConfig(mode="enforce"), use_jev=False).decision == "HOLD"
+E       AssertionError: assert 'ALLOW' == 'HOLD'
+E
+E         - HOLD
+E         + ALLOW
+
+tests/test_production_audit_v2.py:116: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     jrx::0 policy_decision
+=========================== short test summary info ============================
+FAILED tests/test_production_audit_v2.py::test_explicit_nested_destructive_commands_hold[echo ready\nrm -rf ./cache]
+FAILED tests/test_production_audit_v2.py::test_explicit_nested_destructive_commands_hold[find . -exec rm -r {} +]
+FAILED tests/test_production_audit_v2.py::test_explicit_nested_destructive_commands_hold[echo $(rm -rf ./cache)]
+FAILED tests/test_production_audit_v2.py::test_explicit_nested_destructive_commands_hold[sh -c 'git -c color.ui=false reset --hard']
+4 failed, 11 deselected in 2.28s

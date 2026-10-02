@@ -1,0 +1,26 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_synthetic_secret_filename_is_redacted_from_lineage ____________
+
+controls = (ReflexConfig(mode='enforce', policy=PolicyConfig(allow_hold_override=False), thresholds=ThresholdConfig(strong=0.9, r...AuthorityStore object at 0x71784c4f5810>, PosixPath('/tmp/pytest-of-masa84/pytest-16/test_synthetic_secret_filename0'))
+
+    def test_synthetic_secret_filename_is_redacted_from_lineage(controls):
+        config, intents, _, root = controls
+        envelope(intents, root)
+        secret = "synthetic-audit-v2-filename-value"
+        intents.evaluate("task-session", context(root, "cat tests/api_key=" + secret), "policy-v1", "ALLOW")
+        from pathlib import Path
+>       assert secret.encode() not in Path(config.intent.path).read_bytes()
+E       AssertionError: assert b'synthetic-audit-v2-filename-value' not in b'SQLite format 3\x00\x10\x00\x01\x01\x00@  \x00\x00\x00\x02\x00\x00\x00\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x...0\x00\x00\x00\x00\x00\x00\x00+\x04\x19M\x01actionf5a4e76c37ad401ca5ad0bf3d725be10\x02\x16\x04\x19%\tintenttask-session'
+E        +  where b'synthetic-audit-v2-filename-value' = <built-in method encode of str object at 0x71784c627c30>()
+E        +    where <built-in method encode of str object at 0x71784c627c30> = 'synthetic-audit-v2-filename-value'.encode
+E        +  and   b'SQLite format 3\x00\x10\x00\x01\x01\x00@  \x00\x00\x00\x02\x00\x00\x00\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x...0\x00\x00\x00\x00\x00\x00\x00+\x04\x19M\x01actionf5a4e76c37ad401ca5ad0bf3d725be10\x02\x16\x04\x19%\tintenttask-session' = read_bytes()
+E        +    where read_bytes = PosixPath('/tmp/pytest-of-masa84/pytest-16/test_synthetic_secret_filename0/intent.db').read_bytes
+E        +      where PosixPath('/tmp/pytest-of-masa84/pytest-16/test_synthetic_secret_filename0/intent.db') = <class 'pathlib.Path'>('/tmp/pytest-of-masa84/pytest-16/test_synthetic_secret_filename0/intent.db')
+E        +        where '/tmp/pytest-of-masa84/pytest-16/test_synthetic_secret_filename0/intent.db' = IntentConfig(enabled=True, path='/tmp/pytest-of-masa84/pytest-16/test_synthetic_secret_filename0/intent.db', key_path=...test-16/test_synthetic_secret_filename0/host.key', max_sessions=1000, max_actions_per_session=1000, max_records=100000).path
+E        +          where IntentConfig(enabled=True, path='/tmp/pytest-of-masa84/pytest-16/test_synthetic_secret_filename0/intent.db', key_path=...test-16/test_synthetic_secret_filename0/host.key', max_sessions=1000, max_actions_per_session=1000, max_records=100000) = ReflexConfig(mode='enforce', policy=PolicyConfig(allow_hold_override=False), thresholds=ThresholdConfig(strong=0.9, re...roker_tls=None), stability=StabilityConfig(boundary_margin=0.0), stability_policy=StabilityPolicyConfig(mode='strict')).intent
+
+tests/test_intent_authority.py:634: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_intent_authority.py::test_synthetic_secret_filename_is_redacted_from_lineage
+1 failed, 40 deselected in 0.26s

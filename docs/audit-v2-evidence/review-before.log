@@ -1,0 +1,114 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_opaque_read_options_and_executable_traversal_deny[wc --files0-from=private/list] _
+
+controls = (ReflexConfig(mode='enforce', policy=PolicyConfig(allow_hold_override=False), thresholds=ThresholdConfig(strong=0.9, r...AuthorityStore object at 0x73d842bdd3d0>, PosixPath('/tmp/pytest-of-masa84/pytest-10/test_opaque_read_options_and_e0'))
+command = 'wc --files0-from=private/list'
+
+    @pytest.mark.parametrize("command", ["wc --files0-from=private/list", "/usr/bin/../../tmp/repo/cat tests/file"])
+    def test_opaque_read_options_and_executable_traversal_deny(controls, command):
+        _, store, _, root = controls
+        envelope(store, root)
+        # Use repository-wide resources to isolate capability misclassification.
+        command_context = context(root, command)
+        from jev_reflex.action_scope import describe_action
+>       assert "unknown" in describe_action(command_context)[0]
+E       AssertionError: assert 'unknown' in ['read']
+
+tests/test_intent_authority.py:394: AssertionError
+_ test_opaque_read_options_and_executable_traversal_deny[/usr/bin/../../tmp/repo/cat tests/file] _
+
+controls = (ReflexConfig(mode='enforce', policy=PolicyConfig(allow_hold_override=False), thresholds=ThresholdConfig(strong=0.9, r...AuthorityStore object at 0x73d842bdc050>, PosixPath('/tmp/pytest-of-masa84/pytest-10/test_opaque_read_options_and_e1'))
+command = '/usr/bin/../../tmp/repo/cat tests/file'
+
+    @pytest.mark.parametrize("command", ["wc --files0-from=private/list", "/usr/bin/../../tmp/repo/cat tests/file"])
+    def test_opaque_read_options_and_executable_traversal_deny(controls, command):
+        _, store, _, root = controls
+        envelope(store, root)
+        # Use repository-wide resources to isolate capability misclassification.
+        command_context = context(root, command)
+        from jev_reflex.action_scope import describe_action
+>       assert "unknown" in describe_action(command_context)[0]
+E       AssertionError: assert 'unknown' in ['read']
+
+tests/test_intent_authority.py:394: AssertionError
+____________ test_intent_cli_mode_override_cannot_disable_envelope _____________
+
+controls = (ReflexConfig(mode='enforce', policy=PolicyConfig(allow_hold_override=False), thresholds=ThresholdConfig(strong=0.9, r...AuthorityStore object at 0x73d842a59f90>, PosixPath('/tmp/pytest-of-masa84/pytest-10/test_intent_cli_mode_override_0'))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x73d842a59e50>
+
+    def test_intent_cli_mode_override_cannot_disable_envelope(controls, monkeypatch):
+        from typer.testing import CliRunner
+        from jev_reflex.cli import app
+
+        config, intents, _, root = controls
+        config.authority.enabled = False
+        envelope(intents, root)
+        path = root / "policy.json"
+        path.write_text(config.model_dump_json())
+        monkeypatch.setenv("JRX_SESSION_ID", "task-session")
+        marker = root / "mode-override-executed"
+        result = CliRunner().invoke(app, ["exec", "--config", str(path), "--mode", "advisory", "--cwd", str(root), "--task", "Fix a failing unit test", "--no-jev", "--", "touch", str(marker)])
+>       assert result.exit_code == 2, result.output
+E       AssertionError: JEV Reflex
+E
+E         Action:
+E           touch /tmp/pytest-of-masa84/pytest-10/test_intent_cli_mode_override_0/mode-override-executed
+E
+E         HARD RULES
+E
+E           secret_pattern     clear
+E           known_destructive  clear
+E           repo_boundary      clear
+E           git_risk           clear
+E           filesystem         clear
+E           safe_command       clear
+E           agent_control      TRIGGERED (INTENT_DENIED)
+E
+E         JEV SIGNALS
+E           destructive                0.00  ·
+E           secret_exposure            0.00  ·
+E           scope_creep                0.00  ·
+E           security_sensitive         0.00  ·
+E           irreversible               0.00  ·
+E           needs_tests                0.00  ·
+E           prompt_injection           0.00  ·
+E           dependency_risk            0.00  ·
+E           wrong_repo                 0.00  ·
+E           human_review               0.00  ·
+E           concurrency_sensitive      0.00  ·
+E           persistence_sensitive      0.00  ·
+E           backwards_compatibility    0.00  ·
+E           untrusted_input_path       0.00  ·
+E           fail_open                  0.00  ·
+E           wrong_repo_semantic        0.00  ·
+E           suspicious_intent          0.00  ·
+E           external_side_effect_risk  0.00  ·
+E
+E         Source: none
+E         Samples: 1
+E         Estimated JEV requests: 0
+E
+E         POLICY
+E           agent_control:INTENT_DENIED
+E
+E         FINAL
+E           Risk: LOW
+E           HOLD
+E
+E         WARNINGS
+E           JEV disabled; only deterministic checks were evaluated.
+E
+E         Decision ID: 0897708909a742feb6fbf390f527dde5
+E
+E       assert 0 == 2
+E        +  where 0 = <Result okay>.exit_code
+
+tests/test_intent_authority.py:409: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     jrx::0 policy_decision
+=========================== short test summary info ============================
+FAILED tests/test_intent_authority.py::test_opaque_read_options_and_executable_traversal_deny[wc --files0-from=private/list]
+FAILED tests/test_intent_authority.py::test_opaque_read_options_and_executable_traversal_deny[/usr/bin/../../tmp/repo/cat tests/file]
+FAILED tests/test_intent_authority.py::test_intent_cli_mode_override_cannot_disable_envelope
+3 failed, 30 deselected in 0.81s

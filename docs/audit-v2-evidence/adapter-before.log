@@ -1,0 +1,105 @@
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+______ test_public_adapters_cannot_downgrade_agent_controls[claude_code] _______
+
+adapter = 'claude_code'
+
+    @pytest.mark.parametrize("adapter", ["claude_code", "codex", "deepseek", "openrouter"])
+    def test_public_adapters_cannot_downgrade_agent_controls(adapter):
+        import importlib
+
+        from jev_reflex.models import EvaluationResult, RiskInfo
+
+        module = importlib.import_module(f"jev_reflex.adapters.{adapter}")
+        result = EvaluationResult(
+            decision="HOLD", risk=RiskInfo(score=1.0, choice="high"),
+            triggered_rules=["agent_control:AUTHORITY_DENIED"],
+        )
+        output = getattr(module, f"{adapter}_hook_response")(result, ReflexConfig(mode="advisory"))
+        if adapter == "openrouter":
+            assert output.get("block")
+        else:
+>           assert output["hookSpecificOutput"].get("permissionDecision") == "deny"
+E           AssertionError: assert None == 'deny'
+E            +  where None = <built-in method get of dict object at 0x7d1c917f7e00>('permissionDecision')
+E            +    where <built-in method get of dict object at 0x7d1c917f7e00> = {'hookEventName': 'PreToolUse', 'additionalContext': 'JEV Reflex decision: HOLD. agent_control:AUTHORITY_DENIED Risk level: high.'}.get
+
+tests/test_intent_authority.py:25: AssertionError
+_________ test_public_adapters_cannot_downgrade_agent_controls[codex] __________
+
+adapter = 'codex'
+
+    @pytest.mark.parametrize("adapter", ["claude_code", "codex", "deepseek", "openrouter"])
+    def test_public_adapters_cannot_downgrade_agent_controls(adapter):
+        import importlib
+
+        from jev_reflex.models import EvaluationResult, RiskInfo
+
+        module = importlib.import_module(f"jev_reflex.adapters.{adapter}")
+        result = EvaluationResult(
+            decision="HOLD", risk=RiskInfo(score=1.0, choice="high"),
+            triggered_rules=["agent_control:AUTHORITY_DENIED"],
+        )
+        output = getattr(module, f"{adapter}_hook_response")(result, ReflexConfig(mode="advisory"))
+        if adapter == "openrouter":
+            assert output.get("block")
+        else:
+>           assert output["hookSpecificOutput"].get("permissionDecision") == "deny"
+E           AssertionError: assert None == 'deny'
+E            +  where None = <built-in method get of dict object at 0x7d1c91613980>('permissionDecision')
+E            +    where <built-in method get of dict object at 0x7d1c91613980> = {'hookEventName': 'PreToolUse', 'additionalContext': 'JEV Reflex decision: HOLD. agent_control:AUTHORITY_DENIED Risk level: high.'}.get
+
+tests/test_intent_authority.py:25: AssertionError
+________ test_public_adapters_cannot_downgrade_agent_controls[deepseek] ________
+
+adapter = 'deepseek'
+
+    @pytest.mark.parametrize("adapter", ["claude_code", "codex", "deepseek", "openrouter"])
+    def test_public_adapters_cannot_downgrade_agent_controls(adapter):
+        import importlib
+
+        from jev_reflex.models import EvaluationResult, RiskInfo
+
+        module = importlib.import_module(f"jev_reflex.adapters.{adapter}")
+        result = EvaluationResult(
+            decision="HOLD", risk=RiskInfo(score=1.0, choice="high"),
+            triggered_rules=["agent_control:AUTHORITY_DENIED"],
+        )
+        output = getattr(module, f"{adapter}_hook_response")(result, ReflexConfig(mode="advisory"))
+        if adapter == "openrouter":
+            assert output.get("block")
+        else:
+>           assert output["hookSpecificOutput"].get("permissionDecision") == "deny"
+E           AssertionError: assert None == 'deny'
+E            +  where None = <built-in method get of dict object at 0x7d1c917f6dc0>('permissionDecision')
+E            +    where <built-in method get of dict object at 0x7d1c917f6dc0> = {'hookEventName': 'PreToolUse', 'additionalContext': 'JEV Reflex decision: HOLD. agent_control:AUTHORITY_DENIED'}.get
+
+tests/test_intent_authority.py:25: AssertionError
+_______ test_public_adapters_cannot_downgrade_agent_controls[openrouter] _______
+
+adapter = 'openrouter'
+
+    @pytest.mark.parametrize("adapter", ["claude_code", "codex", "deepseek", "openrouter"])
+    def test_public_adapters_cannot_downgrade_agent_controls(adapter):
+        import importlib
+
+        from jev_reflex.models import EvaluationResult, RiskInfo
+
+        module = importlib.import_module(f"jev_reflex.adapters.{adapter}")
+        result = EvaluationResult(
+            decision="HOLD", risk=RiskInfo(score=1.0, choice="high"),
+            triggered_rules=["agent_control:AUTHORITY_DENIED"],
+        )
+        output = getattr(module, f"{adapter}_hook_response")(result, ReflexConfig(mode="advisory"))
+        if adapter == "openrouter":
+>           assert output.get("block")
+E           AssertionError: assert None
+E            +  where None = <built-in method get of dict object at 0x7d1c9169e640>('block')
+E            +    where <built-in method get of dict object at 0x7d1c9169e640> = {}.get
+
+tests/test_intent_authority.py:23: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_intent_authority.py::test_public_adapters_cannot_downgrade_agent_controls[claude_code]
+FAILED tests/test_intent_authority.py::test_public_adapters_cannot_downgrade_agent_controls[codex]
+FAILED tests/test_intent_authority.py::test_public_adapters_cannot_downgrade_agent_controls[deepseek]
+FAILED tests/test_intent_authority.py::test_public_adapters_cannot_downgrade_agent_controls[openrouter]
