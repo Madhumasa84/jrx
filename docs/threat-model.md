@@ -118,6 +118,15 @@ Each layer is designed to fail independently and safely. Compromising any single
 
 ## Assumptions
 
+Optional [intent envelopes](intent-lineage.md) address gradual task expansion through
+deterministic resource/capability checks plus cumulative drift evidence.
+[Authority leases](authority-delegation.md) restrict delegation between host-assigned
+agent sessions. Both are preflight controls: arbitrary scripts can access resources
+their arguments do not name. Protect their HMAC key, databases, configuration, PATH,
+OIDC tokens and host session assertions from the agent. Same-UID key access or execution
+outside JRX bypasses this boundary. Valid whole-database rollback is not detected
+without an external trusted checkpoint. Runtime confinement remains the sandbox's job.
+
 JEV Reflex makes the following security assumptions:
 
 1. **Trusted Host**: The host system running JEV Reflex is not compromised with root access

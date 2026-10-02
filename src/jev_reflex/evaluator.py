@@ -427,6 +427,7 @@ def evaluate_context(
     skip_jev_on_hard: bool = False,
     session_id: str | None = None,
     session_tool_calls: int = 1,
+    action_nonce: str | None = None,
 ) -> EvaluationResult:
     """Run deterministic checks, optional semantic evaluation, and pure policy."""
 
@@ -511,6 +512,30 @@ def evaluate_context(
     )
     warnings.extend(semantic.warnings)
 
+    if config.intent.enabled or config.authority.enabled:
+        from .agent_controls import apply_controls
+
+        controls = apply_controls(
+            context,
+            config,
+            policy.decision,
+            semantic.probabilities.get("scope_creep", 0.0),
+            session_id,
+            action_nonce=action_nonce,
+        )
+        findings.extend(controls)
+        if controls:
+            from .policy import PolicyDecision
+
+            policy = PolicyDecision(
+                "HOLD",
+                (
+                    *policy.triggered_rules,
+                    *(f"agent_control:{finding.reason_code}" for finding in controls),
+                ),
+                (*policy.reasons, "Host agent control denied this action"),
+            )
+
     # If gitleaks failed, force REVIEW for safety before recording metrics and logs
     if gitleaks_failed and policy.decision != "HOLD":
         warnings.append("Forced to REVIEW due to gitleaks redaction failure.")
@@ -544,6 +569,7 @@ def evaluate_context(
         },
     )
 
+    audit_failed = False
     # Write to audit log if enabled
     try:
         audit_log = AuditLog(config)
@@ -559,6 +585,15 @@ def evaluate_context(
             hook_correlation=context.hook_audit,
         )
     except (OSError, ValueError, TypeError):
+        audit_failed = config.audit.enabled or config.privacy.store_requests
+        if audit_failed and config.mode != "advisory":
+            from .policy import PolicyDecision
+
+            policy = PolicyDecision(
+                "HOLD",
+                (*policy.triggered_rules, "audit_unavailable"),
+                (*policy.reasons, "Required audit persistence failed"),
+            )
         warnings.append("Audit logging failed; the decision was not recorded.")
         log_structured(level="ERROR", event="audit_write_failed", fields={})
 
@@ -581,7 +616,9 @@ def evaluate_context(
         semantic_source=semantic.source,
         samples=samples,
         aggregation=aggregation_used,
-        degraded=semantic.degraded and use_jev,
+        degraded=(semantic.degraded and use_jev)
+        or gitleaks_failed
+        or (audit_failed and config.mode != "advisory"),
         action=safe_action,
     )
     if session_store is not None:

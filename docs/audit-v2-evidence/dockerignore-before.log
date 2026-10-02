@@ -1,0 +1,15 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________________ test_docker_context_excludes_local_credentials ________________
+
+    def test_docker_context_excludes_local_credentials():
+        from pathlib import Path
+
+        ignore = (Path(__file__).resolve().parents[1] / ".dockerignore").read_text().splitlines()
+>       assert ".env" in ignore or ".env*" in ignore
+E       AssertionError: assert ('.env' in ['.git', '.venv', '__pycache__', '*.pyc', '.pytest_cache', '.ruff_cache', ...] or '.env*' in ['.git', '.venv', '__pycache__', '*.pyc', '.pytest_cache', '.ruff_cache', ...])
+
+tests/test_production_audit_v2.py:129: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_production_audit_v2.py::test_docker_context_excludes_local_credentials
+1 failed, 15 deselected in 0.24s

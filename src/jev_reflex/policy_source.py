@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Any
 
 import requests
-import yaml
 
 from .audit import AuditLog
 from .config import PolicySourceConfig, ReflexConfig
+from .serialization import safe_yaml_load
 from .signing import Ed25519Signer, load_public_key, verify_file
 
 logger = logging.getLogger(__name__)
@@ -107,7 +107,7 @@ class PolicyReloader:
             if self.local_config_path and self.local_config_path.exists():
                 try:
                     with self.local_config_path.open("r", encoding="utf-8") as f:
-                        local_data = yaml.safe_load(f)
+                        local_data = safe_yaml_load(f.read(1_048_577))
                     local_policy = ReflexConfig.model_validate(local_data)
                 except Exception as e:
                     logger.warning(f"Failed to load local policy override: {e}")
@@ -381,7 +381,7 @@ class PolicyFetcher:
             self._verify_signature(
                 policy_path, signature_path, self.config.pinned_signature_pubkey, data=raw
             )
-            policy = ReflexConfig.model_validate(yaml.safe_load(raw))
+            policy = ReflexConfig.model_validate(safe_yaml_load(raw))
 
             policy_hash = self._compute_policy_hash(policy)
 
@@ -423,7 +423,7 @@ class PolicyFetcher:
             self._verify_signature(
                 policy_file_path, sig_file_path, self.config.pinned_signature_pubkey, data=raw
             )
-        policy = ReflexConfig.model_validate(yaml.safe_load(raw))
+        policy = ReflexConfig.model_validate(safe_yaml_load(raw))
 
         policy_hash = self._compute_policy_hash(policy)
 
@@ -455,7 +455,7 @@ class PolicyFetcher:
         self._verify_signature(
             policy_path, signature_path, self.config.pinned_signature_pubkey, data=raw
         )
-        policy = ReflexConfig.model_validate(yaml.safe_load(raw))
+        policy = ReflexConfig.model_validate(safe_yaml_load(raw))
 
         policy_hash = self._compute_policy_hash(policy)
 

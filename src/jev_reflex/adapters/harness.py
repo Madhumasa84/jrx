@@ -30,6 +30,8 @@ def evaluate_harness_hook(
 def should_block(result: EvaluationResult, config: ReflexConfig, *, review_supported: bool) -> bool:
     """Apply the configured execution mode to a harness that can block calls."""
 
+    if any(rule.startswith("agent_control:") for rule in result.triggered_rules):
+        return True
     if config.mode == "advisory":
         return False
     if result.degraded or result.decision == "HOLD":
@@ -40,6 +42,8 @@ def should_block(result: EvaluationResult, config: ReflexConfig, *, review_suppo
 def permission_decision(result: EvaluationResult, config: ReflexConfig) -> str:
     """Map the public policy result to a host with allow/ask/deny controls."""
 
+    if any(rule.startswith("agent_control:") for rule in result.triggered_rules):
+        return "deny"
     if config.mode == "advisory":
         return "allow"
     if result.degraded or result.decision == "HOLD":

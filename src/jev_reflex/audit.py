@@ -5,7 +5,10 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import os
+import stat
 from collections.abc import Iterable
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -178,6 +181,25 @@ class AuditLog:
         """Get the expanded log file path."""
         return Path(self.config.audit.path).expanduser()
 
+    @contextmanager
+    def _open_append(self):
+        descriptor = os.open(
+            self._get_log_path(), os.O_CREAT | os.O_APPEND | os.O_RDWR | os.O_NOFOLLOW, 0o600
+        )
+        try:
+            details = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(details.st_mode)
+                or details.st_uid != os.geteuid()
+                or details.st_mode & 0o077
+                or details.st_nlink != 1
+            ):
+                raise ValueError("audit log must be an owner-only regular file")
+            with os.fdopen(descriptor, "a+", encoding="utf-8", closefd=False) as handle:
+                yield handle
+        finally:
+            os.close(descriptor)
+
     def _get_last_entry(self) -> AuditEntry | None:
         """Read the last entry from the log to get the previous hash."""
         log_path = self._get_log_path()
@@ -308,12 +330,7 @@ class AuditLog:
         hook_correlation: dict[str, Any] | None,
     ) -> None:
         """Atomically read last entry, compute next sequence, and write with file locking."""
-        log_path = self._get_log_path()
-        # Create file with 0600 permissions if it doesn't exist
-        if not log_path.exists():
-            log_path.touch(mode=0o600)
-
-        with log_path.open("a+", encoding="utf-8") as f:
+        with self._open_append() as f:
             # Acquire exclusive lock
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
@@ -344,6 +361,7 @@ class AuditLog:
                 # Write as JSONL
                 f.write(json.dumps(entry.to_dict()) + "\n")
                 f.flush()
+                os.fsync(f.fileno())
             finally:
                 # Release lock
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
@@ -361,11 +379,7 @@ class AuditLog:
         timestamp = datetime.now(UTC).isoformat()
         policy_version_hash = self._compute_policy_version_hash(self.config)
 
-        log_path = self._get_log_path()
-        if not log_path.exists():
-            log_path.touch(mode=0o600)
-
-        with log_path.open("a+", encoding="utf-8") as f:
+        with self._open_append() as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
                 f.seek(0)
@@ -386,6 +400,7 @@ class AuditLog:
 
                 f.write(json.dumps(entry.to_dict()) + "\n")
                 f.flush()
+                os.fsync(f.fileno())
                 return entry
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)

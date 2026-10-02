@@ -46,19 +46,19 @@ eliminate races if another process changes files or links between evaluation and
 Redaction uses a hybrid approach combining regex patterns and gitleaks for secret detection:
 
 - **Regex patterns**: Detect common API keys, bearer headers, GitHub tokens, AWS access keys, private-key blocks, password/token/secret assignments, credential flags, and secret-looking object fields. This is heuristic and fast, but not comprehensive.
-- **Gitleaks integration**: When available, gitleaks provides comprehensive secret detection using its extensive rule set covering many more patterns than the regex approach.
+- **Gitleaks integration**: When available, gitleaks provides additional heuristic secret detection using its extensive rule set covering many more patterns than the regex approach.
 
 **Gitleaks is optional but recommended:**
 
 - If gitleaks is installed on PATH, JEV Reflex automatically uses it for enhanced secret detection
 - If gitleaks is not available, JEV Reflex falls back to regex-only redaction with a one-time warning
-- On gitleaks failure (timeout, error, or crash), JEV Reflex fails toward MORE redaction: the entire context is treated as potentially containing secrets and forces a REVIEW decision
+- On gitleaks failure (timeout, error, or crash), JEV Reflex fails toward MORE redaction: the entire context is treated as potentially containing secrets and marks evaluation degraded and forces a REVIEW decision; non-advisory execution denies degraded results
 - To install gitleaks: https://github.com/gitleaks/gitleaks#installation
 
 **The hybrid approach:**
 
 - Regex patterns run in all cases and catch project-specific patterns that gitleaks may miss
-- Gitleaks provides comprehensive coverage of standard secret formats when available
+- Gitleaks extends coverage of standard secret formats when available
 - Both redaction layers are applied; their findings are unioned, not replaced
 - This ensures no degradation in redaction coverage when gitleaks is added
 
@@ -92,11 +92,11 @@ JEV Reflex provides an optional append-only, tamper-evident audit log for policy
 
 ### Guarantees
 
-- **Tamper-evidence**: Each entry is cryptographically linked to the previous entry via SHA-256 hashing. Any modification to a single byte in the log will break the hash chain and be detected by `jrx audit verify`.
+- **Tamper-evidence**: Each entry is cryptographically linked to the previous entry via SHA-256 hashing. Changes to protected fields break the hash chain. Canonical JSON hashing does not authenticate whitespace. Removing a valid trailing segment leaves a valid chain unless an externally trusted checkpoint fixes its expected tip.
 - **Append-only writes**: The log uses O_APPEND mode and file locking to ensure entries are only appended, never modified in place.
 - **Sequence integrity**: Entries are numbered sequentially; gaps or reordering are detected during verification.
 - **Secret redaction**: All action summaries are redacted using the same deterministic patterns as the rest of JEV Reflex before being written to the log.
-- **File permissions**: Log files are created with 0600 permissions (read/write only by owner) when possible.
+- **File permissions**: Appends require an owner-only regular file and reject symlinks or additional hard links; new files use 0600 permissions.
 - **Concurrent safety**: File locking prevents corruption when multiple processes write to the same log file.
 
 ### What the audit log does NOT guarantee
@@ -135,7 +135,7 @@ jrx audit tail [-n 10] [--json] [--path /path/to/audit.log]
 
 ### Known limitations
 
-1. **No cryptographic signing**: The current implementation uses hash chaining but does not include cryptographic signatures. This will be added in a future update to protect against attackers who can rewrite the entire chain.
+1. **Optional signing**: Ed25519 decision signing is implemented when configured. Unsigned chains can be recomputed; even signed chains do not detect valid suffix deletion without an external checkpoint.
 2. **No automatic rotation**: While a `rotate_mb` configuration option exists, automatic log rotation is not yet implemented. Administrators should monitor log size and rotate manually as needed.
 3. **No compression**: Logs are stored as plain text JSONL. Compression or archival strategies are left to the administrator.
 
@@ -186,7 +186,7 @@ This command runs a comprehensive test matrix against mock failure modes and rep
 
 ### Known limitations
 
-- Clock skew detection (broker response timestamp validation) is not yet implemented and will be added in Prompt 1.3 with cryptographic signing
+- Broker responses are bound to request IDs and finite timestamps with bounded clock skew. This is response validation, not remote host attestation.
 - The fail-closed behavior applies to semantic evaluation failures; hard rules (deterministic checks) continue to function independently
 
 ## Central policy mode
@@ -219,7 +219,7 @@ policy_source:
 - Local cannot remove entries from central policy
 - Local cannot raise thresholds above central's thresholds (lower = stricter)
 - Local can lower thresholds (making them stricter)
-- Local can tighten mode (advisory → review → enforce), but cannot loosen it
+- Local mode merging uses the actual execution strictness: advisory < enforce < review; review requires human handling of REVIEW decisions
 - Attempted loosening is logged and ignored
 
 **The merge invariant is enforced by code, not just documentation:**
@@ -308,7 +308,8 @@ signing:
 
 - When signing is configured, each audit log entry includes a `decision_signature` field
 - The signature covers the entry hash, ensuring that any modification to the entry invalidates the signature
-- Signatures are optional; audit logging continues even if signing fails
+- Signing is optional to configure. Once configured, signing failure refuses the audit
+  append; enabled audit failure blocks non-advisory execution.
 
 **Verification:**
 
@@ -325,3 +326,18 @@ This checks both hash chain integrity and decision signatures, reporting any mis
 - **Key rotation**: Manual key rotation is required; there is no automated key rotation mechanism
 - **Audit log performance**: Signing adds a small performance overhead to audit log writes
 - **Bootstrap config protection**: The bootstrap config file itself is not signed; protect it with filesystem permissions (mode 0600, owned by root or a dedicated user)
+
+## Production audit hardening and optional controls
+
+Security YAML rejects duplicate/unknown keys, aliases and excessive size/depth instead
+of silently selecting a value. Existing configurations with ignored keys must be corrected.
+Audit append rejects symlinks and unsafe file ownership/permissions; enabled audit write
+failure produces a degraded HOLD in non-advisory modes. Ordinary semantic degradation
+cannot be bypassed with `exec --yes` in non-advisory modes.
+
+The optional [intent guard](intent-lineage.md) and [authority leases](authority-delegation.md)
+use authenticated host state and atomic transactions. Their denials remain binding
+under advisory mode, ordinary approvals and `--yes`. Both require host protection of
+keys, state, configuration and identity/session assertions. They are implemented but
+autonomous host deployment remains experimental; they do not establish runtime
+confinement, perfect intent understanding or freshness against whole-store rollback.

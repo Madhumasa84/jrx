@@ -38,7 +38,9 @@ def openrouter_hook_response(
     """Map policy output to OpenRouter's pre-tool and approval hook results."""
 
     message = reason or result.reason_summary()
-    if config.mode == "advisory":
+    if config.mode == "advisory" and not any(
+        rule.startswith("agent_control:") for rule in result.triggered_rules
+    ):
         return {}
     if _is_permission_request(event):
         decision = permission_decision(result, config)

@@ -1,0 +1,22 @@
+...s.................................................................... [ 10%]
+........................................................................ [ 20%]
+........................................................................ [ 30%]
+........................................................................ [ 41%]
+........................................................................ [ 51%]
+........................................................................ [ 61%]
+........................................................................ [ 72%]
+........................................................................ [ 82%]
+........................................................................ [ 92%]
+.................................................                        [100%]
+=============================== warnings summary ===============================
+tests/test_gitleaks_redaction.py::test_redact_text_with_gitleaks_no_gitleaks
+tests/test_gitleaks_redaction.py::test_gitleaks_redactor_not_available
+tests/test_gitleaks_redaction.py::test_redacted_context_with_gitleaks
+tests/test_gitleaks_redaction.py::test_get_gitleaks_redactor_singleton
+  /tmp/jrx-production-audit-v2/src/jev_reflex/redaction.py:209: UserWarning: gitleaks not found, falling back to regex-only redaction — see docs/security.md
+    self._available = _check_gitleaks_available()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+SKIPPED [1] tests/integration/test_live_broker.py:23: requires explicit live opt-in and host TypeSafe credentials
+696 passed, 1 skipped, 4 warnings in 559.11s (0:09:19)

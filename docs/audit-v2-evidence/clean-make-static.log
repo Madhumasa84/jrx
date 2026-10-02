@@ -1,0 +1,6 @@
+/home/masa84/jev_reflex/.venv/bin/python -m ruff check .
+All checks passed!
+/home/masa84/jev_reflex/.venv/bin/python -m ruff format --check .
+133 files already formatted
+/home/masa84/jev_reflex/.venv/bin/python -m ruff format .
+133 files left unchanged

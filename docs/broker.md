@@ -62,8 +62,8 @@ jrx check --transport direct --command 'python migrate.py'
 ```
 
 Custom endpoints use `broker run --socket /absolute/private-directory/reflex.sock`
-and the same `jev.socket` in client configuration. Only Unix sockets are supported;
-the `BrokerClient` semantic interface is the extension point for future transports.
+and the same `jev.socket` in client configuration. This local transport uses Unix sockets;
+TLS transport is also supported as described below.
 
 ## TLS transport configuration
 

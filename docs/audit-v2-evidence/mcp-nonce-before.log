@@ -1,0 +1,44 @@
+F.                                                                       [100%]
+=================================== FAILURES ===================================
+________ test_authority_multiple_mcp_calls_use_distinct_request_nonces _________
+
+controls = (ReflexConfig(mode='enforce', policy=PolicyConfig(allow_hold_override=False), thresholds=ThresholdConfig(strong=0.9, r...AuthorityStore object at 0x7576729d1d50>, PosixPath('/tmp/pytest-of-masa84/pytest-11/test_authority_multiple_mcp_ca0'))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7576729f4f50>
+
+    def test_authority_multiple_mcp_calls_use_distinct_request_nonces(controls, monkeypatch):
+        from io import BytesIO
+        from types import SimpleNamespace
+        from jev_reflex.agent_controls import policy_revision
+        from jev_reflex.mcp_gateway import MCPGateway
+
+        config, _, leases, root = controls
+        config.intent.enabled = False
+        config.mcp.use_jev = False
+        from jev_reflex.config import MCPToolRule
+        config.mcp.tools = [MCPToolRule(server="files", name="read", effect="read")]
+        lease = issue(leases, root, policy_revision=policy_revision(config))
+        monkeypatch.chdir(root)
+        monkeypatch.setenv("JRX_SESSION_ID", "parent-session")
+        monkeypatch.setenv("JRX_AGENT_ID", "parent")
+        monkeypatch.setenv("JRX_AUTHORITY_LEASE_ID", lease["lease_id"])
+        monkeypatch.setenv("JRX_ACTION_NONCE", "fixed-host-launch")
+        upstream = BytesIO()
+        process = SimpleNamespace(stdin=upstream, poll=lambda: None)
+        gateway = MCPGateway(config, "files", ["unused"], sink=BytesIO())
+        first = b'{"id":1,"method":"tools/call","params":{"name":"read","arguments":{"path":"tests/test_one.py"}}}\n'
+        second = first.replace(b'"id":1', b'"id":2')
+        try:
+            gateway._handle(process, first)
+            gateway._handle(process, second)
+>           assert upstream.getvalue() == first + second
+E           assert b'{"id":1,"me..._one.py"}}}\n' == b'{"id":1,"me..._one.py"}}}\n'
+E
+E             Use -v to get more diff
+
+/tmp/jrx-production-audit-v2/tests/test_intent_authority.py:438: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     jrx::0 policy_decision
+INFO     jrx::0 policy_decision
+=========================== short test summary info ============================
+FAILED tests/test_intent_authority.py::test_authority_multiple_mcp_calls_use_distinct_request_nonces
+1 failed, 1 passed, 33 deselected in 3.27s
