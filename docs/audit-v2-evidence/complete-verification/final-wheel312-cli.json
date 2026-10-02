@@ -1,0 +1,13 @@
+{
+  "name": "final-wheel312-cli",
+  "command": [
+    "/home/masa84/jev_reflex/.venv/bin/python",
+    "/tmp/jrx-complete-evidence-9107b0d/final-package-smoke.py",
+    "/tmp/jrx-complete-wheel312/bin",
+    "/tmp/jrx-complete-evidence-9107b0d/final-wheel312-cli-details.json"
+  ],
+  "cwd": "/tmp",
+  "log": "/tmp/jrx-complete-evidence-9107b0d/final-wheel312-cli.log",
+  "exit_code": 0,
+  "elapsed_seconds": 32.85
+}

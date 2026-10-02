@@ -1,12 +1,19 @@
 # JRX Production Audit V2
 
+The [complete verification follow-up](COMPLETE_TEST_REPORT.md) records subsequent
+Python 3.11/3.12 installed-package tests, the V2-010 state-validation fix and retained
+intermittent test failures. Its tested implementation is `3e676b2`; the final serial
+source suite passed **699 tests**, with one paid live test skipped. The initial audit
+results below retain their original chronology.
+
 ## 1. Executive Summary
 
 The audit reproduced **nine current defects**, repaired them with regression tests,
 and implemented two optional controls: Execution Lineage & Intent Drift Guard and
 Scoped Agent Authority Leases. The original checkout and its five pre-existing
 modified files were preserved. Changes are on `hardening/production-audit-v2` in
-`/tmp/jrx-production-audit-v2`; nothing was pushed, merged or published.
+`/tmp/jrx-production-audit-v2`. The branch was subsequently pushed at the user's request;
+no main merge or release publication occurred.
 
 Baseline: **628 passed, 1 skipped**. Post-change verification: **696 passed, 1 skipped**.
 The only skipped test requires paid TypeSafe access, which was not authorized.
@@ -97,6 +104,7 @@ adversarial testing, not exhaustive fuzzing of arbitrary shells or programs.
 | V2-007 | Medium | Audit/evaluator | Enabled audit write failure retained ALLOW in enforce mode | Yes | Yes | `test_required_audit_failure_blocks_enforce` |
 | V2-008 | High | Shell detection | Newlines, substitution and `find -exec` obscured recursive deletion | Yes, evaluated as data | Yes | `test_explicit_nested_destructive_commands_hold` |
 | V2-009 | Medium | Docker context | Ignore rules admitted local credentials into builder/cache | Yes, structural assertion and synthetic Docker COPY | Yes | `test_docker_context_excludes_local_credentials` plus Docker probe |
+| V2-010 | Low | Optional control state | Malformed SQLite BLOB/Unicode fields raise uncontrolled errors | Yes, three cases on `9107b0d` | Yes, `3e676b2` | `test_malformed_authenticated_fields_produce_controlled_denial` |
 
 No malicious/destructive command was executed on the host. Severity reflects the
 examined deployments and actual behavior; no Critical defect was confirmed. Detection
@@ -286,10 +294,11 @@ No global novelty or marketing priority claim is made.
 
 Paid TypeSafe calls, real provider credentials, external JWKS changes, real agent-host
 security separation, remote deployments/Kubernetes, multiarch runtime, macOS runtime,
-Python 3.12 runtime, Windows, disk-fill/kill-during-write campaigns, live metadata service
+Windows, disk-fill/kill-during-write campaigns, live metadata service
 access and kernel privilege escalation were not performed. Some cases have local mocks
 or configuration tests, which are not equivalent to deployment evidence. The user
 explicitly permitted skipping work that cannot be performed safely.
+Python 3.12 was subsequently tested in the complete verification follow-up.
 
 ## 17. Verification Results
 

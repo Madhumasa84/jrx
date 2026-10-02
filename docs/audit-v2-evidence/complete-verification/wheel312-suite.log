@@ -1,0 +1,43 @@
+...s.................................................................... [ 10%]
+........................................................................ [ 20%]
+........................................................................ [ 30%]
+........................................................................ [ 41%]
+........................................................................ [ 51%]
+........................................................................ [ 61%]
+........................................................................ [ 72%]
+........................................................................ [ 82%]
+........................................................................ [ 92%]
+.................................................                        [100%]
+=============================== warnings summary ===============================
+tests/test_gitleaks_redaction.py::test_redact_text_with_gitleaks_no_gitleaks
+tests/test_gitleaks_redaction.py::test_gitleaks_redactor_not_available
+tests/test_gitleaks_redaction.py::test_redacted_context_with_gitleaks
+tests/test_gitleaks_redaction.py::test_get_gitleaks_redactor_singleton
+  /tmp/jrx-complete-wheel312/lib/python3.12/site-packages/jev_reflex/redaction.py:209: UserWarning: gitleaks not found, falling back to regex-only redaction — see docs/security.md
+    self._available = _check_gitleaks_available()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+============================= slowest 20 durations =============================
+44.74s call     tests/test_policy_golden.py::test_policy_change_catches_regression
+42.82s call     tests/test_policy_golden.py::test_default_policy_all_pass
+42.04s call     tests/test_policy_golden.py::test_cli_policy_test_command
+40.94s call     tests/test_audit.py::test_chain_integrity_across_sequential_writes
+36.19s call     tests/test_policy_golden.py::test_cli_policy_test_json
+24.13s call     tests/test_fail_closed.py::test_degraded_evaluation_reason_codes_distinct
+23.04s call     tests/integration/test_docker_sandbox.py::test_allowlisted_egress_uses_proxy_and_blocks_direct_routes
+21.81s call     tests/test_cli.py::test_benchmark_command_works_offline
+15.83s call     tests/test_audit_v2_properties.py::test_git_flag_order_and_quoting_properties
+15.74s call     tests/test_git_inspection.py::test_fixture_benchmark_is_independent_of_worktree_diff
+10.80s call     tests/test_cli.py::test_compare_explains_semantic_contribution
+9.67s call     tests/test_deep_harness.py::test_reviewed_memory_survives_new_session
+9.46s call     tests/test_fail_closed.py::test_typesafe_failures_are_fail_closed[advisory-401_unauthorized]
+8.59s call     tests/test_deep_harness.py::test_recovery_requires_explicit_acknowledgment
+7.21s call     tests/test_fail_closed.py::test_concurrent_mode_samples_with_one_degraded
+6.81s call     tests/test_mcp_schema_pin.py::test_pinned_mcp_input_schema_allows_match_and_blocks_drift
+6.57s call     tests/test_fail_closed.py::test_typesafe_failures_are_fail_closed[review-missing_keys]
+6.55s call     tests/integration/test_docker_sandbox.py::test_jrx_exec_runs_in_isolated_container_end_to_end
+6.40s call     tests/test_intent_authority.py::test_slow_drift_through_evaluation_pipeline
+6.35s call     tests/test_cli.py::test_stability_json_has_decision_and_signal_metrics
+=========================== short test summary info ============================
+SKIPPED [1] tests/integration/test_live_broker.py:23: requires explicit live opt-in and host TypeSafe credentials
+696 passed, 1 skipped, 4 warnings in 788.10s (0:13:08)

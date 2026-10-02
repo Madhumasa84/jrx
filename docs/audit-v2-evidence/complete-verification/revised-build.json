@@ -1,0 +1,15 @@
+{
+  "name": "revised-build",
+  "command": [
+    "/home/masa84/jev_reflex/.venv/bin/python",
+    "-m",
+    "build",
+    "--no-isolation",
+    "--outdir",
+    "/tmp/jrx-complete-evidence-9107b0d/dist-repaired"
+  ],
+  "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+  "log": "/tmp/jrx-complete-evidence-9107b0d/revised-build.log",
+  "exit_code": 0,
+  "elapsed_seconds": 2.13
+}

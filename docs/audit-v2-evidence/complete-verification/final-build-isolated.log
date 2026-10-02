@@ -1,0 +1,559 @@
+* Creating isolated environment: venv+pip...
+* Installing packages in isolated environment:
+  - setuptools>=77
+* Getting build dependencies for sdist...
+running egg_info
+writing src/jev_reflex.egg-info/PKG-INFO
+writing dependency_links to src/jev_reflex.egg-info/dependency_links.txt
+writing entry points to src/jev_reflex.egg-info/entry_points.txt
+writing requirements to src/jev_reflex.egg-info/requires.txt
+writing top-level names to src/jev_reflex.egg-info/top_level.txt
+reading manifest file 'src/jev_reflex.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+writing manifest file 'src/jev_reflex.egg-info/SOURCES.txt'
+* Installed build dependency versions:
+  - setuptools==84.0.0
+* Building sdist...
+running sdist
+running egg_info
+writing src/jev_reflex.egg-info/PKG-INFO
+writing dependency_links to src/jev_reflex.egg-info/dependency_links.txt
+writing entry points to src/jev_reflex.egg-info/entry_points.txt
+writing requirements to src/jev_reflex.egg-info/requires.txt
+writing top-level names to src/jev_reflex.egg-info/top_level.txt
+reading manifest file 'src/jev_reflex.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+writing manifest file 'src/jev_reflex.egg-info/SOURCES.txt'
+running check
+creating jev_reflex-0.1.0
+creating jev_reflex-0.1.0/benchmarks/stability
+creating jev_reflex-0.1.0/src/jev_reflex
+creating jev_reflex-0.1.0/src/jev_reflex.egg-info
+creating jev_reflex-0.1.0/src/jev_reflex/adapters
+creating jev_reflex-0.1.0/src/jev_reflex/checks
+creating jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+creating jev_reflex-0.1.0/src/jev_reflex/integrations
+creating jev_reflex-0.1.0/src/jev_reflex/stability
+creating jev_reflex-0.1.0/src/jev_reflex/workspace
+creating jev_reflex-0.1.0/tests
+copying files to jev_reflex-0.1.0...
+copying LICENSE -> jev_reflex-0.1.0
+copying README.md -> jev_reflex-0.1.0
+copying pyproject.toml -> jev_reflex-0.1.0
+copying benchmarks/stability/ambiguous-migration.json -> jev_reflex-0.1.0/benchmarks/stability
+copying benchmarks/stability/dependency-update.json -> jev_reflex-0.1.0/benchmarks/stability
+copying benchmarks/stability/destructive-command.json -> jev_reflex-0.1.0/benchmarks/stability
+copying benchmarks/stability/formatting.json -> jev_reflex-0.1.0/benchmarks/stability
+copying benchmarks/stability/prompt-injection.json -> jev_reflex-0.1.0/benchmarks/stability
+copying benchmarks/stability/repo-escape.json -> jev_reflex-0.1.0/benchmarks/stability
+copying benchmarks/stability/safe-test.json -> jev_reflex-0.1.0/benchmarks/stability
+copying benchmarks/stability/secret-exposure.json -> jev_reflex-0.1.0/benchmarks/stability
+copying src/jev_reflex/__init__.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/__main__.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/_egress_proxy.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/action_scope.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/agent_cli.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/agent_controls.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/agent_state.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/audit.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/authority.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/broker.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/broker_cli.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/calibration.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/cli.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/config.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/context.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/dashboard.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/enterprise.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/evaluator.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/formatters.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/git_inspection.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/golden_runner.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/harness_cli.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/identity.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/intent.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/live_benchmark.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/logging_config.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/mcp_gateway.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/metrics.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/models.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/policy.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/policy_rollout.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/policy_source.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/redaction.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/sandbox.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/serialization.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/session_limits.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex/signing.py -> jev_reflex-0.1.0/src/jev_reflex
+copying src/jev_reflex.egg-info/PKG-INFO -> jev_reflex-0.1.0/src/jev_reflex.egg-info
+copying src/jev_reflex.egg-info/SOURCES.txt -> jev_reflex-0.1.0/src/jev_reflex.egg-info
+copying src/jev_reflex.egg-info/dependency_links.txt -> jev_reflex-0.1.0/src/jev_reflex.egg-info
+copying src/jev_reflex.egg-info/entry_points.txt -> jev_reflex-0.1.0/src/jev_reflex.egg-info
+copying src/jev_reflex.egg-info/requires.txt -> jev_reflex-0.1.0/src/jev_reflex.egg-info
+copying src/jev_reflex.egg-info/top_level.txt -> jev_reflex-0.1.0/src/jev_reflex.egg-info
+copying src/jev_reflex/adapters/__init__.py -> jev_reflex-0.1.0/src/jev_reflex/adapters
+copying src/jev_reflex/adapters/antigravity.py -> jev_reflex-0.1.0/src/jev_reflex/adapters
+copying src/jev_reflex/adapters/claude_code.py -> jev_reflex-0.1.0/src/jev_reflex/adapters
+copying src/jev_reflex/adapters/codex.py -> jev_reflex-0.1.0/src/jev_reflex/adapters
+copying src/jev_reflex/adapters/deepseek.py -> jev_reflex-0.1.0/src/jev_reflex/adapters
+copying src/jev_reflex/adapters/generic.py -> jev_reflex-0.1.0/src/jev_reflex/adapters
+copying src/jev_reflex/adapters/harness.py -> jev_reflex-0.1.0/src/jev_reflex/adapters
+copying src/jev_reflex/adapters/openrouter.py -> jev_reflex-0.1.0/src/jev_reflex/adapters
+copying src/jev_reflex/adapters/pi.py -> jev_reflex-0.1.0/src/jev_reflex/adapters
+copying src/jev_reflex/checks/__init__.py -> jev_reflex-0.1.0/src/jev_reflex/checks
+copying src/jev_reflex/checks/common.py -> jev_reflex-0.1.0/src/jev_reflex/checks
+copying src/jev_reflex/checks/destructive.py -> jev_reflex-0.1.0/src/jev_reflex/checks
+copying src/jev_reflex/checks/filesystem.py -> jev_reflex-0.1.0/src/jev_reflex/checks
+copying src/jev_reflex/checks/git_risk.py -> jev_reflex-0.1.0/src/jev_reflex/checks
+copying src/jev_reflex/checks/repo_boundary.py -> jev_reflex-0.1.0/src/jev_reflex/checks
+copying src/jev_reflex/checks/safe_commands.py -> jev_reflex-0.1.0/src/jev_reflex/checks
+copying src/jev_reflex/checks/secrets.py -> jev_reflex-0.1.0/src/jev_reflex/checks
+copying src/jev_reflex/fixtures/policy_golden/case_01.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_02.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_03.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_04.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_05.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_06.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_07.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_08.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_09.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_10.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_11.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_12.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_13.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_14.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_15.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_16.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_17.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_18.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_19.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_20.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_21.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_22.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_23.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_24.yaml -> jev_reflex-0.1.0/src/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/integrations/__init__.py -> jev_reflex-0.1.0/src/jev_reflex/integrations
+copying src/jev_reflex/integrations/typesafe.py -> jev_reflex-0.1.0/src/jev_reflex/integrations
+copying src/jev_reflex/stability/__init__.py -> jev_reflex-0.1.0/src/jev_reflex/stability
+copying src/jev_reflex/stability/metrics.py -> jev_reflex-0.1.0/src/jev_reflex/stability
+copying src/jev_reflex/stability/runner.py -> jev_reflex-0.1.0/src/jev_reflex/stability
+copying src/jev_reflex/workspace/__init__.py -> jev_reflex-0.1.0/src/jev_reflex/workspace
+copying src/jev_reflex/workspace/acp_harness.py -> jev_reflex-0.1.0/src/jev_reflex/workspace
+copying src/jev_reflex/workspace/deep_harness.py -> jev_reflex-0.1.0/src/jev_reflex/workspace
+copying src/jev_reflex/workspace/handoff.py -> jev_reflex-0.1.0/src/jev_reflex/workspace
+copying src/jev_reflex/workspace/harness_tools.py -> jev_reflex-0.1.0/src/jev_reflex/workspace
+copying src/jev_reflex/workspace/hooks.py -> jev_reflex-0.1.0/src/jev_reflex/workspace
+copying src/jev_reflex/workspace/process.py -> jev_reflex-0.1.0/src/jev_reflex/workspace
+copying src/jev_reflex/workspace/providers.py -> jev_reflex-0.1.0/src/jev_reflex/workspace
+copying src/jev_reflex/workspace/state.py -> jev_reflex-0.1.0/src/jev_reflex/workspace
+copying src/jev_reflex/workspace/streaming.py -> jev_reflex-0.1.0/src/jev_reflex/workspace
+copying src/jev_reflex/workspace/ui.py -> jev_reflex-0.1.0/src/jev_reflex/workspace
+copying tests/test_acp_harness.py -> jev_reflex-0.1.0/tests
+copying tests/test_audit.py -> jev_reflex-0.1.0/tests
+copying tests/test_audit_v2_properties.py -> jev_reflex-0.1.0/tests
+copying tests/test_bootstrap_config.py -> jev_reflex-0.1.0/tests
+copying tests/test_broker.py -> jev_reflex-0.1.0/tests
+copying tests/test_calibration.py -> jev_reflex-0.1.0/tests
+copying tests/test_checks.py -> jev_reflex-0.1.0/tests
+copying tests/test_cli.py -> jev_reflex-0.1.0/tests
+copying tests/test_config.py -> jev_reflex-0.1.0/tests
+copying tests/test_context.py -> jev_reflex-0.1.0/tests
+copying tests/test_database_lifecycle.py -> jev_reflex-0.1.0/tests
+copying tests/test_deep_harness.py -> jev_reflex-0.1.0/tests
+copying tests/test_enterprise_approval.py -> jev_reflex-0.1.0/tests
+copying tests/test_evaluator.py -> jev_reflex-0.1.0/tests
+copying tests/test_fail_closed.py -> jev_reflex-0.1.0/tests
+copying tests/test_git_inspection.py -> jev_reflex-0.1.0/tests
+copying tests/test_gitleaks_redaction.py -> jev_reflex-0.1.0/tests
+copying tests/test_harness_adapters.py -> jev_reflex-0.1.0/tests
+copying tests/test_harness_cli.py -> jev_reflex-0.1.0/tests
+copying tests/test_harness_tools.py -> jev_reflex-0.1.0/tests
+copying tests/test_helm_chart.py -> jev_reflex-0.1.0/tests
+copying tests/test_human_override.py -> jev_reflex-0.1.0/tests
+copying tests/test_integration.py -> jev_reflex-0.1.0/tests
+copying tests/test_intent_authority.py -> jev_reflex-0.1.0/tests
+copying tests/test_live_benchmark.py -> jev_reflex-0.1.0/tests
+copying tests/test_mcp_argument_policy.py -> jev_reflex-0.1.0/tests
+copying tests/test_mcp_schema_pin.py -> jev_reflex-0.1.0/tests
+copying tests/test_mcp_session.py -> jev_reflex-0.1.0/tests
+copying tests/test_metrics.py -> jev_reflex-0.1.0/tests
+copying tests/test_observability_integration.py -> jev_reflex-0.1.0/tests
+copying tests/test_policy.py -> jev_reflex-0.1.0/tests
+copying tests/test_policy_golden.py -> jev_reflex-0.1.0/tests
+copying tests/test_policy_merge.py -> jev_reflex-0.1.0/tests
+copying tests/test_policy_rollout_dashboard.py -> jev_reflex-0.1.0/tests
+copying tests/test_policy_source.py -> jev_reflex-0.1.0/tests
+copying tests/test_production_audit_v2.py -> jev_reflex-0.1.0/tests
+copying tests/test_redaction.py -> jev_reflex-0.1.0/tests
+copying tests/test_review_regressions.py -> jev_reflex-0.1.0/tests
+copying tests/test_sandbox.py -> jev_reflex-0.1.0/tests
+copying tests/test_signature_snapshot.py -> jev_reflex-0.1.0/tests
+copying tests/test_signing.py -> jev_reflex-0.1.0/tests
+copying tests/test_stability.py -> jev_reflex-0.1.0/tests
+copying tests/test_tls_transport.py -> jev_reflex-0.1.0/tests
+copying tests/test_unified_workspace.py -> jev_reflex-0.1.0/tests
+Writing jev_reflex-0.1.0/setup.cfg
+Creating tar archive
+removing 'jev_reflex-0.1.0' (and everything under it)
+* Building wheel from sdist
+* Creating isolated environment: venv+pip...
+* Installing packages in isolated environment:
+  - setuptools>=77
+* Getting build dependencies for wheel...
+running egg_info
+writing src/jev_reflex.egg-info/PKG-INFO
+writing dependency_links to src/jev_reflex.egg-info/dependency_links.txt
+writing entry points to src/jev_reflex.egg-info/entry_points.txt
+writing requirements to src/jev_reflex.egg-info/requires.txt
+writing top-level names to src/jev_reflex.egg-info/top_level.txt
+reading manifest file 'src/jev_reflex.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+writing manifest file 'src/jev_reflex.egg-info/SOURCES.txt'
+* Installed build dependency versions:
+  - setuptools==84.0.0
+* Building wheel...
+running bdist_wheel
+running build
+running build_py
+creating build/lib/jev_reflex
+copying src/jev_reflex/git_inspection.py -> build/lib/jev_reflex
+copying src/jev_reflex/context.py -> build/lib/jev_reflex
+copying src/jev_reflex/intent.py -> build/lib/jev_reflex
+copying src/jev_reflex/enterprise.py -> build/lib/jev_reflex
+copying src/jev_reflex/identity.py -> build/lib/jev_reflex
+copying src/jev_reflex/authority.py -> build/lib/jev_reflex
+copying src/jev_reflex/__init__.py -> build/lib/jev_reflex
+copying src/jev_reflex/sandbox.py -> build/lib/jev_reflex
+copying src/jev_reflex/action_scope.py -> build/lib/jev_reflex
+copying src/jev_reflex/_egress_proxy.py -> build/lib/jev_reflex
+copying src/jev_reflex/serialization.py -> build/lib/jev_reflex
+copying src/jev_reflex/evaluator.py -> build/lib/jev_reflex
+copying src/jev_reflex/config.py -> build/lib/jev_reflex
+copying src/jev_reflex/__main__.py -> build/lib/jev_reflex
+copying src/jev_reflex/dashboard.py -> build/lib/jev_reflex
+copying src/jev_reflex/broker_cli.py -> build/lib/jev_reflex
+copying src/jev_reflex/signing.py -> build/lib/jev_reflex
+copying src/jev_reflex/golden_runner.py -> build/lib/jev_reflex
+copying src/jev_reflex/agent_cli.py -> build/lib/jev_reflex
+copying src/jev_reflex/formatters.py -> build/lib/jev_reflex
+copying src/jev_reflex/audit.py -> build/lib/jev_reflex
+copying src/jev_reflex/broker.py -> build/lib/jev_reflex
+copying src/jev_reflex/agent_state.py -> build/lib/jev_reflex
+copying src/jev_reflex/harness_cli.py -> build/lib/jev_reflex
+copying src/jev_reflex/policy_source.py -> build/lib/jev_reflex
+copying src/jev_reflex/live_benchmark.py -> build/lib/jev_reflex
+copying src/jev_reflex/session_limits.py -> build/lib/jev_reflex
+copying src/jev_reflex/redaction.py -> build/lib/jev_reflex
+copying src/jev_reflex/calibration.py -> build/lib/jev_reflex
+copying src/jev_reflex/logging_config.py -> build/lib/jev_reflex
+copying src/jev_reflex/cli.py -> build/lib/jev_reflex
+copying src/jev_reflex/metrics.py -> build/lib/jev_reflex
+copying src/jev_reflex/mcp_gateway.py -> build/lib/jev_reflex
+copying src/jev_reflex/agent_controls.py -> build/lib/jev_reflex
+copying src/jev_reflex/models.py -> build/lib/jev_reflex
+copying src/jev_reflex/policy.py -> build/lib/jev_reflex
+copying src/jev_reflex/policy_rollout.py -> build/lib/jev_reflex
+creating build/lib/jev_reflex/workspace
+copying src/jev_reflex/workspace/providers.py -> build/lib/jev_reflex/workspace
+copying src/jev_reflex/workspace/deep_harness.py -> build/lib/jev_reflex/workspace
+copying src/jev_reflex/workspace/state.py -> build/lib/jev_reflex/workspace
+copying src/jev_reflex/workspace/__init__.py -> build/lib/jev_reflex/workspace
+copying src/jev_reflex/workspace/handoff.py -> build/lib/jev_reflex/workspace
+copying src/jev_reflex/workspace/ui.py -> build/lib/jev_reflex/workspace
+copying src/jev_reflex/workspace/harness_tools.py -> build/lib/jev_reflex/workspace
+copying src/jev_reflex/workspace/streaming.py -> build/lib/jev_reflex/workspace
+copying src/jev_reflex/workspace/hooks.py -> build/lib/jev_reflex/workspace
+copying src/jev_reflex/workspace/process.py -> build/lib/jev_reflex/workspace
+copying src/jev_reflex/workspace/acp_harness.py -> build/lib/jev_reflex/workspace
+creating build/lib/jev_reflex/integrations
+copying src/jev_reflex/integrations/__init__.py -> build/lib/jev_reflex/integrations
+copying src/jev_reflex/integrations/typesafe.py -> build/lib/jev_reflex/integrations
+creating build/lib/jev_reflex/checks
+copying src/jev_reflex/checks/filesystem.py -> build/lib/jev_reflex/checks
+copying src/jev_reflex/checks/__init__.py -> build/lib/jev_reflex/checks
+copying src/jev_reflex/checks/common.py -> build/lib/jev_reflex/checks
+copying src/jev_reflex/checks/secrets.py -> build/lib/jev_reflex/checks
+copying src/jev_reflex/checks/destructive.py -> build/lib/jev_reflex/checks
+copying src/jev_reflex/checks/safe_commands.py -> build/lib/jev_reflex/checks
+copying src/jev_reflex/checks/repo_boundary.py -> build/lib/jev_reflex/checks
+copying src/jev_reflex/checks/git_risk.py -> build/lib/jev_reflex/checks
+creating build/lib/jev_reflex/stability
+copying src/jev_reflex/stability/__init__.py -> build/lib/jev_reflex/stability
+copying src/jev_reflex/stability/metrics.py -> build/lib/jev_reflex/stability
+copying src/jev_reflex/stability/runner.py -> build/lib/jev_reflex/stability
+creating build/lib/jev_reflex/adapters
+copying src/jev_reflex/adapters/openrouter.py -> build/lib/jev_reflex/adapters
+copying src/jev_reflex/adapters/__init__.py -> build/lib/jev_reflex/adapters
+copying src/jev_reflex/adapters/antigravity.py -> build/lib/jev_reflex/adapters
+copying src/jev_reflex/adapters/pi.py -> build/lib/jev_reflex/adapters
+copying src/jev_reflex/adapters/deepseek.py -> build/lib/jev_reflex/adapters
+copying src/jev_reflex/adapters/codex.py -> build/lib/jev_reflex/adapters
+copying src/jev_reflex/adapters/generic.py -> build/lib/jev_reflex/adapters
+copying src/jev_reflex/adapters/harness.py -> build/lib/jev_reflex/adapters
+copying src/jev_reflex/adapters/claude_code.py -> build/lib/jev_reflex/adapters
+running egg_info
+writing src/jev_reflex.egg-info/PKG-INFO
+writing dependency_links to src/jev_reflex.egg-info/dependency_links.txt
+writing entry points to src/jev_reflex.egg-info/entry_points.txt
+writing requirements to src/jev_reflex.egg-info/requires.txt
+writing top-level names to src/jev_reflex.egg-info/top_level.txt
+reading manifest file 'src/jev_reflex.egg-info/SOURCES.txt'
+adding license file 'LICENSE'
+writing manifest file 'src/jev_reflex.egg-info/SOURCES.txt'
+creating build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_13.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_19.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_24.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_08.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_21.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_23.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_18.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_17.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_01.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_06.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_07.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_02.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_22.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_09.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_11.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_12.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_10.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_14.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_03.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_15.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_20.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_04.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_05.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+copying src/jev_reflex/fixtures/policy_golden/case_16.yaml -> build/lib/jev_reflex/fixtures/policy_golden
+installing to build/bdist.linux-x86_64/wheel
+running install
+running install_lib
+creating build/bdist.linux-x86_64/wheel
+creating build/bdist.linux-x86_64/wheel/jev_reflex
+copying build/lib/jev_reflex/git_inspection.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/context.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/intent.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/enterprise.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/identity.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/authority.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/__init__.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/sandbox.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/action_scope.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/_egress_proxy.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/serialization.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/evaluator.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/config.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/__main__.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/dashboard.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/broker_cli.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/signing.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/golden_runner.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/agent_cli.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/formatters.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+creating build/bdist.linux-x86_64/wheel/jev_reflex/workspace
+copying build/lib/jev_reflex/workspace/providers.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/workspace
+copying build/lib/jev_reflex/workspace/deep_harness.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/workspace
+copying build/lib/jev_reflex/workspace/state.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/workspace
+copying build/lib/jev_reflex/workspace/__init__.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/workspace
+copying build/lib/jev_reflex/workspace/handoff.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/workspace
+copying build/lib/jev_reflex/workspace/ui.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/workspace
+copying build/lib/jev_reflex/workspace/harness_tools.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/workspace
+copying build/lib/jev_reflex/workspace/streaming.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/workspace
+copying build/lib/jev_reflex/workspace/hooks.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/workspace
+copying build/lib/jev_reflex/workspace/process.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/workspace
+copying build/lib/jev_reflex/workspace/acp_harness.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/workspace
+copying build/lib/jev_reflex/audit.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/broker.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+creating build/bdist.linux-x86_64/wheel/jev_reflex/integrations
+copying build/lib/jev_reflex/integrations/__init__.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/integrations
+copying build/lib/jev_reflex/integrations/typesafe.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/integrations
+copying build/lib/jev_reflex/agent_state.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/harness_cli.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/policy_source.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/live_benchmark.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/session_limits.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/redaction.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+creating build/bdist.linux-x86_64/wheel/jev_reflex/checks
+copying build/lib/jev_reflex/checks/filesystem.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/checks
+copying build/lib/jev_reflex/checks/__init__.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/checks
+copying build/lib/jev_reflex/checks/common.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/checks
+copying build/lib/jev_reflex/checks/secrets.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/checks
+copying build/lib/jev_reflex/checks/destructive.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/checks
+copying build/lib/jev_reflex/checks/safe_commands.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/checks
+copying build/lib/jev_reflex/checks/repo_boundary.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/checks
+copying build/lib/jev_reflex/checks/git_risk.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/checks
+creating build/bdist.linux-x86_64/wheel/jev_reflex/stability
+copying build/lib/jev_reflex/stability/__init__.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/stability
+copying build/lib/jev_reflex/stability/metrics.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/stability
+copying build/lib/jev_reflex/stability/runner.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/stability
+copying build/lib/jev_reflex/calibration.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+creating build/bdist.linux-x86_64/wheel/jev_reflex/adapters
+copying build/lib/jev_reflex/adapters/openrouter.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/adapters
+copying build/lib/jev_reflex/adapters/__init__.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/adapters
+copying build/lib/jev_reflex/adapters/antigravity.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/adapters
+copying build/lib/jev_reflex/adapters/pi.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/adapters
+copying build/lib/jev_reflex/adapters/deepseek.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/adapters
+copying build/lib/jev_reflex/adapters/codex.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/adapters
+copying build/lib/jev_reflex/adapters/generic.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/adapters
+copying build/lib/jev_reflex/adapters/harness.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/adapters
+copying build/lib/jev_reflex/adapters/claude_code.py -> build/bdist.linux-x86_64/wheel/./jev_reflex/adapters
+copying build/lib/jev_reflex/logging_config.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/cli.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+creating build/bdist.linux-x86_64/wheel/jev_reflex/fixtures
+creating build/bdist.linux-x86_64/wheel/jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_13.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_19.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_24.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_08.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_21.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_23.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_18.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_17.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_01.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_06.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_07.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_02.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_22.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_09.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_11.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_12.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_10.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_14.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_03.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_15.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_20.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_04.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_05.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/fixtures/policy_golden/case_16.yaml -> build/bdist.linux-x86_64/wheel/./jev_reflex/fixtures/policy_golden
+copying build/lib/jev_reflex/metrics.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/mcp_gateway.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/agent_controls.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/models.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/policy.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+copying build/lib/jev_reflex/policy_rollout.py -> build/bdist.linux-x86_64/wheel/./jev_reflex
+running install_data
+creating build/bdist.linux-x86_64/wheel/jev_reflex-0.1.0.data/data
+creating build/bdist.linux-x86_64/wheel/jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability
+copying benchmarks/stability/ambiguous-migration.json -> build/bdist.linux-x86_64/wheel/jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability
+copying benchmarks/stability/dependency-update.json -> build/bdist.linux-x86_64/wheel/jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability
+copying benchmarks/stability/destructive-command.json -> build/bdist.linux-x86_64/wheel/jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability
+copying benchmarks/stability/formatting.json -> build/bdist.linux-x86_64/wheel/jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability
+copying benchmarks/stability/prompt-injection.json -> build/bdist.linux-x86_64/wheel/jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability
+copying benchmarks/stability/repo-escape.json -> build/bdist.linux-x86_64/wheel/jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability
+copying benchmarks/stability/safe-test.json -> build/bdist.linux-x86_64/wheel/jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability
+copying benchmarks/stability/secret-exposure.json -> build/bdist.linux-x86_64/wheel/jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability
+running install_egg_info
+Copying src/jev_reflex.egg-info to build/bdist.linux-x86_64/wheel/./jev_reflex-0.1.0-py3.11.egg-info
+running install_scripts
+creating build/bdist.linux-x86_64/wheel/jev_reflex-0.1.0.dist-info/WHEEL
+creating '/tmp/jrx-complete-evidence-9107b0d/dist-final/.tmp-bfvib76u/jev_reflex-0.1.0-py3-none-any.whl' and adding 'build/bdist.linux-x86_64/wheel' to it
+adding 'jev_reflex/__init__.py'
+adding 'jev_reflex/__main__.py'
+adding 'jev_reflex/_egress_proxy.py'
+adding 'jev_reflex/action_scope.py'
+adding 'jev_reflex/agent_cli.py'
+adding 'jev_reflex/agent_controls.py'
+adding 'jev_reflex/agent_state.py'
+adding 'jev_reflex/audit.py'
+adding 'jev_reflex/authority.py'
+adding 'jev_reflex/broker.py'
+adding 'jev_reflex/broker_cli.py'
+adding 'jev_reflex/calibration.py'
+adding 'jev_reflex/cli.py'
+adding 'jev_reflex/config.py'
+adding 'jev_reflex/context.py'
+adding 'jev_reflex/dashboard.py'
+adding 'jev_reflex/enterprise.py'
+adding 'jev_reflex/evaluator.py'
+adding 'jev_reflex/formatters.py'
+adding 'jev_reflex/git_inspection.py'
+adding 'jev_reflex/golden_runner.py'
+adding 'jev_reflex/harness_cli.py'
+adding 'jev_reflex/identity.py'
+adding 'jev_reflex/intent.py'
+adding 'jev_reflex/live_benchmark.py'
+adding 'jev_reflex/logging_config.py'
+adding 'jev_reflex/mcp_gateway.py'
+adding 'jev_reflex/metrics.py'
+adding 'jev_reflex/models.py'
+adding 'jev_reflex/policy.py'
+adding 'jev_reflex/policy_rollout.py'
+adding 'jev_reflex/policy_source.py'
+adding 'jev_reflex/redaction.py'
+adding 'jev_reflex/sandbox.py'
+adding 'jev_reflex/serialization.py'
+adding 'jev_reflex/session_limits.py'
+adding 'jev_reflex/signing.py'
+adding 'jev_reflex/adapters/__init__.py'
+adding 'jev_reflex/adapters/antigravity.py'
+adding 'jev_reflex/adapters/claude_code.py'
+adding 'jev_reflex/adapters/codex.py'
+adding 'jev_reflex/adapters/deepseek.py'
+adding 'jev_reflex/adapters/generic.py'
+adding 'jev_reflex/adapters/harness.py'
+adding 'jev_reflex/adapters/openrouter.py'
+adding 'jev_reflex/adapters/pi.py'
+adding 'jev_reflex/checks/__init__.py'
+adding 'jev_reflex/checks/common.py'
+adding 'jev_reflex/checks/destructive.py'
+adding 'jev_reflex/checks/filesystem.py'
+adding 'jev_reflex/checks/git_risk.py'
+adding 'jev_reflex/checks/repo_boundary.py'
+adding 'jev_reflex/checks/safe_commands.py'
+adding 'jev_reflex/checks/secrets.py'
+adding 'jev_reflex/fixtures/policy_golden/case_01.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_02.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_03.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_04.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_05.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_06.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_07.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_08.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_09.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_10.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_11.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_12.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_13.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_14.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_15.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_16.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_17.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_18.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_19.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_20.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_21.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_22.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_23.yaml'
+adding 'jev_reflex/fixtures/policy_golden/case_24.yaml'
+adding 'jev_reflex/integrations/__init__.py'
+adding 'jev_reflex/integrations/typesafe.py'
+adding 'jev_reflex/stability/__init__.py'
+adding 'jev_reflex/stability/metrics.py'
+adding 'jev_reflex/stability/runner.py'
+adding 'jev_reflex/workspace/__init__.py'
+adding 'jev_reflex/workspace/acp_harness.py'
+adding 'jev_reflex/workspace/deep_harness.py'
+adding 'jev_reflex/workspace/handoff.py'
+adding 'jev_reflex/workspace/harness_tools.py'
+adding 'jev_reflex/workspace/hooks.py'
+adding 'jev_reflex/workspace/process.py'
+adding 'jev_reflex/workspace/providers.py'
+adding 'jev_reflex/workspace/state.py'
+adding 'jev_reflex/workspace/streaming.py'
+adding 'jev_reflex/workspace/ui.py'
+adding 'jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability/ambiguous-migration.json'
+adding 'jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability/dependency-update.json'
+adding 'jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability/destructive-command.json'
+adding 'jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability/formatting.json'
+adding 'jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability/prompt-injection.json'
+adding 'jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability/repo-escape.json'
+adding 'jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability/safe-test.json'
+adding 'jev_reflex-0.1.0.data/data/share/jev-reflex/benchmarks/stability/secret-exposure.json'
+adding 'jev_reflex-0.1.0.dist-info/licenses/LICENSE'
+adding 'jev_reflex-0.1.0.dist-info/METADATA'
+adding 'jev_reflex-0.1.0.dist-info/WHEEL'
+adding 'jev_reflex-0.1.0.dist-info/entry_points.txt'
+adding 'jev_reflex-0.1.0.dist-info/top_level.txt'
+adding 'jev_reflex-0.1.0.dist-info/RECORD'
+removing build/bdist.linux-x86_64/wheel
+Successfully built jev_reflex-0.1.0.tar.gz and jev_reflex-0.1.0-py3-none-any.whl

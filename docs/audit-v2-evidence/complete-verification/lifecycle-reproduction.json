@@ -1,0 +1,15 @@
+{
+  "name": "lifecycle-reproduction",
+  "command": [
+    "/home/masa84/jev_reflex/.venv/bin/python",
+    "-m",
+    "pytest",
+    "tests/test_broker.py::test_real_lifecycle_cli",
+    "-vv",
+    "-s"
+  ],
+  "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+  "log": "/tmp/jrx-complete-evidence-9107b0d/lifecycle-reproduction.log",
+  "exit_code": 0,
+  "elapsed_seconds": 2.18
+}

@@ -1,0 +1,27 @@
+{
+  "environment": "final-wheel312-fallback",
+  "cases": 700,
+  "skips": [
+    {
+      "test": "tests.integration.test_live_broker.test_live_broker_and_keyless_hook",
+      "reason": "requires explicit live opt-in and host TypeSafe credentials"
+    },
+    {
+      "test": "tests.test_gitleaks_redaction.test_real_gitleaks_redacts_reported_secret_without_leaving_input_file",
+      "reason": "real gitleaks binary unavailable"
+    },
+    {
+      "test": "tests.test_gitleaks_redaction.test_real_gitleaks_handles_repeated_secret_without_false_failure",
+      "reason": "real gitleaks binary unavailable"
+    }
+  ],
+  "component_counts": {
+    "docker": 3,
+    "tls": 10,
+    "mcp": 20,
+    "intent_authority": 48,
+    "audit_properties": 7,
+    "enterprise_approval": 9
+  },
+  "failures": 0
+}

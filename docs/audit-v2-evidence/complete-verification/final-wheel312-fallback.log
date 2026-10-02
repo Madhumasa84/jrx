@@ -1,0 +1,47 @@
+...s.................................................................... [ 10%]
+........................................................................ [ 20%]
+........................................................................ [ 30%]
+.......................................................................s [ 41%]
+s....................................................................... [ 51%]
+........................................................................ [ 61%]
+........................................................................ [ 72%]
+........................................................................ [ 82%]
+........................................................................ [ 92%]
+....................................................                     [100%]
+=============================== warnings summary ===============================
+tests/test_audit_v2_properties.py::test_git_flag_order_and_quoting_properties
+tests/test_gitleaks_redaction.py::test_redact_text_with_gitleaks_no_gitleaks
+tests/test_gitleaks_redaction.py::test_gitleaks_redactor_not_available
+tests/test_gitleaks_redaction.py::test_redacted_context_with_gitleaks
+tests/test_gitleaks_redaction.py::test_get_gitleaks_redactor_singleton
+tests/test_harness_adapters.py::test_antigravity_hook_loads_policy_from_documented_workspace_paths
+  /tmp/jrx-complete-wheel312/lib/python3.12/site-packages/jev_reflex/redaction.py:209: UserWarning: gitleaks not found, falling back to regex-only redaction — see docs/security.md
+    self._available = _check_gitleaks_available()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+============================= slowest 20 durations =============================
+34.76s call     tests/test_audit.py::test_chain_integrity_across_sequential_writes
+11.89s call     tests/integration/test_docker_sandbox.py::test_allowlisted_egress_uses_proxy_and_blocks_direct_routes
+6.10s call     tests/test_intent_authority.py::test_benign_long_session_and_missing_key_fail_closed
+5.26s call     tests/test_mcp_schema_pin.py::test_pinned_mcp_input_schema_allows_match_and_blocks_drift
+5.13s call     tests/test_mcp_session.py::test_stdio_mcp_gateway_blocks_unknown_and_write_calls
+5.00s call     tests/test_observability_integration.py::TestWebhookSink::test_webhook_sink_drops_when_queue_full
+5.00s call     tests/test_observability_integration.py::TestWebhookSink::test_webhook_sink_emits_to_queue
+4.21s call     tests/test_deep_harness.py::test_plan_persists_without_contacting_provider
+3.13s call     tests/test_enterprise_approval.py::test_production_requires_two_distinct_reviewers_and_one_time_use
+2.98s call     tests/integration/test_docker_sandbox.py::test_jrx_exec_runs_in_isolated_container_end_to_end
+2.80s call     tests/test_audit.py::test_concurrent_writers_with_file_lock
+2.68s call     tests/test_deep_harness.py::test_two_workers_can_research_with_shared_budget
+2.04s call     tests/test_mcp_session.py::test_session_limits_are_atomic_and_stop_is_persistent
+2.01s call     tests/integration/test_docker_sandbox.py::test_sandbox_timeout_removes_running_container
+1.61s call     tests/test_enterprise_approval.py::test_approval_rejects_repository_or_policy_change
+1.60s call     tests/test_deep_harness.py::test_reviewed_memory_survives_new_session
+1.26s call     tests/test_intent_authority.py::test_intent_record_deletion_detected
+1.26s call     tests/test_intent_authority.py::test_intent_concurrent_lineage_and_stop
+1.23s call     tests/test_audit.py::test_verify_streams_large_chain_without_retaining_records
+1.17s call     tests/test_enterprise_approval.py::test_approved_hook_allows_once
+=========================== short test summary info ============================
+SKIPPED [1] tests/integration/test_live_broker.py:23: requires explicit live opt-in and host TypeSafe credentials
+SKIPPED [1] tests/test_gitleaks_redaction.py:332: real gitleaks binary unavailable
+SKIPPED [1] tests/test_gitleaks_redaction.py:343: real gitleaks binary unavailable
+697 passed, 3 skipped, 6 warnings in 162.34s (0:02:42)

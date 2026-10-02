@@ -1,0 +1,13 @@
+{
+  "name": "sdist311-cli",
+  "command": [
+    "/home/masa84/jev_reflex/.venv/bin/python",
+    "/tmp/jrx-complete-test-9107b0d/docs/audit-v2-evidence/package-smoke.py.txt",
+    "/tmp/jrx-complete-sdist311/bin",
+    "/tmp/jrx-complete-evidence-9107b0d/sdist311-cli-details.json"
+  ],
+  "cwd": "/tmp",
+  "log": "/tmp/jrx-complete-evidence-9107b0d/sdist311-cli.log",
+  "exit_code": 0,
+  "elapsed_seconds": 220.29
+}

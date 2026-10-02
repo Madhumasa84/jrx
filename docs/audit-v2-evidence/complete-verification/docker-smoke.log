@@ -1,0 +1,18 @@
+Traceback (most recent call last):
+  File "/tmp/jrx-complete-evidence-9107b0d/docker-smoke.py", line 14, in <module>
+    assert run(['run','--rm','--network','none','--entrypoint','jrx','jrx-complete-test-9107b0d:local','check','--fail-closed-check'],120).returncode==0
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/jrx-complete-evidence-9107b0d/docker-smoke.py", line 4, in run
+    p=subprocess.run(['docker',*args],capture_output=True,text=True,timeout=timeout);results.append({'command':['docker',*args],'exit':p.returncode,'output':p.stdout+p.stderr});return p
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/masa84/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/subprocess.py", line 550, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/masa84/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/subprocess.py", line 1209, in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/masa84/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/subprocess.py", line 2116, in _communicate
+    self._check_timeout(endtime, orig_timeout, stdout, stderr)
+  File "/home/masa84/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/subprocess.py", line 1253, in _check_timeout
+    raise TimeoutExpired(
+subprocess.TimeoutExpired: Command '['docker', 'run', '--rm', '--network', 'none', '--entrypoint', 'jrx', 'jrx-complete-test-9107b0d:local', 'check', '--fail-closed-check']' timed out after 120 seconds

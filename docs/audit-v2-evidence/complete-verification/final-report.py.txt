@@ -1,0 +1,103 @@
+import json
+import pathlib
+import re
+import xml.etree.ElementTree as ET
+
+root = pathlib.Path(__file__).parent
+tested_sha = '3e676b23c1f5cc0b243ac2b185aba64d51e111e3'
+required = [
+    'final-source-scanner', 'final-wheel311-fallback', 'final-wheel312-fallback',
+    'final-wheel311-cli', 'final-wheel312-cli', 'final-sdist311-cli',
+    'final-ruff', 'final-format', 'final-mypy', 'final-bandit',
+    'final-helm-lint-correct', 'final-helm-render-correct', 'final-diff',
+    'final-build-isolated', 'final-docker-build', 'final-docker-smoke',
+    'final-wheel311-pip-audit', 'final-wheel312-pip-audit',
+]
+records = [json.loads((root / (name + '.json')).read_text()) for name in required]
+assert all(item['exit_code'] == 0 for item in records)
+assert json.loads((root/'final-build-equivalence.json').read_text())['identical_uncompressed_contents']
+assert json.loads((root/'final-sdist-equivalence.json').read_text())['identical_file_contents']
+
+def suite(label, xml_name, commit, scanner):
+    cases = ET.parse(root/xml_name).getroot().findall('.//testcase')
+    skipped = [{'test':case.attrib.get('classname', '') + '.' + case.attrib['name'],
+                'reason':case.find('skipped').get('message', '')}
+               for case in cases if case.find('skipped') is not None]
+    failed = [case.attrib.get('classname', '') + '.' + case.attrib['name']
+              for case in cases if case.find('failure') is not None or case.find('error') is not None]
+    log = (root/(label+'.log')).read_text()
+    duration = re.search(r'\d+ passed.*? in ([\d.]+)s', log)
+    return {'environment':label, 'code_sha':commit, 'scanner':scanner,
+            'total':len(cases), 'passed':len(cases)-len(skipped)-len(failed),
+            'skipped':skipped, 'failed':failed,
+            'pytest_seconds':float(duration.group(1)) if duration else None}
+
+old_sha = '9107b0db87676195e21f49c2de5862d8f5657fbb'
+suites = [suite(label, xml, sha, scanner) for label, xml, sha, scanner in [
+    ('source-suite', 'source-tests.xml', old_sha, 'installed'),
+    ('wheel311-suite', 'wheel311-tests.xml', old_sha, 'installed'),
+    ('wheel312-suite', 'wheel312-tests.xml', old_sha, 'installed'),
+    ('revised-source-scanner', 'revised-source-scanner-tests.xml', tested_sha, 'installed'),
+    ('final-wheel311-fallback', 'final-wheel311-fallback-tests.xml', tested_sha, 'unavailable'),
+    ('final-wheel312-fallback', 'final-wheel312-fallback-tests.xml', tested_sha, 'unavailable'),
+    ('final-source-scanner', 'final-source-scanner-tests.xml', tested_sha, 'installed'),
+]]
+assert all(not item['failed'] for item in suites[-3:])
+summary = {'tested_code_sha':tested_sha, 'initial_remote_sha':old_sha,
+           'final_required_checks':records, 'all_final_required_checks_passed':True,
+           'full_suites':suites,
+           'retained_incidents':[
+               {'log':'corrupt-fields-before.log', 'status':'3 regression failures before fix; fixed in tested SHA'},
+               {'log':'revised-source-scanner.log', 'status':'broker lifecycle failed once; serial retry passed; test unchanged at user request'},
+               {'log':'port-collision-before.log', 'status':'default-port collision reproduced; original intermittent failure cause unconfirmed'},
+               {'log':'docker-smoke.log', 'status':'external 120-second driver timeout; repaired-image smoke passed with 300-second driver limit'},
+               {'log':'final-helm-lint.log', 'status':'operator supplied incorrect chart path; correct-path lint/render passed'},
+           ]}
+(root/'results.json').write_text(json.dumps(summary, indent=2)+'\n')
+lines = [
+    '# Complete JRX verification follow-up', '',
+    'Date: 2026-10-02. Initial pushed SHA: `'+old_sha+'`.',
+    'Tested implementation SHA: `'+tested_sha+'` on `hardening/production-audit-v2`.', '',
+    'A follow-up documentation commit contains this report; runtime source and tests remain identical to the tested SHA.', '',
+    '## Final results', '',
+    '| Environment | Gitleaks | Passed | Skipped | Failed | Pytest seconds |',
+    '| --- | --- | ---: | ---: | ---: | ---: |',
+]
+for item in suites[-3:]:
+    lines.append(f"| {item['environment']} | {item['scanner']} | {item['passed']} | {len(item['skipped'])} | {len(item['failed'])} | {item['pytest_seconds']} |")
+lines += [
+    '', 'All 18 final required command checks passed. The full matrix ran serially.',
+    'Each full suite collected 700 cases. Broker/TLS, MCP, audit, approval, session, concurrency, harness, disposable Docker, intent and authority tests are included.',
+    'The installed-wheel suites remove PYTHONPATH and use pytest importlib mode. Recorded origins confirm site-packages imports and matching repaired source hashes.', '',
+    'The source run includes both real-Gitleaks tests and 24/24 policy golden cases. Missing-scanner wheel runs intentionally exercise the regex fallback deployment mode: only the two binary-dependent tests and paid live evaluator test skip. No tests were deleted or disabled.', '',
+    'Three separate installed packages (wheel 3.11, wheel 3.12, core sdist 3.11) each passed 28 CLI checks, for 84 checks. These cover both entrypoints, offline evaluation, golden policy fixtures, audit verify/tail, session status/stop, unavailable broker status, unknown MCP denial without forwarding, benchmark and intent/authority lifecycle.', '',
+    '## Commands and evidence', '',
+    '| Check | Exit | Command seconds |', '| --- | ---: | ---: |',
+]
+for item in records:
+    lines.append(f"| [{item['name']}]({item['name']}.log) | {item['exit_code']} | {item['elapsed_seconds']} |")
+lines += [
+    '', 'Exact argv, working directories, durations and exit codes are in [results.json](results.json); JUnit XML and raw logs are retained. The serial matrix and package/container drivers are included as .py.txt files. Command durations include setup and, for make test, the separate golden-policy command.', '',
+    'Ruff, formatting, mypy (70 sources), requested Bandit -ll, Helm lint/render and git diff --check pass. Bandit retains 49 low findings and reports zero medium/high findings under the requested exclusions.',
+    'Both installed dependency scans report no known vulnerabilities. The unpublished jev-reflex distribution itself has no PyPI advisory entry and is reported as unauditable by that service.',
+    'The isolated wheel and sdist build passed. Every uncompressed file in each rebuilt artifact matches its corresponding tested artifact; SHA256 records and comparison results are retained.',
+    'The fresh non-root container passes default broker startup, keyless health, private 0700 runtime storage, all 14 offline failure scenarios in each of three modes, and synthetic old/new build-context credential exclusion assertions.', '',
+    '## Confirmed follow-up fix: V2-010 (Low)', '',
+    'SQLite TEXT affinity permits BLOB fields. Malformed BLOB/Unicode authenticators or BLOB payloads raised uncaught TypeError in the authenticated store instead of controlled denial. Three new full-evaluator/operator-CLI regression cases failed on 9107b0d before the fix.',
+    'AuthenticatedStore.get now checks string types, bounded payload length and exact lowercase hexadecimal MAC format before hashing/comparison. Those cases and 68 neighboring adversarial cases pass (71 total). Native hooks already denied exceptions, so no execution bypass was demonstrated. The findings register documents this as a reliability defect in optional control state.', '',
+    '## Earlier runs and retained failures', '',
+    '| Run | SHA | Passed | Skipped | Failed |', '| --- | --- | ---: | ---: | ---: |',
+]
+for item in suites[:4]:
+    lines.append(f"| [{item['environment']}]({item['environment']}.log) | {item['code_sha'][:7]} | {item['passed']} | {len(item['skipped'])} | {len(item['failed'])} |")
+lines += [
+    '', '- One repaired source run failed the existing broker lifecycle test; its isolated repeat and final serial matrix passed. Occupying loopback port 9090 independently reproduces a test failure. This does not prove the original intermittent failure was a port collision. The shared default port and five-second startup window remain unchanged at the user’s request.',
+    '- The first container driver timed out at its external 120-second limit during concurrent tests. That transcript is retained. The final repaired-image run passed with a 300-second driver limit; JRX security timeouts and enforcement were unchanged.',
+    '- One operator Helm command used a nonexistent chart path. The incorrect-path transcripts are retained; lint and render passed for helm/jrx-broker.', '',
+    '## Environment and limits', '',
+    'Linux x86_64 WSL2 kernel 6.18.40.1; Python 3.11.15 and 3.12.13; Git 2.34.1; Docker 29.6.1. Clean local clones, temporary virtual environments, synthetic secrets, mocked evaluators, local certificates and disposable containers were used. Existing source-checkout edits were preserved.',
+    'No paid live API, real credentials, external infrastructure, release, main merge or publication was used. macOS/Windows/ARM, other Python versions, deployed agent separation, actual OIDC/JWKS provider changes, kernel escape campaigns and exhaustive arbitrary-shell interpretation remain untested.',
+    'Passing this bounded local matrix is not a claim that every production attack is covered. Existing preflight/TOCTOU, same-UID key/config access, whole-state rollback, audit retention and unpinned supply-chain limitations remain documented in PRODUCTION_AUDIT_V2.md.',
+]
+(root/'VERIFICATION.md').write_text('\n'.join(lines)+'\n')
+print(json.dumps({'all_final_checks_passed':True, 'check_count':len(records), 'final_suites':suites[-3:]}))

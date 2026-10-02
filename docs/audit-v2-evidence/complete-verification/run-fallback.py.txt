@@ -1,0 +1,4 @@
+import os,runpy,sys
+from pathlib import Path
+os.environ['PATH']=Path('/tmp/jrx-complete-evidence-9107b0d/fallback-path.txt').read_text()
+runpy.run_path('/tmp/jrx-complete-evidence-9107b0d/run.py',run_name='__main__')

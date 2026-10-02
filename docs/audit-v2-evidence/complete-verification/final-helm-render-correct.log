@@ -1,0 +1,217 @@
+---
+# Source: jrx-broker/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: audit-jrx-broker
+  labels:
+    helm.sh/chart: jrx-broker-0.1.0
+    app.kubernetes.io/name: jrx-broker
+    app.kubernetes.io/instance: audit
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+---
+# Source: jrx-broker/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: audit-jrx-broker-config
+  labels:
+    helm.sh/chart: jrx-broker-0.1.0
+    app.kubernetes.io/name: jrx-broker
+    app.kubernetes.io/instance: audit
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+data:
+  reflex.yaml: |
+    mode: advisory
+
+    policy:
+      allowHoldOverride: false
+
+    thresholds:
+      review: 0.7
+      hold: 0.9
+
+    hold_on:
+      - destructive
+      - secret_exposure
+      - irreversible
+      - prompt_injection
+      - wrong_repo
+      - wrong_repo_semantic
+      - fail_open
+
+    review_on:
+      - security_sensitive
+      - concurrency_sensitive
+      - persistence_sensitive
+      - backwards_compatibility
+      - human_review
+
+    context:
+      include_git_diff: true
+      include_changed_files: true
+      include_tests: true
+      max_diff_chars: 30000
+      max_context_chars: 50000
+
+    privacy:
+      redact_secrets: true
+      store_requests: false
+
+    audit:
+      enabled: false
+      path: /home/jrx/.jev-reflex/audit.log
+      rotate_mb: 100
+
+    signing:
+      require_signature: false
+      signer_type: ed25519
+
+    calibration:
+      enabled: false
+
+    logging:
+      enabled: true
+      sink: stdout
+      level: INFO
+      syslog_ident: jrx
+
+    jev:
+      samples: 1
+      aggregation: median
+      transport: direct
+      socket: /home/jrx/.jev-reflex/reflex.sock
+      connect_timeout: 1
+      request_timeout: 25
+      api_timeout: 20
+
+    stability:
+      boundary_margin: 0.03
+
+    stability_policy:
+      mode: strict
+---
+# Source: jrx-broker/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: audit-jrx-broker
+  labels:
+    helm.sh/chart: jrx-broker-0.1.0
+    app.kubernetes.io/name: jrx-broker
+    app.kubernetes.io/instance: audit
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9090
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    app.kubernetes.io/name: jrx-broker
+    app.kubernetes.io/instance: audit
+---
+# Source: jrx-broker/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-jrx-broker
+  labels:
+    helm.sh/chart: jrx-broker-0.1.0
+    app.kubernetes.io/name: jrx-broker
+    app.kubernetes.io/instance: audit
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: jrx-broker
+      app.kubernetes.io/instance: audit
+  template:
+    metadata:
+      annotations:
+        checksum/config: fb20ef52eec997d147d7d321b63b18692372ce52db28199b1f494f872d61a2c1
+      labels:
+        app.kubernetes.io/name: jrx-broker
+        app.kubernetes.io/instance: audit
+    spec:
+      serviceAccountName: audit-jrx-broker
+      securityContext:
+        fsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: jrx-broker
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: false
+          image: "ghcr.io/madhumasa84/jrx-broker:0.1.0"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            - name: TYPESAFE_API_KEY
+              value: ""
+            - name: JRX_DEBUG
+              value: "0"
+            - name: JRX_METRICS_HOST
+              value: "0.0.0.0"
+            - name: JRX_METRICS_PORT
+              value: "9090"
+          volumeMounts:
+            - name: config
+              mountPath: /home/jrx/reflex.yaml
+              subPath: reflex.yaml
+            - name: tmp
+              mountPath: /tmp
+            - name: data
+              mountPath: /home/jrx/.jev-reflex
+          livenessProbe:
+            exec:
+              command:
+                - jrx
+                - broker
+                - status
+                - --json
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - jrx
+                - broker
+                - status
+                - --json
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+      volumes:
+        - name: config
+          configMap:
+            name: audit-jrx-broker-config
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          emptyDir: {}

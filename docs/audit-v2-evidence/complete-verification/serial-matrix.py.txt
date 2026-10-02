@@ -1,0 +1,33 @@
+import json
+import os
+import pathlib
+import subprocess
+
+root = pathlib.Path('/tmp/jrx-complete-evidence-9107b0d')
+clone = '/tmp/jrx-complete-repaired-3e676b2'
+source = '/home/masa84/jev_reflex/.venv/bin/python'
+cases = []
+for version in ('311', '312'):
+    python = f'/tmp/jrx-complete-wheel{version}/bin/python'
+    label = f'final-wheel{version}-fallback'
+    cases.append((label, [source, str(root/'run-fallback.py'), label, clone,
+        python, '-m', 'pytest', 'tests', '-ra', '--import-mode=importlib',
+        '--durations=20', f'--junitxml={root/label}-tests.xml'], False))
+label = 'final-source-scanner'
+cases.append((label, [source, str(root/'run.py'), label, clone,
+    'make', 'test', f'PYTHON={source}'], True))
+failures = []
+for label, args, is_source in cases:
+    env = dict(os.environ)
+    env.pop('PYTHONPATH', None)
+    env['PYTEST_ADDOPTS'] = ''
+    env['JRX_TEST_DOCKER_IMAGE'] = 'kindest/node:v1.31.12'
+    if is_source:
+        env['PYTHONPATH'] = clone + '/src'
+        env['PYTEST_ADDOPTS'] = f'-ra --durations=20 --junitxml={root/label}-tests.xml'
+    print('Starting ' + label, flush=True)
+    result = subprocess.run(args, env=env)
+    if result.returncode:
+        failures.append(label)
+print(json.dumps({'serial_matrix_failures': failures}), flush=True)
+raise SystemExit(bool(failures))

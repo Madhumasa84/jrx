@@ -1,0 +1,10 @@
+import json,os,pathlib,subprocess,sys,time
+root=pathlib.Path('/tmp/jrx-complete-evidence-9107b0d')
+label=sys.argv[1]; cwd=sys.argv[2]; args=sys.argv[3:]; env=dict(os.environ)
+env['TYPESAFE_API_KEY']='';env.pop('JEV_REFLEX_LIVE_TEST',None)
+start=time.monotonic();record={'name':label,'command':args,'cwd':cwd,'log':str(root/(label+'.log'))}
+with (root/(label+'.log')).open('w') as log:
+ try:p=subprocess.run(args,cwd=cwd,env=env,stdout=log,stderr=subprocess.STDOUT,timeout=1800);record['exit_code']=p.returncode
+ except subprocess.TimeoutExpired:record['exit_code']=124
+record['elapsed_seconds']=round(time.monotonic()-start,2)
+(root/(label+'.json')).write_text(json.dumps(record,indent=2));print(json.dumps(record));sys.exit(record['exit_code'])

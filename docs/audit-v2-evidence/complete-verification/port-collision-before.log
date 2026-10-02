@@ -1,0 +1,19 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________________________ test_real_lifecycle_cli ____________________________
+
+    def test_real_lifecycle_cli():
+        base = Path("/tmp").resolve()
+        with tempfile.TemporaryDirectory(prefix="jrx-", dir=base) as td:
+            path = Path(td) / "reflex.sock"
+            runner = CliRunner()
+            started = runner.invoke(app, ["broker", "start", "--socket", str(path)])
+>           assert started.exit_code == 0, started.stdout
+E           AssertionError:
+E           assert 2 == 0
+E            +  where 2 = <Result SystemExit(2)>.exit_code
+
+/tmp/jrx-complete-repaired-3e676b2/tests/test_broker.py:233: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_broker.py::test_real_lifecycle_cli - AssertionError:
+1 failed in 0.99s

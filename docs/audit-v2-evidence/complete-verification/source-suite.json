@@ -1,0 +1,12 @@
+{
+  "name": "source-suite",
+  "command": [
+    "make",
+    "test",
+    "PYTHON=/home/masa84/jev_reflex/.venv/bin/python"
+  ],
+  "cwd": "/tmp/jrx-complete-test-9107b0d",
+  "log": "/tmp/jrx-complete-evidence-9107b0d/source-suite.log",
+  "exit_code": 0,
+  "elapsed_seconds": 833.4
+}

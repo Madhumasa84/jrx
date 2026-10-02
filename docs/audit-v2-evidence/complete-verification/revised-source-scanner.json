@@ -1,0 +1,12 @@
+{
+  "name": "revised-source-scanner",
+  "command": [
+    "make",
+    "test",
+    "PYTHON=/home/masa84/jev_reflex/.venv/bin/python"
+  ],
+  "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+  "log": "/tmp/jrx-complete-evidence-9107b0d/revised-source-scanner.log",
+  "exit_code": 2,
+  "elapsed_seconds": 554.09
+}

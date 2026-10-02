@@ -1,0 +1,65 @@
+{
+  "normalization": "Trailing console/JUnit presentation whitespace and redundant final blank lines only; unmodified original bytes are retained in adjacent raw gzip files. Production audit logs, implementation and test code were not modified.",
+  "files": [
+    {
+      "console": "final-source-scanner.log",
+      "raw_gzip": "final-source-scanner.log.raw.gz",
+      "raw_sha256": "04551cedfcc7c2a383deba500de5598fea159019a6ff0c7de8d41473ea141109",
+      "normalized_sha256": "b15fc5e553d90a3b4ec00eb86530c71e20e59c4c46dd7ed18b924b5643cb820a"
+    },
+    {
+      "console": "helm-render.log",
+      "raw_gzip": "helm-render.log.raw.gz",
+      "raw_sha256": "d0f5c0afcd269a9009c49b498d216b413b9391b7cea404be6ee76bbe46313607",
+      "normalized_sha256": "0dcb1a81448b0cae260550350fddc9b0517cdead8e6ff8d8bd68d2be57ce8402"
+    },
+    {
+      "console": "port-collision-before.log",
+      "raw_gzip": "port-collision-before.log.raw.gz",
+      "raw_sha256": "1592104e36f517450564d6c7320e5bf8a60e0bc8585bc4e1a362baf7c875b0af",
+      "normalized_sha256": "64cae4f2eb1a38492b70e73a591460b1f7608adee2b8ddbb34c8c0f1c471544e"
+    },
+    {
+      "console": "final-docker-build.log",
+      "raw_gzip": "final-docker-build.log.raw.gz",
+      "raw_sha256": "4f3e75092d445c3090a4bc6359b5563425f57d4860963ffe6a288225d7215ec8",
+      "normalized_sha256": "f4b2ac382b80e78b07c1077c1583e305a67d01898e01ce600c30be8d9a02d800"
+    },
+    {
+      "console": "revised-source-scanner.log",
+      "raw_gzip": "revised-source-scanner.log.raw.gz",
+      "raw_sha256": "05f35e8fecba0d0950e09e6a34036988d90b5311a536c98c453f105827258e94",
+      "normalized_sha256": "9acf1317162270c5a43465f0ad091e16aa9c83af114e699400347605a26901ec"
+    },
+    {
+      "console": "docker-build.log",
+      "raw_gzip": "docker-build.log.raw.gz",
+      "raw_sha256": "65115d6fb749a2b36b7a0de2f6a0e83f5248e6e5bc9d7d31b00f880625052bf5",
+      "normalized_sha256": "464752c0dbe0bc76b5e2e7063fb496ea9d158aa5036ab0b6271491318936865b"
+    },
+    {
+      "console": "source-suite.log",
+      "raw_gzip": "source-suite.log.raw.gz",
+      "raw_sha256": "e356a3d09d39f4324b442b73a4133303187b7915264ec017f32a9ef3b10a4932",
+      "normalized_sha256": "249baa50d7920e1b57bc62c2fbc9b6aeea32a29bc998082bcfc9dfbdb3cd2123"
+    },
+    {
+      "console": "final-helm-render-correct.log",
+      "raw_gzip": "final-helm-render-correct.log.raw.gz",
+      "raw_sha256": "f22e4cdc523b54d8047194d1e81ec162631562a4374b740136e9db29b8297c7f",
+      "normalized_sha256": "1ea00fac312b800f2a5dcee76ff6365b3ffc3458f820bbdf1c3424897d535ed2"
+    },
+    {
+      "console": "corrupt-fields-before.log",
+      "raw_gzip": "corrupt-fields-before.log.raw.gz",
+      "raw_sha256": "777dc82e5832313c6a6bf9c58a3b818280f33d346c6198f28d83ff6725bea1ce",
+      "normalized_sha256": "fd901a8d760a1daff954547fe5511f39fc3b6375a17e2af877bd25003251ec98"
+    },
+    {
+      "console": "revised-source-scanner-tests.xml",
+      "raw_gzip": "revised-source-scanner-tests.xml.raw.gz",
+      "raw_sha256": "371219932848c28e4145677513f9b52644bbf91c6fe3611981dd224f52528ef3",
+      "normalized_sha256": "01be385b0be9682252116166236bba0d10e3c45cdbffbb227c76249cd35dfe25"
+    }
+  ]
+}

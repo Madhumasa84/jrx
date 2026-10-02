@@ -1,0 +1,11 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-9.1.1, pluggy-1.6.0 -- /home/masa84/jev_reflex/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /tmp/jrx-complete-repaired-3e676b2
+configfile: pyproject.toml
+plugins: anyio-4.15.1, langsmith-0.14.1
+collecting ... collected 1 item
+
+tests/test_broker.py::test_real_lifecycle_cli PASSED
+
+============================== 1 passed in 0.93s ===============================

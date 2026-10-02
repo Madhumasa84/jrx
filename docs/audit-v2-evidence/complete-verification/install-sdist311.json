@@ -1,0 +1,17 @@
+{
+  "name": "install-sdist311",
+  "command": [
+    "uv",
+    "--cache-dir",
+    "/tmp/jrx-complete-uv-cache",
+    "pip",
+    "install",
+    "--python",
+    "/tmp/jrx-complete-sdist311/bin/python",
+    "/tmp/jrx-complete-evidence-9107b0d/dist/jev_reflex-0.1.0.tar.gz"
+  ],
+  "cwd": "/tmp",
+  "log": "/tmp/jrx-complete-evidence-9107b0d/install-sdist311.log",
+  "exit_code": 0,
+  "elapsed_seconds": 5.92
+}

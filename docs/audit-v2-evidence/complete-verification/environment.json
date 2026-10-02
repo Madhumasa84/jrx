@@ -1,0 +1,10 @@
+{
+  "commit": "9107b0db87676195e21f49c2de5862d8f5657fbb",
+  "platform": "Linux-6.18.40.1-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+  "source_python": "3.11.15 (main, Jun 11 2026, 04:03:40) [Clang 22.1.3 ]",
+  "git": "git version 2.34.1",
+  "checkout": "/tmp/jrx-complete-test-9107b0d",
+  "live_api_opt_in": false,
+  "docker_test_image": "kindest/node:v1.31.12",
+  "original_checkout_status": " M README.md\n M docs/agent-harness.md\n M src/jev_reflex/workspace/deep_harness.py\n M src/jev_reflex/workspace/harness_tools.py\n M tests/test_deep_harness.py\n"
+}

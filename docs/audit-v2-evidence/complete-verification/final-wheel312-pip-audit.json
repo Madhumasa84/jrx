@@ -1,0 +1,17 @@
+{
+  "name": "final-wheel312-pip-audit",
+  "command": [
+    "/tmp/jrx-complete-wheel312/bin/python",
+    "-m",
+    "pip_audit",
+    "--cache-dir",
+    "/tmp/jrx-complete-pip-audit-cache",
+    "--progress-spinner",
+    "off",
+    "--local"
+  ],
+  "cwd": "/tmp",
+  "log": "/tmp/jrx-complete-evidence-9107b0d/final-wheel312-pip-audit.log",
+  "exit_code": 0,
+  "elapsed_seconds": 14.38
+}

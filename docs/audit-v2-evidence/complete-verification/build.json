@@ -1,0 +1,14 @@
+{
+  "name": "build",
+  "command": [
+    "/home/masa84/jev_reflex/.venv/bin/python",
+    "-m",
+    "build",
+    "--outdir",
+    "/tmp/jrx-complete-evidence-9107b0d/dist"
+  ],
+  "cwd": "/tmp/jrx-complete-test-9107b0d",
+  "log": "/tmp/jrx-complete-evidence-9107b0d/build.log",
+  "exit_code": 0,
+  "elapsed_seconds": 8.54
+}

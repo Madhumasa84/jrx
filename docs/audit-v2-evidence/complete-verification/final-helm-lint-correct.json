@@ -1,0 +1,12 @@
+{
+  "name": "final-helm-lint-correct",
+  "command": [
+    "/home/masa84/.local/bin/helm",
+    "lint",
+    "helm/jrx-broker"
+  ],
+  "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+  "log": "/tmp/jrx-complete-evidence-9107b0d/final-helm-lint-correct.log",
+  "exit_code": 0,
+  "elapsed_seconds": 0.22
+}

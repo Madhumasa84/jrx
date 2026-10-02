@@ -1,0 +1,11 @@
+{
+  "name": "docker-smoke",
+  "command": [
+    "/home/masa84/jev_reflex/.venv/bin/python",
+    "/tmp/jrx-complete-evidence-9107b0d/docker-smoke.py"
+  ],
+  "cwd": "/tmp",
+  "log": "/tmp/jrx-complete-evidence-9107b0d/docker-smoke.log",
+  "exit_code": 1,
+  "elapsed_seconds": 123.02
+}

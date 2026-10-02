@@ -1,0 +1,215 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+__ test_malformed_authenticated_fields_produce_controlled_denial[mac-invalid] __
+
+controls = (ReflexConfig(mode='enforce', policy=PolicyConfig(allow_hold_override=False), thresholds=ThresholdConfig(strong=0.9, r...AuthorityStore object at 0x78236bfeb650>, PosixPath('/tmp/pytest-of-masa84/pytest-39/test_malformed_authenticated_f0'))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x78236bfeb390>
+field = 'mac', invalid = b'invalid'
+
+    @pytest.mark.parametrize(
+        ("field", "invalid"),
+        [("mac", b"invalid"), ("mac", "\u00e4" * 64), ("payload", b"invalid")],
+    )
+    def test_malformed_authenticated_fields_produce_controlled_denial(
+        controls, monkeypatch, field, invalid
+    ):
+        from contextlib import closing
+
+        from typer.testing import CliRunner
+
+        from jev_reflex.agent_controls import policy_revision
+        from jev_reflex.cli import app
+        from jev_reflex.evaluator import evaluate_context
+
+        config, intent, _, root = controls
+        config = config.model_copy(
+            update={"authority": config.authority.model_copy(update={"enabled": False})}
+        )
+        intent.create(
+            session_id="task-session",
+            task="Fix a failing unit test",
+            repository=str(root),
+            policy_revision=policy_revision(config),
+            scopes=["tests"],
+            capabilities=["read"],
+        )
+        # SQLite TEXT affinity permits BLOB values; corrupted records must be rejected
+        # before invoking string-only HMAC operations. The field is test-controlled.
+        with closing(sqlite3.connect(config.intent.path)) as connection:
+            connection.execute(f"UPDATE objects SET {field}=?", (invalid,))
+            connection.commit()
+        monkeypatch.setenv("JRX_SESSION_ID", "task-session")
+>       result = evaluate_context(context(root), config=config, use_jev=False)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_intent_authority.py:97:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src/jev_reflex/evaluator.py:518: in evaluate_context
+    controls = apply_controls(
+src/jev_reflex/agent_controls.py:49: in apply_controls
+    record = IntentStore(config.intent).evaluate(
+src/jev_reflex/intent.py:111: in evaluate
+    envelope = self.get(db, "intent", session_id)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <jev_reflex.intent.IntentStore object at 0x78236d05c7d0>
+connection = <sqlite3.Connection object at 0x78236bd26890>, namespace = 'intent'
+object_id = 'task-session'
+
+    def get(self, connection: sqlite3.Connection, namespace: str, object_id: str) -> dict[str, Any]:
+        row = connection.execute(
+            "SELECT payload,mac FROM objects WHERE namespace=? AND id=?", (namespace, object_id)
+        ).fetchone()
+        if row is None:
+            raise ControlError("agent control record missing")
+        payload, mac = row
+>       if len(payload) > 65536 or not hmac.compare_digest(
+            mac, self._mac(namespace, object_id, payload)
+        ):
+E       TypeError: a bytes-like object is required, not 'str'
+
+src/jev_reflex/agent_state.py:177: TypeError
+_ test_malformed_authenticated_fields_produce_controlled_denial[mac-\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4] _
+
+controls = (ReflexConfig(mode='enforce', policy=PolicyConfig(allow_hold_override=False), thresholds=ThresholdConfig(strong=0.9, r...AuthorityStore object at 0x78236ba07fd0>, PosixPath('/tmp/pytest-of-masa84/pytest-39/test_malformed_authenticated_f1'))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x78236ba07c90>
+field = 'mac'
+invalid = 'ääääääääääääääääääääääääääääääääääääääääääääääääääääääääääääääää'
+
+    @pytest.mark.parametrize(
+        ("field", "invalid"),
+        [("mac", b"invalid"), ("mac", "\u00e4" * 64), ("payload", b"invalid")],
+    )
+    def test_malformed_authenticated_fields_produce_controlled_denial(
+        controls, monkeypatch, field, invalid
+    ):
+        from contextlib import closing
+
+        from typer.testing import CliRunner
+
+        from jev_reflex.agent_controls import policy_revision
+        from jev_reflex.cli import app
+        from jev_reflex.evaluator import evaluate_context
+
+        config, intent, _, root = controls
+        config = config.model_copy(
+            update={"authority": config.authority.model_copy(update={"enabled": False})}
+        )
+        intent.create(
+            session_id="task-session",
+            task="Fix a failing unit test",
+            repository=str(root),
+            policy_revision=policy_revision(config),
+            scopes=["tests"],
+            capabilities=["read"],
+        )
+        # SQLite TEXT affinity permits BLOB values; corrupted records must be rejected
+        # before invoking string-only HMAC operations. The field is test-controlled.
+        with closing(sqlite3.connect(config.intent.path)) as connection:
+            connection.execute(f"UPDATE objects SET {field}=?", (invalid,))
+            connection.commit()
+        monkeypatch.setenv("JRX_SESSION_ID", "task-session")
+>       result = evaluate_context(context(root), config=config, use_jev=False)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_intent_authority.py:97:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src/jev_reflex/evaluator.py:518: in evaluate_context
+    controls = apply_controls(
+src/jev_reflex/agent_controls.py:49: in apply_controls
+    record = IntentStore(config.intent).evaluate(
+src/jev_reflex/intent.py:111: in evaluate
+    envelope = self.get(db, "intent", session_id)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <jev_reflex.intent.IntentStore object at 0x78236ba04390>
+connection = <sqlite3.Connection object at 0x78236bd26e30>, namespace = 'intent'
+object_id = 'task-session'
+
+    def get(self, connection: sqlite3.Connection, namespace: str, object_id: str) -> dict[str, Any]:
+        row = connection.execute(
+            "SELECT payload,mac FROM objects WHERE namespace=? AND id=?", (namespace, object_id)
+        ).fetchone()
+        if row is None:
+            raise ControlError("agent control record missing")
+        payload, mac = row
+>       if len(payload) > 65536 or not hmac.compare_digest(
+            mac, self._mac(namespace, object_id, payload)
+        ):
+E       TypeError: comparing strings with non-ASCII characters is not supported
+
+src/jev_reflex/agent_state.py:177: TypeError
+_ test_malformed_authenticated_fields_produce_controlled_denial[payload-invalid] _
+
+controls = (ReflexConfig(mode='enforce', policy=PolicyConfig(allow_hold_override=False), thresholds=ThresholdConfig(strong=0.9, r...AuthorityStore object at 0x78236ba05990>, PosixPath('/tmp/pytest-of-masa84/pytest-39/test_malformed_authenticated_f2'))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x78236ba07d10>
+field = 'payload', invalid = b'invalid'
+
+    @pytest.mark.parametrize(
+        ("field", "invalid"),
+        [("mac", b"invalid"), ("mac", "\u00e4" * 64), ("payload", b"invalid")],
+    )
+    def test_malformed_authenticated_fields_produce_controlled_denial(
+        controls, monkeypatch, field, invalid
+    ):
+        from contextlib import closing
+
+        from typer.testing import CliRunner
+
+        from jev_reflex.agent_controls import policy_revision
+        from jev_reflex.cli import app
+        from jev_reflex.evaluator import evaluate_context
+
+        config, intent, _, root = controls
+        config = config.model_copy(
+            update={"authority": config.authority.model_copy(update={"enabled": False})}
+        )
+        intent.create(
+            session_id="task-session",
+            task="Fix a failing unit test",
+            repository=str(root),
+            policy_revision=policy_revision(config),
+            scopes=["tests"],
+            capabilities=["read"],
+        )
+        # SQLite TEXT affinity permits BLOB values; corrupted records must be rejected
+        # before invoking string-only HMAC operations. The field is test-controlled.
+        with closing(sqlite3.connect(config.intent.path)) as connection:
+            connection.execute(f"UPDATE objects SET {field}=?", (invalid,))
+            connection.commit()
+        monkeypatch.setenv("JRX_SESSION_ID", "task-session")
+>       result = evaluate_context(context(root), config=config, use_jev=False)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_intent_authority.py:97:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src/jev_reflex/evaluator.py:518: in evaluate_context
+    controls = apply_controls(
+src/jev_reflex/agent_controls.py:49: in apply_controls
+    record = IntentStore(config.intent).evaluate(
+src/jev_reflex/intent.py:111: in evaluate
+    envelope = self.get(db, "intent", session_id)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/jev_reflex/agent_state.py:178: in get
+    mac, self._mac(namespace, object_id, payload)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <jev_reflex.intent.IntentStore object at 0x78236ba053d0>
+namespace = 'intent', object_id = 'task-session', payload = b'invalid'
+
+    def _mac(self, namespace: str, object_id: str, payload: str) -> str:
+        return hmac.new(
+>           self._key(), (namespace + "\0" + object_id + "\0" + payload).encode(), hashlib.sha256
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        ).hexdigest()
+E       TypeError: can only concatenate str (not "bytes") to str
+
+src/jev_reflex/agent_state.py:167: TypeError
+=========================== short test summary info ============================
+FAILED tests/test_intent_authority.py::test_malformed_authenticated_fields_produce_controlled_denial[mac-invalid]
+FAILED tests/test_intent_authority.py::test_malformed_authenticated_fields_produce_controlled_denial[mac-\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4\xe4]
+FAILED tests/test_intent_authority.py::test_malformed_authenticated_fields_produce_controlled_denial[payload-invalid]
+3 failed, 45 deselected in 7.28s

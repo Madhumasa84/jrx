@@ -1,0 +1,10 @@
+import json,os,pathlib,socket,subprocess,sys,time
+root=pathlib.Path('/tmp/jrx-complete-evidence-9107b0d')
+env=dict(os.environ);env['TYPESAFE_API_KEY']='';env.pop('JEV_REFLEX_LIVE_TEST',None);env['PYTHONPATH']=sys.argv[1]+'/src'
+with socket.socket() as held:
+ held.bind(('127.0.0.1',9090));held.listen(1)
+ start=time.monotonic()
+ p=subprocess.run(['/home/masa84/jev_reflex/.venv/bin/python','-m','pytest','tests/test_broker.py::test_real_lifecycle_cli','-ra'],cwd=sys.argv[1],env=env,capture_output=True,text=True,timeout=30)
+ (root/sys.argv[2]).write_text(p.stdout+p.stderr)
+ print(json.dumps({'occupied_port':9090,'test_exit':p.returncode,'duration':round(time.monotonic()-start,2)}))
+ sys.exit(0 if p.returncode==int(sys.argv[3]) else 1)

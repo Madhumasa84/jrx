@@ -1,0 +1,16 @@
+{
+  "name": "repaired-targets",
+  "command": [
+    "/home/masa84/jev_reflex/.venv/bin/python",
+    "-m",
+    "pytest",
+    "tests/test_intent_authority.py",
+    "tests/test_audit_v2_properties.py",
+    "tests/test_production_audit_v2.py",
+    "-ra"
+  ],
+  "cwd": "/tmp/jrx-production-audit-v2",
+  "log": "/tmp/jrx-complete-evidence-9107b0d/repaired-targets.log",
+  "exit_code": 0,
+  "elapsed_seconds": 48.33
+}

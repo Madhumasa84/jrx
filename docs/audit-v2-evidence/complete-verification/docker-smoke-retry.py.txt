@@ -1,0 +1,27 @@
+import json,pathlib,subprocess,tempfile,time,uuid
+results=[]
+def run(args, timeout=60):
+ p=subprocess.run(['docker',*args],capture_output=True,text=True,timeout=timeout);results.append({'command':['docker',*args],'exit':p.returncode,'output':p.stdout+p.stderr});return p
+name='jrx-v2-smoke-'+uuid.uuid4().hex[:12]
+try:
+ assert run(['run','-d','--name',name,'--network','none','jrx-complete-test-9107b0d:local']).returncode==0
+ for _ in range(20):
+  p=run(['exec',name,'jrx','broker','status','--json'])
+  if p.returncode==0:break
+  time.sleep(.5)
+ assert p.returncode==0,p.stderr
+ assert run(['exec',name,'python','-c','import os,stat; from pathlib import Path; assert os.geteuid()!=0; assert stat.S_IMODE(Path("/home/jrx/.jev-reflex").stat().st_mode)==0o700; print("private non-root runtime verified")']).returncode==0
+ value=json.loads(p.stdout);assert value['running'];assert not value['jev_configured']
+ assert run(['run','--rm','--network','none','--entrypoint','jrx','jrx-complete-test-9107b0d:local','check','--fail-closed-check'],300).returncode==0
+finally:
+ run(['rm','-f',name])
+ctx=pathlib.Path(tempfile.mkdtemp(prefix='jrx-v2-context-'))
+(ctx/'.env').write_text('SYNTHETIC=synthetic-build-context-token-only\n')
+(ctx/'Dockerfile').write_text('FROM jrx-complete-test-9107b0d:local\nCOPY . /tmp/probe\nRUN test ! -f /tmp/probe/.env\n')
+old=subprocess.run(['git','show','38759d2d8b9de8cba5d3db18744cb2e203309619:.dockerignore'],cwd='/tmp/jrx-complete-test-9107b0d',capture_output=True,text=True,check=True).stdout
+(ctx/'.dockerignore').write_text(old)
+assert run(['build','--network','none','--progress=plain',str(ctx)],120).returncode!=0
+(ctx/'.dockerignore').write_text(pathlib.Path('/tmp/jrx-complete-test-9107b0d/.dockerignore').read_text())
+assert run(['build','--network','none','--progress=plain',str(ctx)],300).returncode==0
+pathlib.Path('/tmp/jrx-complete-evidence-9107b0d/docker-smoke-retry-details.json').write_text(json.dumps(results,indent=2))
+print('Default non-root broker startup, keyless health, offline failure matrix, and old/new synthetic build-context assertions passed.')

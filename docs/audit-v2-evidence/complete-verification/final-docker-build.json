@@ -1,0 +1,15 @@
+{
+  "name": "final-docker-build",
+  "command": [
+    "docker",
+    "build",
+    "--progress=plain",
+    "-t",
+    "jrx-complete-test-3e676b2:local",
+    "."
+  ],
+  "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+  "log": "/tmp/jrx-complete-evidence-9107b0d/final-docker-build.log",
+  "exit_code": 0,
+  "elapsed_seconds": 108.12
+}

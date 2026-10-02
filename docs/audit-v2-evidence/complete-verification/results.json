@@ -1,0 +1,408 @@
+{
+  "tested_code_sha": "3e676b23c1f5cc0b243ac2b185aba64d51e111e3",
+  "initial_remote_sha": "9107b0db87676195e21f49c2de5862d8f5657fbb",
+  "final_required_checks": [
+    {
+      "name": "final-source-scanner",
+      "command": [
+        "make",
+        "test",
+        "PYTHON=/home/masa84/jev_reflex/.venv/bin/python"
+      ],
+      "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-source-scanner.log",
+      "exit_code": 0,
+      "elapsed_seconds": 712.17
+    },
+    {
+      "name": "final-wheel311-fallback",
+      "command": [
+        "/tmp/jrx-complete-wheel311/bin/python",
+        "-m",
+        "pytest",
+        "tests",
+        "-ra",
+        "--import-mode=importlib",
+        "--durations=20",
+        "--junitxml=/tmp/jrx-complete-evidence-9107b0d/final-wheel311-fallback-tests.xml"
+      ],
+      "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-wheel311-fallback.log",
+      "exit_code": 0,
+      "elapsed_seconds": 191.25
+    },
+    {
+      "name": "final-wheel312-fallback",
+      "command": [
+        "/tmp/jrx-complete-wheel312/bin/python",
+        "-m",
+        "pytest",
+        "tests",
+        "-ra",
+        "--import-mode=importlib",
+        "--durations=20",
+        "--junitxml=/tmp/jrx-complete-evidence-9107b0d/final-wheel312-fallback-tests.xml"
+      ],
+      "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-wheel312-fallback.log",
+      "exit_code": 0,
+      "elapsed_seconds": 167.79
+    },
+    {
+      "name": "final-wheel311-cli",
+      "command": [
+        "/home/masa84/jev_reflex/.venv/bin/python",
+        "/tmp/jrx-complete-evidence-9107b0d/final-package-smoke.py",
+        "/tmp/jrx-complete-wheel311/bin",
+        "/tmp/jrx-complete-evidence-9107b0d/final-wheel311-cli-details.json"
+      ],
+      "cwd": "/tmp",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-wheel311-cli.log",
+      "exit_code": 0,
+      "elapsed_seconds": 32.59
+    },
+    {
+      "name": "final-wheel312-cli",
+      "command": [
+        "/home/masa84/jev_reflex/.venv/bin/python",
+        "/tmp/jrx-complete-evidence-9107b0d/final-package-smoke.py",
+        "/tmp/jrx-complete-wheel312/bin",
+        "/tmp/jrx-complete-evidence-9107b0d/final-wheel312-cli-details.json"
+      ],
+      "cwd": "/tmp",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-wheel312-cli.log",
+      "exit_code": 0,
+      "elapsed_seconds": 32.85
+    },
+    {
+      "name": "final-sdist311-cli",
+      "command": [
+        "/home/masa84/jev_reflex/.venv/bin/python",
+        "/tmp/jrx-complete-evidence-9107b0d/final-package-smoke.py",
+        "/tmp/jrx-complete-sdist311/bin",
+        "/tmp/jrx-complete-evidence-9107b0d/final-sdist311-cli-details.json"
+      ],
+      "cwd": "/tmp",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-sdist311-cli.log",
+      "exit_code": 0,
+      "elapsed_seconds": 35.57
+    },
+    {
+      "name": "final-ruff",
+      "command": [
+        "/home/masa84/jev_reflex/.venv/bin/python",
+        "-m",
+        "ruff",
+        "check",
+        "."
+      ],
+      "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-ruff.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.48
+    },
+    {
+      "name": "final-format",
+      "command": [
+        "/home/masa84/jev_reflex/.venv/bin/python",
+        "-m",
+        "ruff",
+        "format",
+        "--check",
+        "."
+      ],
+      "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-format.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.55
+    },
+    {
+      "name": "final-mypy",
+      "command": [
+        "/home/masa84/jev_reflex/.venv/bin/python",
+        "-m",
+        "mypy"
+      ],
+      "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-mypy.log",
+      "exit_code": 0,
+      "elapsed_seconds": 73.21
+    },
+    {
+      "name": "final-bandit",
+      "command": [
+        "/home/masa84/jev_reflex/.venv/bin/python",
+        "-m",
+        "bandit",
+        "-c",
+        "pyproject.toml",
+        "-r",
+        "src/jev_reflex",
+        "-ll"
+      ],
+      "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-bandit.log",
+      "exit_code": 0,
+      "elapsed_seconds": 4.62
+    },
+    {
+      "name": "final-helm-lint-correct",
+      "command": [
+        "/home/masa84/.local/bin/helm",
+        "lint",
+        "helm/jrx-broker"
+      ],
+      "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-helm-lint-correct.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.22
+    },
+    {
+      "name": "final-helm-render-correct",
+      "command": [
+        "/home/masa84/.local/bin/helm",
+        "template",
+        "audit",
+        "helm/jrx-broker"
+      ],
+      "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-helm-render-correct.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.17
+    },
+    {
+      "name": "final-diff",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-diff.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.39
+    },
+    {
+      "name": "final-build-isolated",
+      "command": [
+        "/home/masa84/jev_reflex/.venv/bin/python",
+        "-m",
+        "build",
+        "--outdir",
+        "/tmp/jrx-complete-evidence-9107b0d/dist-final"
+      ],
+      "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-build-isolated.log",
+      "exit_code": 0,
+      "elapsed_seconds": 15.21
+    },
+    {
+      "name": "final-docker-build",
+      "command": [
+        "docker",
+        "build",
+        "--progress=plain",
+        "-t",
+        "jrx-complete-test-3e676b2:local",
+        "."
+      ],
+      "cwd": "/tmp/jrx-complete-repaired-3e676b2",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-docker-build.log",
+      "exit_code": 0,
+      "elapsed_seconds": 108.12
+    },
+    {
+      "name": "final-docker-smoke",
+      "command": [
+        "/home/masa84/jev_reflex/.venv/bin/python",
+        "/tmp/jrx-complete-evidence-9107b0d/final-docker-smoke.py"
+      ],
+      "cwd": "/tmp",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-docker-smoke.log",
+      "exit_code": 0,
+      "elapsed_seconds": 199.69
+    },
+    {
+      "name": "final-wheel311-pip-audit",
+      "command": [
+        "/tmp/jrx-complete-wheel311/bin/python",
+        "-m",
+        "pip_audit",
+        "--cache-dir",
+        "/tmp/jrx-complete-pip-audit-cache",
+        "--progress-spinner",
+        "off",
+        "--local"
+      ],
+      "cwd": "/tmp",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-wheel311-pip-audit.log",
+      "exit_code": 0,
+      "elapsed_seconds": 14.73
+    },
+    {
+      "name": "final-wheel312-pip-audit",
+      "command": [
+        "/tmp/jrx-complete-wheel312/bin/python",
+        "-m",
+        "pip_audit",
+        "--cache-dir",
+        "/tmp/jrx-complete-pip-audit-cache",
+        "--progress-spinner",
+        "off",
+        "--local"
+      ],
+      "cwd": "/tmp",
+      "log": "/tmp/jrx-complete-evidence-9107b0d/final-wheel312-pip-audit.log",
+      "exit_code": 0,
+      "elapsed_seconds": 14.38
+    }
+  ],
+  "all_final_required_checks_passed": true,
+  "full_suites": [
+    {
+      "environment": "source-suite",
+      "code_sha": "9107b0db87676195e21f49c2de5862d8f5657fbb",
+      "scanner": "installed",
+      "total": 697,
+      "passed": 696,
+      "skipped": [
+        {
+          "test": "tests.integration.test_live_broker.test_live_broker_and_keyless_hook",
+          "reason": "requires explicit live opt-in and host TypeSafe credentials"
+        }
+      ],
+      "failed": [],
+      "pytest_seconds": 789.94
+    },
+    {
+      "environment": "wheel311-suite",
+      "code_sha": "9107b0db87676195e21f49c2de5862d8f5657fbb",
+      "scanner": "installed",
+      "total": 697,
+      "passed": 696,
+      "skipped": [
+        {
+          "test": "tests.integration.test_live_broker.test_live_broker_and_keyless_hook",
+          "reason": "requires explicit live opt-in and host TypeSafe credentials"
+        }
+      ],
+      "failed": [],
+      "pytest_seconds": 1020.06
+    },
+    {
+      "environment": "wheel312-suite",
+      "code_sha": "9107b0db87676195e21f49c2de5862d8f5657fbb",
+      "scanner": "installed",
+      "total": 697,
+      "passed": 696,
+      "skipped": [
+        {
+          "test": "tests.integration.test_live_broker.test_live_broker_and_keyless_hook",
+          "reason": "requires explicit live opt-in and host TypeSafe credentials"
+        }
+      ],
+      "failed": [],
+      "pytest_seconds": 788.1
+    },
+    {
+      "environment": "revised-source-scanner",
+      "code_sha": "3e676b23c1f5cc0b243ac2b185aba64d51e111e3",
+      "scanner": "installed",
+      "total": 700,
+      "passed": 698,
+      "skipped": [
+        {
+          "test": "tests.integration.test_live_broker.test_live_broker_and_keyless_hook",
+          "reason": "requires explicit live opt-in and host TypeSafe credentials"
+        }
+      ],
+      "failed": [
+        "tests.test_broker.test_real_lifecycle_cli"
+      ],
+      "pytest_seconds": 513.86
+    },
+    {
+      "environment": "final-wheel311-fallback",
+      "code_sha": "3e676b23c1f5cc0b243ac2b185aba64d51e111e3",
+      "scanner": "unavailable",
+      "total": 700,
+      "passed": 697,
+      "skipped": [
+        {
+          "test": "tests.integration.test_live_broker.test_live_broker_and_keyless_hook",
+          "reason": "requires explicit live opt-in and host TypeSafe credentials"
+        },
+        {
+          "test": "tests.test_gitleaks_redaction.test_real_gitleaks_redacts_reported_secret_without_leaving_input_file",
+          "reason": "real gitleaks binary unavailable"
+        },
+        {
+          "test": "tests.test_gitleaks_redaction.test_real_gitleaks_handles_repeated_secret_without_false_failure",
+          "reason": "real gitleaks binary unavailable"
+        }
+      ],
+      "failed": [],
+      "pytest_seconds": 186.62
+    },
+    {
+      "environment": "final-wheel312-fallback",
+      "code_sha": "3e676b23c1f5cc0b243ac2b185aba64d51e111e3",
+      "scanner": "unavailable",
+      "total": 700,
+      "passed": 697,
+      "skipped": [
+        {
+          "test": "tests.integration.test_live_broker.test_live_broker_and_keyless_hook",
+          "reason": "requires explicit live opt-in and host TypeSafe credentials"
+        },
+        {
+          "test": "tests.test_gitleaks_redaction.test_real_gitleaks_redacts_reported_secret_without_leaving_input_file",
+          "reason": "real gitleaks binary unavailable"
+        },
+        {
+          "test": "tests.test_gitleaks_redaction.test_real_gitleaks_handles_repeated_secret_without_false_failure",
+          "reason": "real gitleaks binary unavailable"
+        }
+      ],
+      "failed": [],
+      "pytest_seconds": 162.34
+    },
+    {
+      "environment": "final-source-scanner",
+      "code_sha": "3e676b23c1f5cc0b243ac2b185aba64d51e111e3",
+      "scanner": "installed",
+      "total": 700,
+      "passed": 699,
+      "skipped": [
+        {
+          "test": "tests.integration.test_live_broker.test_live_broker_and_keyless_hook",
+          "reason": "requires explicit live opt-in and host TypeSafe credentials"
+        }
+      ],
+      "failed": [],
+      "pytest_seconds": 645.8
+    }
+  ],
+  "retained_incidents": [
+    {
+      "log": "corrupt-fields-before.log",
+      "status": "3 regression failures before fix; fixed in tested SHA"
+    },
+    {
+      "log": "revised-source-scanner.log",
+      "status": "broker lifecycle failed once; serial retry passed; test unchanged at user request"
+    },
+    {
+      "log": "port-collision-before.log",
+      "status": "default-port collision reproduced; original intermittent failure cause unconfirmed"
+    },
+    {
+      "log": "docker-smoke.log",
+      "status": "external 120-second driver timeout; repaired-image smoke passed with 300-second driver limit"
+    },
+    {
+      "log": "final-helm-lint.log",
+      "status": "operator supplied incorrect chart path; correct-path lint/render passed"
+    }
+  ]
+}

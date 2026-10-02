@@ -1,0 +1,36 @@
+import json, os, pathlib, subprocess, sys, tempfile, time
+root=pathlib.Path(tempfile.mkdtemp(prefix='jrx-v2-wheel-smoke-'))
+binpath=pathlib.Path(sys.argv[1])
+env=dict(os.environ); env.pop('PYTHONPATH',None); env.pop('JEV_REFLEX_LIVE_TEST',None); env['TYPESAFE_API_KEY']=''
+results=[]
+def run(args, expected=0, input_text=None):
+    start=time.monotonic(); p=subprocess.run([str(binpath/'jrx'),*args],cwd=root,env=env,capture_output=True,text=True,timeout=90,input=input_text)
+    results.append({'command':['jrx',*args],'exit':p.returncode,'expected':expected,'duration':round(time.monotonic()-start,2),'output':p.stdout+p.stderr})
+    if p.returncode!=expected: raise RuntimeError(results[-1])
+for args in [['--help'],['check','--command','git status','--demo','--json'],['policy','test'],['audit','--help'],['session','--help'],['broker','--help'],['mcp','--help'],['benchmark','--help'],['intent','--help'],['authority','--help'],['benchmark','stability','--runs','1','--json']]: run(args)
+p=subprocess.run([str(binpath/'jev-reflex'),'--help'],cwd=root,env=env,capture_output=True,text=True,timeout=30); assert p.returncode==0
+state=root/'state';state.mkdir(mode=0o700); config=root/'reflex.yaml'
+config.write_text('mode: enforce\nintent:\n  enabled: true\n  path: '+str(state/'intent.db')+'\n  key_path: '+str(state/'key')+'\nauthority:\n  enabled: true\n  path: '+str(state/'authority.db')+'\n  key_path: '+str(state/'key')+'\n')
+env['JRX_SESSION_ID']='smoke-session'
+offline=root/'offline.yaml'
+offline.write_text('mode: enforce\naudit:\n  enabled: true\n  path: '+str(state/'audit.log')+'\nsession:\n  enabled: true\n  path: '+str(state/'sessions.db')+'\n')
+run(['check','--config',str(offline),'--command','git status','--demo','--json'])
+run(['audit','verify','--path',str(state/'audit.log')])
+run(['audit','tail','--path',str(state/'audit.log'),'--json'])
+run(['session','stop','smoke-session','--config',str(offline)])
+run(['session','status','smoke-session','--config',str(offline)])
+run(['broker','status','--socket',str(state/'missing.sock'),'--json'],1)
+upstream=root/'upstream.py'; marker=root/'forwarded.txt'; mcp_config=root/'mcp.yaml'
+mcp_config.write_text('mode: enforce\nmcp:\n  use_jev: false\n')
+upstream.write_text('import sys,json\nfrom pathlib import Path\nfor line in sys.stdin:\n m=json.loads(line)\n if m.get("method")=="tools/call": Path('+repr(str(marker))+').write_text("forwarded")\n print(json.dumps({"jsonrpc":"2.0","id":m["id"],"result":{}}),flush=True)\n')
+run(['mcp','serve','--server','unknown','--config',str(mcp_config),'--',str(binpath/'python'),str(upstream)],input_text=json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'unknown','arguments':{}}})+'\n')
+assert not marker.exists(); assert 'isError' in results[-1]['output']
+
+common=['--config',str(config)]
+run(['intent','keygen',*common,'--repository',str(root)])
+run(['intent','create','wheel-session',*common,'--repository',str(root),'--task','Inspect tests','--scope','tests','--capability','read'])
+run(['intent','status','wheel-session',*common]);run(['intent','explain','wheel-session',*common]);run(['intent','stop','wheel-session',*common])
+run(['authority','issue','child','child-session',*common,'--repository',str(root),'--scope','tests','--capability','read'])
+lease=json.loads(results[-1]['output'])['lease_id']
+run(['authority','inspect',lease,*common]);run(['authority','tree',lease,*common]);run(['authority','revoke',lease,*common])
+path=pathlib.Path(sys.argv[2]);path.write_text(json.dumps(results,indent=2)); print(f'{len(results)+1} installed CLI checks passed; artifacts: {path}')

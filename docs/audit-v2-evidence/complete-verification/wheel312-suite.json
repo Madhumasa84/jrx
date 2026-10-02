@@ -1,0 +1,17 @@
+{
+  "name": "wheel312-suite",
+  "command": [
+    "/tmp/jrx-complete-wheel312/bin/python",
+    "-m",
+    "pytest",
+    "tests",
+    "-ra",
+    "--import-mode=importlib",
+    "--durations=20",
+    "--junitxml=/tmp/jrx-complete-evidence-9107b0d/wheel312-tests.xml"
+  ],
+  "cwd": "/tmp/jrx-complete-test-9107b0d",
+  "log": "/tmp/jrx-complete-evidence-9107b0d/wheel312-suite.log",
+  "exit_code": 0,
+  "elapsed_seconds": 795.86
+}

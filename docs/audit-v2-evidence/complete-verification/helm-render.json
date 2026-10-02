@@ -1,0 +1,13 @@
+{
+  "name": "helm-render",
+  "command": [
+    "helm",
+    "template",
+    "jrx",
+    "helm/jrx-broker"
+  ],
+  "cwd": "/tmp/jrx-complete-test-9107b0d",
+  "log": "/tmp/jrx-complete-evidence-9107b0d/helm-render.log",
+  "exit_code": 0,
+  "elapsed_seconds": 0.23
+}
