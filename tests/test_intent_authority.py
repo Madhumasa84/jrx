@@ -61,6 +61,51 @@ def context(root, command="cat tests/test_one.py", task="Fix a failing unit test
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [("mac", b"invalid"), ("mac", "\u00e4" * 64), ("payload", b"invalid")],
+)
+def test_malformed_authenticated_fields_produce_controlled_denial(
+    controls, monkeypatch, field, invalid
+):
+    from contextlib import closing
+
+    from typer.testing import CliRunner
+
+    from jev_reflex.agent_controls import policy_revision
+    from jev_reflex.cli import app
+    from jev_reflex.evaluator import evaluate_context
+
+    config, intent, _, root = controls
+    config = config.model_copy(
+        update={"authority": config.authority.model_copy(update={"enabled": False})}
+    )
+    intent.create(
+        session_id="task-session",
+        task="Fix a failing unit test",
+        repository=str(root),
+        policy_revision=policy_revision(config),
+        scopes=["tests"],
+        capabilities=["read"],
+    )
+    # SQLite TEXT affinity permits BLOB values; corrupted records must be rejected
+    # before invoking string-only HMAC operations. The field is test-controlled.
+    with closing(sqlite3.connect(config.intent.path)) as connection:
+        connection.execute(f"UPDATE objects SET {field}=?", (invalid,))
+        connection.commit()
+    monkeypatch.setenv("JRX_SESSION_ID", "task-session")
+    result = evaluate_context(context(root), config=config, use_jev=False)
+    assert result.decision == "HOLD"
+    assert "agent_control:INTENT_DENIED" in result.triggered_rules
+    config_path = root / "corrupt-config.yaml"
+    config_path.write_text(config.model_dump_json(), encoding="utf-8")
+    output = CliRunner().invoke(
+        app, ["intent", "status", "task-session", "--config", str(config_path)]
+    )
+    assert output.exit_code == 2
+    assert "denied or state unavailable" in output.output
+
+
 def envelope(store, root, **extra):
     return store.create(
         session_id="task-session",

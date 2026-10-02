@@ -174,8 +174,12 @@ class AuthenticatedStore:
         if row is None:
             raise ControlError("agent control record missing")
         payload, mac = row
-        if len(payload) > 65536 or not hmac.compare_digest(
-            mac, self._mac(namespace, object_id, payload)
+        if (
+            not isinstance(payload, str)
+            or not isinstance(mac, str)
+            or len(payload) > 65536
+            or re.fullmatch(r"[0-9a-f]{64}", mac) is None
+            or not hmac.compare_digest(mac, self._mac(namespace, object_id, payload))
         ):
             raise ControlError("agent control record authentication failed")
         data = json.loads(payload, object_pairs_hook=unique_object)

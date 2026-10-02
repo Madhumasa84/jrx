@@ -1,5 +1,23 @@
 # Production audit V2 findings (before implementation)
 
+## Follow-up complete verification — V2-010
+
+- Severity: Low. Category: malformed persistent state / reliability.
+- Affected: `AuthenticatedStore.get`, shared by intent and authority stores.
+- Trust boundary: persisted SQLite fields → authenticated control decision.
+- Reproduction: replace `mac` with a BLOB or non-ASCII text, or `payload` with a
+  BLOB in a disposable database; evaluate an intent-bound action. Three regression
+  cases failed on pushed commit `9107b0d` with uncaught `TypeError`.
+- Expected: controlled `agent_control:INTENT_DENIED` HOLD and operator CLI exit 2.
+- Actual: public evaluation raises; operator commands can produce an uncontrolled
+  error. Native CLI hooks catch exceptions and still deny; no execution bypass was proved.
+- Root cause: SQLite TEXT affinity accepts BLOB values; HMAC string concatenation and
+  string comparison require validated string types and ASCII authenticators.
+- Proposed fix: validate payload type/size and exact lowercase 64-character hexadecimal
+  MAC before hashing/comparison, raising the existing `ControlError` on invalid state.
+- Required regression: `test_malformed_authenticated_fields_produce_controlled_denial`
+  (BLOB MAC, Unicode MAC, BLOB payload), including full evaluator and operator CLI.
+
 Base: `38759d2d8b9de8cba5d3db18744cb2e203309619`. Reproductions:
 `tests/test_production_audit_v2.py`; initial run: **11 failed in 2.88s**.
 No destructive command was executed. Git commands were evaluated as data;
