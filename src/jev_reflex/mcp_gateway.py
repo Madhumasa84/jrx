@@ -18,11 +18,13 @@ from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 from referencing import Registry
 from referencing.exceptions import NoSuchResource
 
+from .agent_state import digest
 from .config import MCPToolRule, ReflexConfig
 from .context import RepositoryContextProvider, sanitized_child_env
 from .enterprise import authorize, verified_identity
 from .evaluator import evaluate_context
 from .models import ProposedAction
+from .serialization import unique_object
 from .session_limits import SessionStore
 
 
@@ -42,7 +44,12 @@ def _no_remote_schema(uri: str) -> None:
 
 
 def _load_message(raw: bytes) -> Any:
-    return json.loads(raw, parse_float=_finite_number, parse_constant=_reject_constant)
+    return json.loads(
+        raw,
+        parse_float=_finite_number,
+        parse_constant=_reject_constant,
+        object_pairs_hook=unique_object,
+    )
 
 
 def _tool_error(request_id: object, message: str) -> dict[str, Any]:
@@ -80,6 +87,7 @@ class MCPGateway:
         self.session_id = session_id or os.environ.get("JRX_SESSION_ID", "")
         if config.session.enabled:
             SessionStore._id(self.session_id)
+        self._request_context = threading.local()
         self._output_lock = threading.Lock()
         self._pending_lock = threading.Lock()
         self._catalog_lock = threading.Lock()
@@ -226,6 +234,13 @@ class MCPGateway:
             self.sink.flush()
 
     def _forward_upstream(self, process: subprocess.Popen[bytes], raw: bytes) -> None:
+        # Only tools/call messages need action authorization; protocol initialization
+        # must work before a tool call consumes a nonce.
+        if self.config.intent.enabled or self.config.authority.enabled:
+            if _load_message(raw).get("method") == "tools/call":
+                from .agent_controls import check_liveness
+
+                check_liveness(self.config)
         if process.poll() is not None or process.stdin is None:
             raise ValueError("upstream MCP server is unavailable")
         process.stdin.write(raw)
@@ -323,6 +338,7 @@ class MCPGateway:
             samples=self.config.jev.samples,
             session_id=self.session_id,
             session_tool_calls=0,
+            action_nonce=getattr(self._request_context, "nonce", None),
         )
         if self.config.session.enabled:
             SessionStore(self.config.session).reserve(self.session_id, semantic=0, tool_calls=0)
@@ -385,6 +401,13 @@ class MCPGateway:
         try:
             if self.config.session.enabled:
                 SessionStore(self.config.session).reserve(self.session_id, semantic=0, tool_calls=1)
+            self._request_context.nonce = digest(
+                {
+                    "lease": os.environ.get("JRX_AUTHORITY_LEASE_ID", ""),
+                    "session": self.session_id,
+                    "request_id": request_id,
+                }
+            )
             allowed, reason = self._authorize_tool(params["name"], params.get("arguments", {}))
             if (
                 not allowed

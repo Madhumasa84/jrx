@@ -12,6 +12,8 @@ import yaml
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .serialization import safe_yaml_load
+
 Mode = Literal["advisory", "review", "enforce"]
 
 DEFAULT_HOLD_ON = [
@@ -34,7 +36,7 @@ DEFAULT_REVIEW_ON = [
 
 
 class ThresholdConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     strong: float = 0.90
     review: float = 0.70
@@ -56,7 +58,7 @@ class ThresholdConfig(BaseModel):
 
 
 class ContextConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     include_git_diff: bool = True
     include_changed_files: bool = True
@@ -72,14 +74,14 @@ class ContextConfig(BaseModel):
 
 
 class PrivacyConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     redact_secrets: bool = True
     store_requests: bool = False
 
 
 class AuditConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
     path: str = "~/.jev-reflex/audit.log"
@@ -93,7 +95,7 @@ class AuditConfig(BaseModel):
 
 
 class SigningConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     require_signature: bool = False
     public_key_path: str | None = None
@@ -104,7 +106,7 @@ class SigningConfig(BaseModel):
 class PolicySourceConfig(BaseModel):
     """Configuration for fetching policy from a remote source."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     type: Literal["git", "https", "local"] | None = None
     uri: str | None = None
@@ -130,7 +132,7 @@ class PolicySourceConfig(BaseModel):
 class BootstrapConfig(BaseModel):
     """Bootstrap configuration for signature verification requirements."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     require_signature: bool = False
     public_key_path: str | None = None
@@ -140,7 +142,7 @@ class BootstrapConfig(BaseModel):
 
 
 class CalibrationConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
     path: str | None = None
@@ -149,7 +151,7 @@ class CalibrationConfig(BaseModel):
 class BrokerTLSConfig(BaseModel):
     """Configuration for broker TLS transport."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     listen_addr: str = "0.0.0.0:8443"
     cert_path: str
@@ -170,7 +172,7 @@ class BrokerTLSConfig(BaseModel):
 class LoggingConfig(BaseModel):
     """Configuration for structured logging."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
     sink: Literal["stdout", "syslog", "webhook-url"] = "stdout"
@@ -224,7 +226,7 @@ class AccessConfig(BaseModel):
 
 
 class JEVConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     samples: int = 1
     aggregation: Literal["median", "mean", "max"] = "median"
@@ -245,7 +247,7 @@ class JEVConfig(BaseModel):
 
 
 class StabilityConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     boundary_margin: float = 0.0
 
@@ -257,7 +259,7 @@ class StabilityConfig(BaseModel):
 
 
 class StabilityPolicyConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     mode: Literal["strict", "conservative", "majority"] = "strict"
 
@@ -265,7 +267,7 @@ class StabilityPolicyConfig(BaseModel):
 class PolicyConfig(BaseModel):
     """Execution policy controls and override options."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     allow_hold_override: bool = False
 
@@ -444,10 +446,34 @@ class SandboxConfig(BaseModel):
         return self
 
 
+class IntentConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    path: str = "~/.jev-reflex/intent.sqlite3"
+    key_path: str = "~/.jev-reflex/agent-controls.key"
+    max_sessions: int = Field(default=1000, ge=1, le=100_000)
+    max_actions_per_session: int = Field(default=1000, ge=1, le=10_000)
+    max_records: int = Field(default=100_000, ge=1, le=1_000_000)
+
+
+class AuthorityConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    path: str = "~/.jev-reflex/authority.sqlite3"
+    key_path: str = "~/.jev-reflex/agent-controls.key"
+    environment: str = Field(default="development", min_length=1, max_length=128)
+    max_leases: int = Field(default=10_000, ge=1, le=100_000)
+    max_records: int = Field(default=100_000, ge=1, le=1_000_000)
+    max_depth: int = Field(default=4, ge=0, le=16)
+    max_ttl_seconds: int = Field(default=1800, ge=1, le=86400)
+
+
 class ReflexConfig(BaseModel):
     """Validated user configuration. Untrusted evaluated state never changes this object."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     mode: Mode = "advisory"
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
@@ -464,6 +490,8 @@ class ReflexConfig(BaseModel):
     mcp: MCPGatewayConfig = Field(default_factory=MCPGatewayConfig)
     session: SessionLimitsConfig = Field(default_factory=SessionLimitsConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
+    intent: IntentConfig = Field(default_factory=IntentConfig)
+    authority: AuthorityConfig = Field(default_factory=AuthorityConfig)
     jev: JEVConfig = Field(default_factory=JEVConfig)
     stability: StabilityConfig = Field(default_factory=StabilityConfig)
     stability_policy: StabilityPolicyConfig = Field(default_factory=StabilityPolicyConfig)
@@ -495,7 +523,7 @@ def load_config(
     if bootstrap.require_signature:
         _verify_config_signature(config_path, bootstrap, data=raw)
     try:
-        loaded = yaml.safe_load(raw.decode("utf-8"))
+        loaded = safe_yaml_load(raw.decode("utf-8"))
     except yaml.YAMLError:
         raise ValueError("configuration YAML is invalid") from None
     if loaded is None:
@@ -591,7 +619,7 @@ def load_bootstrap_config(path: Path | None = None) -> BootstrapConfig:
 
     try:
         with path.open("r", encoding="utf-8") as handle:
-            loaded = yaml.safe_load(handle)
+            loaded = safe_yaml_load(handle.read(1_048_577))
     except yaml.YAMLError:
         raise ValueError("bootstrap configuration YAML is invalid") from None
 

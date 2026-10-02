@@ -60,9 +60,10 @@ _WRAPPER_PROGRAMS = {
     "sudo",
     "timeout",
     "xargs",
+    "find",
 }
 _EVAL_PROGRAMS = {"eval"}
-_SHELL_OPERATORS = {";", "&&", "||", "|", "&"}
+_SHELL_OPERATORS = {";", "&&", "||", "|", "&", "(", ")", "\n"}
 _INTERPRETER_SIDE_EFFECT_RE = re.compile(
     r"\b(?:os\.(?:system|popen|remove|unlink|rmdir)|"
     r"shutil\.(?:rmtree|move)|(?:pathlib\.)?path\.(?:unlink|rmdir)|"
@@ -75,7 +76,8 @@ _INTERPRETER_SIDE_EFFECT_RE = re.compile(
 
 def _shell_tokens(value: str) -> list[str]:
     try:
-        lexer = shlex.shlex(value, posix=True, punctuation_chars=";&|")
+        lexer = shlex.shlex(value, posix=True, punctuation_chars=";&|()\n")
+        lexer.whitespace = " \t\r"
         lexer.whitespace_split = True
         return list(lexer)
     except ValueError:
@@ -94,7 +96,7 @@ def _contains_recursive_rm(argv: list[str], depth: int = 0) -> bool:
 
     segments: list[list[str]] = [[]]
     for token in argv:
-        if token in _SHELL_OPERATORS:
+        if token in _SHELL_OPERATORS or (token and all(char in ";&|()\n" for char in token)):
             if segments[-1]:
                 segments.append([])
         else:

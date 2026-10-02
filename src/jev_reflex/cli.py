@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import typer
-import yaml
 
 from .adapters.antigravity import antigravity_hook_error, evaluate_antigravity_hook
 from .adapters.claude_code import (
@@ -31,6 +30,7 @@ from .adapters.deepseek import deepseek_hook_error, evaluate_deepseek_hook
 from .adapters.generic import context_from_hook_payload, read_hook_payload
 from .adapters.openrouter import evaluate_openrouter_hook, openrouter_hook_error
 from .adapters.pi import evaluate_pi_hook, pi_hook_error
+from .agent_cli import authority_app, intent_app
 from .audit import AuditLog
 from .broker_cli import app as broker_app
 from .calibration import CalibrationStore
@@ -50,6 +50,7 @@ from .sandbox import (
     remove_sandbox_container,
     remove_sandbox_egress,
 )
+from .serialization import safe_yaml_load
 from .session_limits import SessionLimitError
 from .signing import Ed25519Signer, load_public_key, sign_file, verify_file
 from .stability import StabilityRunner
@@ -81,6 +82,8 @@ app.add_typer(dashboard_app, name="dashboard")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(session_app, name="session")
 app.add_typer(harness_app, name="harness")
+app.add_typer(intent_app, name="intent")
+app.add_typer(authority_app, name="authority")
 
 
 @app.callback()
@@ -534,6 +537,10 @@ def _resolve_exec_argv(command: str | None, trailing: list[str]) -> list[str]:
 
 def _execute_argv(argv: list[str], cwd: Path, config: ReflexConfig) -> int:
     """Run a command directly or in the configured isolated container."""
+    if config.intent.enabled or config.authority.enabled:
+        from .agent_controls import check_liveness
+
+        check_liveness(config)
     sandbox_container: str | None = None
     command = argv
     child_env = sanitized_child_env()
@@ -678,6 +685,15 @@ def exec_action(
         raise typer.Exit(code=2) from None
 
     _emit_result(result, json_output=json_output)
+    if any(rule.startswith("agent_control:") for rule in result.triggered_rules):
+        typer.echo("Execution blocked by host agent controls.", err=True)
+        raise typer.Exit(code=2)
+    if result.degraded and loaded.mode != "advisory":
+        typer.echo(
+            "Execution blocked: semantic evaluation is unavailable or a required security dependency failed.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
     if loaded.access is not None:
         try:
             if verified_identity(loaded.access) != enterprise_identity:
@@ -1157,6 +1173,8 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
             _result, output = evaluate_pi_hook(payload, config=loaded, demo=demo)
         else:
             _result, output = evaluate_deepseek_hook(payload, config=loaded, demo=demo)
+        if any(rule.startswith("agent_control:") for rule in _result.triggered_rules):
+            raise AccessDenied("Host agent control denied this action")
         if loaded.access is not None:
             if verified_identity(loaded.access) != identity:
                 raise AccessDenied("Identity changed during evaluation")
@@ -1725,7 +1743,7 @@ def audit_overrides(
 
 
 def _policy_file(path: Path) -> ReflexConfig:
-    value = yaml.safe_load(path.read_text(encoding="utf-8"))
+    value = safe_yaml_load(path.read_text(encoding="utf-8"))
     return ReflexConfig.model_validate(value)
 
 

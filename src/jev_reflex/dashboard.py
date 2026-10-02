@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import requests
-import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .audit import AuditLog
@@ -20,6 +19,7 @@ from .broker import BrokerClient
 from .config import AccessConfig, ReflexConfig
 from .enterprise import AccessDenied, Identity, authorize, verified_identity
 from .policy_rollout import RolloutStore, policy_hash
+from .serialization import safe_yaml_load
 
 
 class DashboardSource(BaseModel):
@@ -50,7 +50,7 @@ class DashboardConfig(BaseModel):
 
 
 def load_dashboard_config(path: Path) -> DashboardConfig:
-    return DashboardConfig.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
+    return DashboardConfig.model_validate(safe_yaml_load(path.read_text(encoding="utf-8")))
 
 
 def _pending(path: str | None, repository: str) -> list[dict[str, Any]]:
@@ -114,7 +114,7 @@ def snapshot(config: DashboardConfig, identity: Identity) -> dict[str, Any]:
         result: dict[str, Any] = {"team": source.team, "repository": source.repository}
         try:
             policy = ReflexConfig.model_validate(
-                yaml.safe_load(Path(source.policy_path).expanduser().read_text(encoding="utf-8"))
+                safe_yaml_load(Path(source.policy_path).expanduser().read_text(encoding="utf-8"))
             )
             result["active_policy_hash"] = policy_hash(policy)
             if source.rollout_state_path:

@@ -10,3 +10,11 @@ build/
 .coverage
 htmlcov/
 tests/
+
+# Never transfer local credentials to a builder or remote cache.
+.env*
+!.env.example
+.aws
+.codex
+.agents
+*.key

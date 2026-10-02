@@ -27,7 +27,9 @@ def claude_code_hook_response(result: EvaluationResult, config: ReflexConfig) ->
     output: dict[str, Any] = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
     specific = output["hookSpecificOutput"]
 
-    if config.mode == "advisory":
+    if config.mode == "advisory" and not any(
+        rule.startswith("agent_control:") for rule in result.triggered_rules
+    ):
         if result.decision != "ALLOW" or result.warnings:
             specific["additionalContext"] = reason
         return output if len(specific) > 1 else {}
