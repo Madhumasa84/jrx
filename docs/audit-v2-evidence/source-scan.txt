@@ -1,0 +1,110 @@
+tests/test_enterprise_approval.py:59:            pass
+tests/test_enterprise_approval.py:342:        "print(1)",
+tests/test_policy_golden.py:21:    """Verify that all golden fixtures pass on the default policy (reflex.example.yaml)."""
+src/jev_reflex/policy.py:219:        # A missing or malformed judge cannot silently pass an execution boundary.
+tests/test_review_regressions.py:53:            pass
+tests/test_review_regressions.py:56:            pass
+tests/test_unified_workspace.py:190:        "import json, os, sys; from pathlib import Path; Path(os.environ['CAPTURE']).write_text(json.dumps(sys.argv[1:]), encoding='utf-8'); print(json.dumps({'type': 'thread.started', 'thread_id': 'saved-thread-id'}))",
+tests/test_unified_workspace.py:228:        "import json, os, sys; from pathlib import Path; Path(os.environ['CAPTURE']).write_text(json.dumps(sys.argv[1:]), encoding='utf-8'); print(json.dumps({'event':'init','conversation_id':'saved-conversation-id','init':{'model':'gemini-3.8-flash-low'}})); print(json.dumps({'event':'step_update','step_update':{'step_type':'agent_response','text_delta':'resume receipt'}})); print(json.dumps({'event':'result','conversation_id':'saved-conversation-id','result':{'status':'SUCCESS','response':'resume receipt'}}))",
+tests/test_unified_workspace.py:267:        "import json, os, subprocess, sys, time; from pathlib import Path; child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); Path(os.environ['CHILD_PID']).write_text(str(child.pid)); print(json.dumps({'type':'thread.started','thread_id':'cancel-fixture'}), flush=True); time.sleep(30)",
+tests/test_unified_workspace.py:338:            pass
+tests/test_unified_workspace.py:341:            pass
+tests/test_unified_workspace.py:344:            pass
+tests/test_unified_workspace.py:426:            pass
+tests/test_unified_workspace.py:432:            pass
+tests/test_unified_workspace.py:474:            pass
+tests/test_unified_workspace.py:477:            pass
+tests/test_unified_workspace.py:480:            pass
+tests/test_unified_workspace.py:524:            pass
+tests/test_unified_workspace.py:527:            pass
+tests/test_unified_workspace.py:530:            pass
+tests/test_unified_workspace.py:660:    _fake_cli(bin_dir, "agy", "print('gemini-test-model Test Model (medium)')")
+tests/test_unified_workspace.py:859:        pass
+tests/test_unified_workspace.py:1173:        f"print({event!r})\n"
+tests/test_metrics.py:365:            pass
+tests/test_metrics.py:372:            pass
+tests/test_metrics.py:375:            pass
+tests/test_git_inspection.py:308:        pass  # host git 2.34 doesn't support reftable runtime, but format inspection must have passed
+tests/test_broker.py:65:            pass
+tests/test_sandbox.py:93:    command, name = build_sandbox_command(["python", "-c", "print('inside')"], tmp_path, config)
+tests/test_sandbox.py:107:    assert command[-3:] == ["python:3.11-slim", "-c", "print('inside')"]
+tests/test_acp_harness.py:17: print(json.dumps(obj),flush=True)
+tests/test_acp_harness.py:109:        pass
+tests/test_acp_harness.py:129:        pass
+tests/test_harness_tools.py:141:        lambda *_: ([sys.executable, "-c", "print('x' * 100000)"], "test-container"),
+tests/test_signing.py:150:    """Test that CosignSigner raises NotImplementedError for sign/verify."""
+tests/test_signing.py:152:    with pytest.raises(NotImplementedError):
+tests/test_signing.py:155:    with pytest.raises(NotImplementedError):
+tests/test_intent_authority.py:100:        "python -c 'print(1)'",
+tests/test_harness_cli.py:61: print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}),flush=True)
+tests/test_integration.py:18:        pass
+src/jev_reflex/mcp_gateway.py:485:                            pass
+tests/test_fail_closed.py:137:    """Create a context that would pass hard rules (safe command)."""
+tests/test_checks.py:128:    findings = run_deterministic_checks(_context(tmp_path, "python -c \"print('hello')\""))
+tests/test_gitleaks_redaction.py:332:@pytest.mark.skipif(shutil.which("gitleaks") is None, reason="real gitleaks binary unavailable")
+tests/test_gitleaks_redaction.py:343:@pytest.mark.skipif(shutil.which("gitleaks") is None, reason="real gitleaks binary unavailable")
+tests/test_mcp_session.py:107:        _execute_argv([sys.executable, "-c", "print('should not run')"], tmp_path, config)
+tests/test_mcp_session.py:168:        " print(json.dumps({'jsonrpc':'2.0','id':m['id'],'result':result}),flush=True)\n"
+src/jev_reflex/sandbox.py:262:            pass
+tests/test_mcp_schema_pin.py:62:        " print(json.dumps({'jsonrpc':'2.0','id':m.get('id'),'result':result}),flush=True)\n"
+tests/test_mcp_schema_pin.py:64:        "  print(json.dumps({'jsonrpc':'2.0','method':'notifications/tools/list_changed'}),flush=True)\n",
+tests/test_mcp_schema_pin.py:93:            pass
+src/jev_reflex/signing.py:112:        raise NotImplementedError(
+src/jev_reflex/signing.py:118:        raise NotImplementedError(
+src/jev_reflex/signing.py:146:        pass
+tests/test_helm_chart.py:14:        pytest.skip("helm CLI not found in PATH")
+tests/test_helm_chart.py:21:@pytest.mark.skipif(not HELM_BIN, reason="helm CLI required")
+tests/test_helm_chart.py:41:@pytest.mark.skipif(not HELM_BIN, reason="helm CLI required")
+tests/test_helm_chart.py:59:@pytest.mark.skipif(not HELM_BIN, reason="helm CLI required")
+tests/test_helm_chart.py:77:@pytest.mark.skipif(not HELM_BIN, reason="helm CLI required")
+src/jev_reflex/identity.py:29:        pass
+src/jev_reflex/broker_cli.py:142:        pass
+tests/integration/test_live_broker.py:17:pytestmark = pytest.mark.skipif(
+src/jev_reflex/enterprise.py:196:                pass
+src/jev_reflex/config.py:399:                pass
+tests/integration/test_docker_sandbox.py:20:        pytest.skip("Docker CLI is unavailable")
+tests/integration/test_docker_sandbox.py:30:        pytest.skip("Docker daemon is unavailable")
+tests/integration/test_docker_sandbox.py:41:        pytest.skip(f"Docker test image is not cached: {image}")
+tests/integration/test_docker_sandbox.py:234:                    pass
+src/jev_reflex/_egress_proxy.py:123:            pass
+src/jev_reflex/_egress_proxy.py:177:                pass
+src/jev_reflex/session_limits.py:31:                pass
+src/jev_reflex/cli.py:597:                pass
+src/jev_reflex/cli.py:604:                    pass
+src/jev_reflex/cli.py:1466:    # Safe context that would pass hard rules
+src/jev_reflex/logging_config.py:108:                pass
+src/jev_reflex/logging_config.py:137:            pass
+src/jev_reflex/logging_config.py:152:        print(json.dumps(entry, separators=(",", ":")), file=sys.stdout, flush=True)
+src/jev_reflex/policy_source.py:28:    pass
+src/jev_reflex/policy_source.py:34:    pass
+src/jev_reflex/broker.py:43:            pass
+src/jev_reflex/broker.py:68:        print(json.dumps(fields, separators=(",", ":")), file=sys.stderr, flush=True)
+src/jev_reflex/broker.py:345:                pass
+src/jev_reflex/broker.py:351:                    pass
+src/jev_reflex/broker.py:464:                pass
+src/jev_reflex/broker.py:567:            print(
+src/jev_reflex/broker.py:614:                            pass
+src/jev_reflex/broker.py:672:        print(f"TLS: listening on {tls_config.listen_addr}", flush=True)
+src/jev_reflex/workspace/harness_tools.py:272:                    pass
+src/jev_reflex/workspace/acp_harness.py:81:            pass
+src/jev_reflex/workspace/process.py:140:                pass
+src/jev_reflex/workspace/hooks.py:195:            pass
+src/jev_reflex/workspace/hooks.py:199:            pass
+src/jev_reflex/workspace/state.py:92:            pass
+src/jev_reflex/workspace/state.py:96:            pass
+src/jev_reflex/workspace/ui.py:188:        pass
+src/jev_reflex/workspace/ui.py:422:                pass
+src/jev_reflex/workspace/ui.py:1392:        print(f"Managed session: {session.session_id}")
+src/jev_reflex/workspace/ui.py:1393:        record = session.run(task, on_event=lambda event: print(_display(event)))
+src/jev_reflex/workspace/ui.py:1395:            print(_display(record["pending"]))
+src/jev_reflex/workspace/ui.py:1403:            record = session.run(decision=decision, on_event=lambda event: print(_display(event)))
+src/jev_reflex/workspace/ui.py:1404:        print(
+src/jev_reflex/workspace/ui.py:1413:        print(f"Resume later: jrx harness resume {session.session_id} --workspace {root}")
+src/jev_reflex/workspace/ui.py:1416:        print(f"Managed harness stopped: {sanitize_terminal_text(str(exc))}")
+src/jev_reflex/workspace/ui.py:1419:        pass
+src/jev_reflex/workspace/ui.py:1432:            pass
+src/jev_reflex/workspace/ui.py:1746:        print(
+src/jev_reflex/workspace/ui.py:1752:        print("JRX terminal workspace requires Python curses on Linux or macOS.", file=sys.stderr)
+src/jev_reflex/workspace/ui.py:1755:        print(
+src/jev_reflex/workspace/ui.py:1765:        print(f"JRX terminal workspace could not start: {exc}", file=sys.stderr)
+src/jev_reflex/calibration.py:95:                    pass

@@ -49,6 +49,20 @@ Use it as a CLI wrapper, an agent hook, or a Model Context Protocol (MCP) gatewa
 
 ## Architecture
 
+### Optional session authority controls
+
+The [intent guard](docs/intent-lineage.md) binds an execution session to an immutable
+task, repository, policy revision, path scopes and capability classes. Authenticated
+lineage records expose cumulative drift and deterministic scope violations.
+[Authority leases](docs/authority-delegation.md) delegate a subset of parent session
+authority with expiry, ancestor revocation and single-use action nonces. Both controls
+are implemented and disabled by default; deployment in autonomous agent hosts remains
+experimental. They require protected host keys, state, identity and session assertions.
+They do not trace runtime accesses or replace sandboxing, OIDC or human approval.
+
+See [Production Audit V2](PRODUCTION_AUDIT_V2.md) for reproduced defects, verification
+results and remaining deployment gaps.
+
 ```mermaid
 flowchart TD
     Agent["Agent action: command, patch, or tool call"] --> Context["Bound context and redact secrets"]

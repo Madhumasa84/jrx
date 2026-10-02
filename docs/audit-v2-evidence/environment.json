@@ -1,0 +1,11 @@
+{
+  "base": "38759d2d8b9de8cba5d3db18744cb2e203309619",
+  "implementation": "d0cb4f5be1825e28141e98202ce29ada9f2c1e8c",
+  "python": "3.11.15 (main, Jun 11 2026, 04:03:40) [Clang 22.1.3 ]",
+  "platform": "Linux-6.18.40.1-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+  "git": "git version 2.34.1",
+  "original_branch": "feat/unified-agent-workspace",
+  "audit_branch": "hardening/production-audit-v2",
+  "worktree": "/tmp/jrx-production-audit-v2",
+  "paid_live_test": "disabled"
+}

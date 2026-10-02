@@ -1,0 +1,346 @@
+[
+  {
+    "command": [
+      "jrx",
+      "--help"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.6
+  },
+  {
+    "command": [
+      "jrx",
+      "check",
+      "--command",
+      "git status",
+      "--demo",
+      "--json"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 1.05
+  },
+  {
+    "command": [
+      "jrx",
+      "policy",
+      "test"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 26.41
+  },
+  {
+    "command": [
+      "jrx",
+      "audit",
+      "--help"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.68
+  },
+  {
+    "command": [
+      "jrx",
+      "session",
+      "--help"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.72
+  },
+  {
+    "command": [
+      "jrx",
+      "broker",
+      "--help"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.71
+  },
+  {
+    "command": [
+      "jrx",
+      "mcp",
+      "--help"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.58
+  },
+  {
+    "command": [
+      "jrx",
+      "benchmark",
+      "--help"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.65
+  },
+  {
+    "command": [
+      "jrx",
+      "intent",
+      "--help"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.64
+  },
+  {
+    "command": [
+      "jrx",
+      "authority",
+      "--help"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.64
+  },
+  {
+    "command": [
+      "jrx",
+      "benchmark",
+      "stability",
+      "--runs",
+      "1",
+      "--json"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 9.41
+  },
+  {
+    "command": [
+      "jrx",
+      "check",
+      "--config",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/offline.yaml",
+      "--command",
+      "git status",
+      "--demo",
+      "--json"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 1.27
+  },
+  {
+    "command": [
+      "jrx",
+      "audit",
+      "verify",
+      "--path",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/state/audit.log"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.63
+  },
+  {
+    "command": [
+      "jrx",
+      "audit",
+      "tail",
+      "--path",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/state/audit.log",
+      "--json"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.54
+  },
+  {
+    "command": [
+      "jrx",
+      "session",
+      "stop",
+      "smoke-session",
+      "--config",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/offline.yaml"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.58
+  },
+  {
+    "command": [
+      "jrx",
+      "session",
+      "status",
+      "smoke-session",
+      "--config",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/offline.yaml"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.72
+  },
+  {
+    "command": [
+      "jrx",
+      "broker",
+      "status",
+      "--socket",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/state/missing.sock",
+      "--json"
+    ],
+    "exit": 1,
+    "expected": 1,
+    "duration": 0.62
+  },
+  {
+    "command": [
+      "jrx",
+      "mcp",
+      "serve",
+      "--server",
+      "unknown",
+      "--config",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/mcp.yaml",
+      "--",
+      "/tmp/jrx-v2-wheel-env/bin/python",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/upstream.py"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.66
+  },
+  {
+    "command": [
+      "jrx",
+      "intent",
+      "keygen",
+      "--config",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/reflex.yaml",
+      "--repository",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.61
+  },
+  {
+    "command": [
+      "jrx",
+      "intent",
+      "create",
+      "wheel-session",
+      "--config",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/reflex.yaml",
+      "--repository",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8",
+      "--task",
+      "Inspect tests",
+      "--scope",
+      "tests",
+      "--capability",
+      "read"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.59
+  },
+  {
+    "command": [
+      "jrx",
+      "intent",
+      "status",
+      "wheel-session",
+      "--config",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/reflex.yaml"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.53
+  },
+  {
+    "command": [
+      "jrx",
+      "intent",
+      "explain",
+      "wheel-session",
+      "--config",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/reflex.yaml"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.59
+  },
+  {
+    "command": [
+      "jrx",
+      "intent",
+      "stop",
+      "wheel-session",
+      "--config",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/reflex.yaml"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.66
+  },
+  {
+    "command": [
+      "jrx",
+      "authority",
+      "issue",
+      "child",
+      "child-session",
+      "--config",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/reflex.yaml",
+      "--repository",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8",
+      "--scope",
+      "tests",
+      "--capability",
+      "read"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.65
+  },
+  {
+    "command": [
+      "jrx",
+      "authority",
+      "inspect",
+      "2859bb88c87d4f9fa3b36f2f2663ceb0",
+      "--config",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/reflex.yaml"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.68
+  },
+  {
+    "command": [
+      "jrx",
+      "authority",
+      "tree",
+      "2859bb88c87d4f9fa3b36f2f2663ceb0",
+      "--config",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/reflex.yaml"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.64
+  },
+  {
+    "command": [
+      "jrx",
+      "authority",
+      "revoke",
+      "2859bb88c87d4f9fa3b36f2f2663ceb0",
+      "--config",
+      "/tmp/jrx-v2-wheel-smoke-twupgwa8/reflex.yaml"
+    ],
+    "exit": 0,
+    "expected": 0,
+    "duration": 0.67
+  }
+]

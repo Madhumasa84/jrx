@@ -32,6 +32,22 @@ state.
 
 ## Layers
 
+### Optional session controls
+
+After ordinary policy evaluation, `agent_controls.py` applies the optional intent and
+authority gates. `action_scope.py` conservatively classifies preflight resources and
+capabilities. `intent.py` appends authenticated lineage and accumulates drift;
+`authority.py` validates every ancestor and atomically consumes an action nonce.
+`agent_state.py` supplies private host keys, authenticated records and SQLite immediate
+transactions. Storage bounds deny additional records instead of discarding evidence.
+CLI execution and MCP forwarding recheck stop/revocation immediately before dispatch.
+Configured control denials remain binding under advisory mode and ordinary approvals.
+
+These controls are disabled by default. See [intent lineage](intent-lineage.md) and
+[authority delegation](authority-delegation.md) for host trust assumptions, supported
+classifiers and deployment limitations. The pure ordinary policy engine remains
+separate from persistent session authorization.
+
 ### ContextProvider
 
 `RepositoryContextProvider` collects a compact `EvaluationContext`:
