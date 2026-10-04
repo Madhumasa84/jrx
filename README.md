@@ -485,6 +485,7 @@ agent hooks or upstream MCP servers.
 | Command | Usage | Description |
 | :--- | :--- | :--- |
 | `jrx` | `jrx` | Open the interactive agent workspace when stdin/stdout are TTYs. |
+| `jrx harness` | `jrx harness [run\|resume\|status\|acp]` | Run or resume managed agent sessions, inspect checkpoints, or connect an ACP agent. See the [managed harness guide](docs/agent-harness.md). |
 | `jrx doctor` | `jrx doctor [--provider NAME] [--models]` | Inspect installed CLIs, safe authentication status, hook files, JEV status, and policy coverage. |
 | `jrx setup` | `jrx setup --provider NAME [--apply\|--rollback]` | Preview or apply a merged provider hook configuration, or narrowly remove JRX's entry. |
 | `jrx check` | `jrx check --command "<cmd>"` | Analyze proposed action without executing. Supports `--json`, `--task`, `--stdin-diff`. |
@@ -594,6 +595,7 @@ helm install jrx-broker ./helm/jrx-broker \
 | :--- | :--- |
 | **[System Architecture](docs/architecture.md)** | Evaluation pipeline, context bounding, and pure policy logic. |
 | **[Unified Agent Workspace](docs/unified-agent-workspace.md)** | Native CLI selection, model/session references, reviewed context handoffs, streaming limits, and provider capability matrix. |
+| **[Managed Agent Harness](docs/agent-harness.md)** | Planning sessions, durable checkpoints, reviewed actions, read-only workers, and ACP agent integration. |
 | **[Harness Integrations](docs/harnesses.md)** | Comprehensive setup guides for Codex, Claude Code, Antigravity, OpenRouter, Pi, and DeepSeek. |
 | **[Security Architecture](docs/security.md)** | Hard check mechanics, secret redaction engine, Ed25519 signing, and boundary traversal defenses. |
 | **[Enterprise Threat Model](docs/threat-model.md)** | Formal security boundaries, 12 attacker personas, and negative security findings. |
