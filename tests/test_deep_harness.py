@@ -2,6 +2,7 @@
 
 import hashlib
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +13,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage
 
 from jev_reflex.config import ReflexConfig
+from jev_reflex.workspace import harness_tools
 from jev_reflex.workspace.deep_harness import (
     HarnessBudgetError,
     HarnessSession,
@@ -32,6 +34,11 @@ def call(name, args, identifier="call-1"):
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(
+        harness_tools.DefaultEvaluator,
+        "evaluate",
+        lambda *_: SimpleNamespace(degraded=False, decision="REVIEW"),
+    )
     root = tmp_path / "repo"
     root.mkdir()
     subprocess.run(["git", "init", "-q", str(root)], check=True)
@@ -120,7 +127,14 @@ def test_changed_workspace_invalidates_approval(workspace):
         graph.run(decision="approve")
 
 
-def test_reviewed_memory_survives_new_session(workspace):
+def test_reviewed_memory_survives_new_session(workspace, monkeypatch):
+    evaluated = []
+
+    def evaluate(_self, context):
+        evaluated.append(context)
+        return SimpleNamespace(degraded=False, decision="REVIEW")
+
+    monkeypatch.setattr(harness_tools.DefaultEvaluator, "evaluate", evaluate)
     graph = session(
         workspace,
         [
@@ -130,10 +144,47 @@ def test_reviewed_memory_survives_new_session(workspace):
     )
     graph.run("Remember the test command")
     assert graph.run(decision="approve")["state"] == "completed"
+    assert len(evaluated) == 1
+    assert evaluated[0].proposed_action.type == "memory_write"
+    assert evaluated[0].proposed_action.input == {
+        "key": "tests",
+        "note": "Run pytest for checks.",
+    }
     fresh = session(workspace, [call("recall_notes", {}), AIMessage(content="Memory retrieved.")])
     events = []
     fresh.run("Recall prior findings", on_event=events.append)
     assert "Run pytest for checks" in str(events)
+
+
+@pytest.mark.parametrize(("degraded", "decision"), [(False, "HOLD"), (True, "REVIEW")])
+def test_memory_approval_does_not_override_policy_hold(workspace, monkeypatch, degraded, decision):
+    monkeypatch.setattr(
+        harness_tools.DefaultEvaluator,
+        "evaluate",
+        lambda *_: SimpleNamespace(
+            degraded=degraded,
+            decision=decision,
+            reason_summary=lambda: "memory write blocked",
+        ),
+    )
+    graph = session(
+        workspace,
+        [
+            call("remember_note", {"key": "blocked", "note": "Must not persist."}),
+            AIMessage(content="Save attempted."),
+        ],
+    )
+    assert graph.run("Remember this note")["state"] == "awaiting_approval"
+    with pytest.raises(PermissionError, match="JRX blocked"):
+        graph.run(decision="approve")
+
+    fresh = session(
+        workspace,
+        [call("recall_notes", {}), AIMessage(content="Memory checked.")],
+    )
+    events = []
+    fresh.run("Check workspace memory", on_event=events.append)
+    assert "Must not persist" not in str(events)
 
 
 def test_subagent_reads_share_budget_and_return_to_coordinator(workspace):
@@ -208,6 +259,44 @@ def test_policy_changes_cannot_reuse_checkpoint(workspace):
             model_name="offline:test",
             session_id=graph.session_id,
         )
+
+
+def test_policy_changes_cannot_approve_open_session(workspace):
+    graph = session(
+        workspace,
+        [
+            call(
+                "workspace_write",
+                {"path": "new.txt", "content": "unreviewed policy", "expected_sha256": "new"},
+            ),
+            AIMessage(content="Done."),
+        ],
+    )
+    assert graph.run("Create a file")["state"] == "awaiting_approval"
+    graph.config.policy.allow_hold_override = True
+
+    with pytest.raises(WorkspaceError, match="model or policy changed"):
+        graph.run(decision="approve")
+
+    assert not (workspace / "new.txt").exists()
+    assert load_session(workspace, graph.session_id)["state"] == "awaiting_approval"
+
+
+def test_graph_setup_failure_is_recorded_and_recoverable(workspace, monkeypatch):
+    graph = session(workspace, [AIMessage(content="Recovered.")])
+    with monkeypatch.context() as patch:
+
+        def fail_setup(*_):
+            raise RuntimeError("graph setup failed")
+
+        patch.setattr(graph, "_graph", fail_setup)
+        with pytest.raises(RuntimeError, match="graph setup failed"):
+            graph.run("Inspect the repository")
+
+    saved = load_session(workspace, graph.session_id)
+    assert saved["state"] == "failed"
+    assert saved["error"] == "RuntimeError"
+    assert graph.run("Inspect the repository", recover=True)["state"] == "completed"
 
 
 def test_scratch_execute_cannot_run_host_commands(workspace):

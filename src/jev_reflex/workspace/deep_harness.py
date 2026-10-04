@@ -187,7 +187,8 @@ class HarnessSession:
         from langchain.agents.middleware import AgentMiddleware, TodoListMiddleware
         from langchain_core.tools import tool
 
-        from .harness_tools import build_tools
+        from ..models import ProposedAction
+        from .harness_tools import build_tools, enforce_harness_action
 
         checkpoint_conn = _private_connection(self.directory / f"{self.session_id}.sqlite3")
         stack.callback(checkpoint_conn.close)
@@ -212,6 +213,18 @@ class HarnessSession:
             """Save a reviewed, concise note for future tasks in this workspace."""
             if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", key) or len(note) > 8_000:
                 return "Invalid memory key or note exceeds 8000 characters."
+            enforce_harness_action(
+                ProposedAction(
+                    type="memory_write",
+                    input={"key": key, "note": note},
+                    description=f"Save workspace memory note {key}",
+                ),
+                self.workspace,
+                self.config,
+                self.record["objective"],
+                self.session_id,
+                deadline=self.deadline,
+            )
             store.put(("workspace",), key, {"note": redact_text(note), "source": self.session_id})
             return "Saved as unverified memory; re-check before relying on it."
 
@@ -288,6 +301,10 @@ class HarnessSession:
         with WorkspaceLock(self.workspace), ExitStack() as stack:
             if self.path.exists():
                 self.record = load_session(self.workspace, self.session_id)
+            if self.record["model"] != self.model_name or self.record["policy"] != policy_identity(
+                self.config
+            ):
+                raise WorkspaceError("model or policy changed; start a new harness session")
             pending = self.record.get("pending", [])
             if pending and task:
                 raise WorkspaceError("resolve the pending approval before sending another task")
@@ -312,7 +329,6 @@ class HarnessSession:
                 self.record["objective"] = redact_text(task)
             self.record["state"] = "running"
             self._save()
-            graph = self._graph(stack)
             run_config = {
                 "configurable": {"thread_id": self.session_id},
                 "recursion_limit": 1_000,
@@ -330,6 +346,7 @@ class HarnessSession:
             else:
                 payload = None
             try:
+                graph = self._graph(stack)
                 for chunk in graph.stream(
                     payload, config=run_config, stream_mode="updates", subgraphs=True
                 ):
