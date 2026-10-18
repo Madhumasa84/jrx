@@ -6,7 +6,7 @@ import re
 import shlex
 
 from ..models import DeterministicFinding, EvaluationContext
-from .common import action_argv, command_text
+from .common import action_argv, command_text, git_option_sets
 
 
 def _clear() -> DeterministicFinding:
@@ -39,7 +39,7 @@ def _rm_is_recursive_force(argv: list[str]) -> bool:
         if item == "--":
             break
         if not item.startswith("-") or item == "-":
-            break
+            continue
         if item.startswith("--"):
             if item.split("=", 1)[0].lower() == "--recursive":
                 return True
@@ -143,9 +143,9 @@ def evaluate(context: EvaluationContext) -> list[DeterministicFinding]:
         return [_trigger("RECURSIVE_DELETE")]
     if _INTERPRETER_SIDE_EFFECT_RE.search(text):
         return [_trigger("INTERPRETER_SIDE_EFFECT")]
-    if re.search(r"\bgit\s+reset\s+[^\n]*--hard\b", text):
+    if any("--hard" in flags for flags in git_option_sets(context, "reset")):
         return [_trigger("GIT_HARD_RESET")]
-    if re.search(r"\bgit\s+clean\s+[^\n]*-[a-z]*f[a-z]*\b", text):
+    if any(flags & {"-f", "--force"} for flags in git_option_sets(context, "clean")):
         return [_trigger("GIT_CLEAN_FORCE")]
     if re.search(r"\b(?:drop\s+(?:database|table)|truncate\s+table)\b", text):
         return [_trigger("DATABASE_DESTRUCTIVE")]

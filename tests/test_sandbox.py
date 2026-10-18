@@ -182,9 +182,11 @@ def test_keyboard_interrupt_cleans_sandbox_container_and_egress(
 
     class InterruptedProcess:
         pid = 1234
+        interrupted = False
 
         def wait(self, timeout: float | None = None) -> int:
-            if timeout != 1:
+            if not self.interrupted:
+                self.interrupted = True
                 raise KeyboardInterrupt
             events.append("waited")
             return 0
@@ -209,7 +211,15 @@ def test_keyboard_interrupt_cleans_sandbox_container_and_egress(
     with pytest.raises(KeyboardInterrupt):
         cli._execute_argv(["python", "-c", "pass"], tmp_path, config)
 
-    assert events == ["prepared", "terminated", "waited", "container", "egress"]
+    assert events == [
+        "prepared",
+        "terminated",
+        "waited",
+        "terminated",
+        "waited",
+        "container",
+        "egress",
+    ]
 
 
 def test_docker_cleanup_retries_container_and_network_removal_races(

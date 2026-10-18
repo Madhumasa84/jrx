@@ -288,6 +288,7 @@ def collect_workspace_state(workspace: Path) -> dict[str, Any]:
     if status_result.returncode != 0:
         raise WorkspaceError("Git could not inspect workspace changes")
     files: list[dict[str, Any]] = []
+    files_truncated = False
     fingerprint_bytes = 0
     for entry in _porcelain_entries(status_result.stdout):
         relative = entry["path"]
@@ -298,6 +299,9 @@ def collect_workspace_state(workspace: Path) -> dict[str, Any]:
             lexical = Path(os.path.normpath(os.fspath(candidate)))
             if not lexical.is_relative_to(root):
                 continue
+            if len(files) >= MAX_CHANGED_FILES:
+                files_truncated = True
+                break
             # Inspect each path component without resolving symlinks. A tracked
             # or untracked symlink is metadata only; never stat its target.
             relative_parts = Path(relative).parts
@@ -350,8 +354,6 @@ def collect_workspace_state(workspace: Path) -> dict[str, Any]:
             else:
                 item["fingerprint"] = "stat-only (file or total fingerprint limit)"
         files.append(item)
-        if len(files) >= MAX_CHANGED_FILES:
-            break
     return {
         "root": str(root),
         "git": True,
@@ -362,6 +364,7 @@ def collect_workspace_state(workspace: Path) -> dict[str, Any]:
         "base_reference": "HEAD at checkpoint capture" if current_commit else None,
         "current_commit": current_commit,
         "files": files,
+        "files_truncated": files_truncated,
         "capabilities": "full Git metadata; base is checkpoint HEAD, not a branch merge base",
     }
 

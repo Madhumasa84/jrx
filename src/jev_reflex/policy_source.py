@@ -254,9 +254,10 @@ class PolicyMerger:
             merged_data["thresholds"]["hold"] = merged_strong
         merged_data["thresholds"]["review"] = merged_review
 
-        # Merge mode: enforce is stricter than review, which is stricter than advisory
-        # Local can only move toward stricter mode
-        mode_strictness = {"advisory": 0, "review": 1, "enforce": 2}
+        # Review and enforce are incomparable: review adds confirmation for
+        # REVIEW but can permit confirmed HOLD actions that enforce forbids.
+        # Only advisory can safely be tightened to a different mode locally.
+        mode_strictness = {"advisory": 0, "enforce": 1, "review": 1}
         central_strictness = mode_strictness[central.mode]
         local_strictness = mode_strictness[local.mode]
 

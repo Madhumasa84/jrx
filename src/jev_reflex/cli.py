@@ -9,6 +9,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -50,8 +51,8 @@ from .sandbox import (
     remove_sandbox_container,
     remove_sandbox_egress,
 )
-from .session_limits import SessionLimitError
-from .signing import Ed25519Signer, load_public_key, sign_file, verify_file
+from .session_limits import MAX_SESSION_OFFSET, SessionLimitError
+from .signing import CosignSigner, Ed25519Signer, Signer, load_public_key, sign_file, verify_file
 from .stability import StabilityRunner
 
 app = typer.Typer(
@@ -532,6 +533,30 @@ def _resolve_exec_argv(command: str | None, trailing: list[str]) -> list[str]:
     return values
 
 
+def _stop_execution(process: subprocess.Popen[bytes]) -> None:
+    """Reap an owned command and stop descendants even after its leader exits."""
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        pass
+    finally:
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
 def _execute_argv(argv: list[str], cwd: Path, config: ReflexConfig) -> int:
     """Run a command directly or in the configured isolated container."""
     sandbox_container: str | None = None
@@ -539,11 +564,6 @@ def _execute_argv(argv: list[str], cwd: Path, config: ReflexConfig) -> int:
     child_env = sanitized_child_env()
     if config.sandbox.enabled:
         command, sandbox_container = build_sandbox_command(argv, cwd, config.sandbox)
-    if not config.session.enabled and not config.sandbox.enabled:
-        return subprocess.run(
-            argv, cwd=str(cwd), env=child_env, check=False, shell=False
-        ).returncode
-
     store = None
     session_id = ""
     if config.session.enabled:
@@ -554,6 +574,14 @@ def _execute_argv(argv: list[str], cwd: Path, config: ReflexConfig) -> int:
         store.reserve(session_id, semantic=0, tool_calls=0)
     egress_prepared = False
     process: subprocess.Popen[bytes] | None = None
+    old_term = None
+    if threading.current_thread() is threading.main_thread():
+        old_term = signal.getsignal(signal.SIGTERM)
+
+        def terminate_handler(signum: int, _frame: Any) -> None:
+            raise SystemExit(128 + signum)
+
+        signal.signal(signal.SIGTERM, terminate_handler)
     try:
         if sandbox_container is not None and config.sandbox.allowed_hosts:
             prepare_sandbox_egress(config.sandbox, sandbox_container)
@@ -561,7 +589,11 @@ def _execute_argv(argv: list[str], cwd: Path, config: ReflexConfig) -> int:
         if store is not None:
             store.reserve(session_id, semantic=0, tool_calls=0)
         process = subprocess.Popen(
-            command, cwd=str(cwd), env=child_env, shell=False, start_new_session=True
+            command,
+            cwd=str(cwd),
+            env=child_env,
+            shell=False,
+            start_new_session=os.name == "posix",
         )
         timeout = config.sandbox.max_execution_seconds if config.sandbox.enabled else None
         if config.session.enabled:
@@ -582,27 +614,22 @@ def _execute_argv(argv: list[str], cwd: Path, config: ReflexConfig) -> int:
                     raise SessionLimitError("session execution time limit reached") from None
                 if store is not None:
                     store.reserve(session_id, semantic=0, tool_calls=0)
-    except (KeyboardInterrupt, SessionLimitError, OSError, subprocess.TimeoutExpired):
-        if process is not None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait()
-            if sandbox_container is not None:
-                remove_sandbox_container(config.sandbox, sandbox_container)
-        raise
     finally:
-        if egress_prepared:
-            assert sandbox_container is not None
-            remove_sandbox_egress(config.sandbox, sandbox_container)
+        try:
+            if process is not None:
+                _stop_execution(process)
+        finally:
+            try:
+                if sandbox_container is not None and process is not None:
+                    remove_sandbox_container(config.sandbox, sandbox_container)
+            finally:
+                try:
+                    if egress_prepared:
+                        assert sandbox_container is not None
+                        remove_sandbox_egress(config.sandbox, sandbox_container)
+                finally:
+                    if old_term is not None:
+                        signal.signal(signal.SIGTERM, old_term)
 
 
 @app.command("exec", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
@@ -1612,6 +1639,62 @@ def audit_verify(
         raise typer.Exit(code=1) from None
 
 
+@audit_app.command("report")
+def audit_report(
+    config: Path | None = typer.Option(
+        None, "--config", help="Configuration for audit path and verification keys."
+    ),
+    path: Path | None = typer.Option(None, "--path", help="Audit log to report on."),
+    public_key: Path | None = typer.Option(
+        None, "--public-key", help="Verify every record against this pinned public key."
+    ),
+    since: str | None = typer.Option(
+        None, "--since", help="Inclusive start date or ISO timestamp, in UTC by default."
+    ),
+    until: str | None = typer.Option(
+        None, "--until", help="Inclusive end date or ISO timestamp, in UTC by default."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable report."),
+) -> None:
+    """Summarize a verified audit snapshot without action text or identities."""
+    from .audit_report import build_audit_report
+
+    try:
+        loaded = _load(config, None)
+        report = build_audit_report(
+            path or Path(loaded.audit.path), loaded, public_key=public_key, since=since, until=until
+        )
+    except (OSError, ValueError):
+        typer.echo(
+            "Audit report failed; check the log integrity, verification key, and date range.",
+            err=True,
+        )
+        raise typer.Exit(code=2) from None
+    if json_output:
+        typer.echo(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        verified = report["verification"]
+        typer.echo(
+            f"Verified {verified['records_verified']} records; selected {report['records_selected']}."
+        )
+        typer.echo(
+            "Signatures verified."
+            if verified["signatures_verified"]
+            else "Hash chain verified; signatures not checked."
+        )
+        typer.echo(
+            "Decisions: "
+            + ", ".join(f"{name}={count}" for name, count in report["decisions"].items())
+        )
+        typer.echo(
+            f"Degraded evaluations: {report['degraded_evaluations']} (unknown in {report['legacy_unknown_degraded']} legacy records)"
+        )
+        typer.echo(f"Human overrides: {report['human_overrides']}")
+        typer.echo(f"Policy versions: {len(report['policy_versions'])}")
+        for name, count in report["triggered_checks"].items():
+            typer.echo(f"Triggered check: {name} ({count})")
+
+
 @audit_app.command("tail")
 def audit_tail(
     n: int = typer.Option(10, "-n", "--number", help="Number of entries to show.", min=1),
@@ -1729,6 +1812,31 @@ def _policy_file(path: Path) -> ReflexConfig:
     return ReflexConfig.model_validate(value)
 
 
+@policy_app.command("lint")
+def policy_lint(
+    config: Path = typer.Option(
+        Path("reflex.yaml"), "-c", "--config", help="Candidate policy file to check offline."
+    ),
+    strict: bool = typer.Option(False, "--strict", help="Also fail on warnings."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable diagnostics."),
+) -> None:
+    """Find policy mistakes without activating the policy or calling external services."""
+    from .policy_lint import lint_policy
+    from .redaction import redact_obj
+
+    report = redact_obj(lint_policy(config))
+    if json_output:
+        typer.echo(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        typer.echo(f"Policy lint: {report['errors']} errors, {report['warnings']} warnings")
+        for issue in report["issues"]:
+            typer.echo(
+                f"{issue['severity'].upper()} {issue['path'] or '<root>'}: {issue['message']} [{issue['code']}]"
+            )
+    if report["errors"] or (strict and report["warnings"]):
+        raise typer.Exit(code=1)
+
+
 @policy_app.command("simulate")
 def policy_simulate(
     audit: Path = typer.Option(..., "--audit"),
@@ -1844,6 +1952,42 @@ def _admin_session_store(config: Path | None):
     return SessionStore(loaded.session)
 
 
+@session_app.command("list")
+def session_list(
+    config: Path | None = typer.Option(None, "--config"),
+    state: str | None = typer.Option(
+        None, "--state", help="Filter active, stopped, expired, or exhausted sessions."
+    ),
+    limit: int = typer.Option(50, "--limit", min=1, max=500),
+    offset: int = typer.Option(0, "--offset", min=0, max=MAX_SESSION_OFFSET),
+    json_output: bool = typer.Option(False, "--json", help="Emit session details as JSON."),
+) -> None:
+    """List sessions and remaining budgets using administrator authorization."""
+    try:
+        sessions = _admin_session_store(config).list_sessions(
+            state=state, limit=limit, offset=offset
+        )
+    except (OSError, ValueError, sqlite3.Error):
+        typer.echo(
+            "Session overview unavailable; check configuration and administrator access.", err=True
+        )
+        raise typer.Exit(code=2) from None
+    if json_output:
+        typer.echo(json.dumps({"sessions": sessions, "limit": limit, "offset": offset}, indent=2))
+    elif not sessions:
+        typer.echo("No sessions match this page.")
+    else:
+        typer.echo(
+            f"{'SESSION':<28} {'STATE':<10} {'CALLS LEFT':>10} {'EVALS LEFT':>10} {'USD LEFT':>10}"
+        )
+        for session in sessions:
+            remaining = cast(dict[str, Any], session["remaining"])
+            typer.echo(
+                f"{session['session_id']:<28} {session['state']:<10} {remaining['tool_calls']:>10} {remaining['semantic_evaluations']:>10} {remaining['semantic_spend_usd']:>10.4f}"
+            )
+        typer.echo("USD figures are reserved budget estimates, not provider billing.")
+
+
 @session_app.command("status")
 def session_status(
     session_id: str = typer.Argument(...), config: Path | None = typer.Option(None, "--config")
@@ -1936,11 +2080,19 @@ def policy_keygen(
 @policy_app.command("verify")
 def policy_verify(
     config_path: Path = typer.Argument(..., help="Path to the signed policy file."),
-    public_key: Path = typer.Option(..., "--public-key", help="Path to the Ed25519 public key."),
+    public_key: Path = typer.Option(..., "--public-key", help="Path to the public key."),
     signature: Path | None = typer.Option(None, "--signature", help="Path to the signature file."),
+    signer_type: str = typer.Option("ed25519", "--signer-type", help="ed25519 or cosign."),
 ) -> None:
-    """Verify an Ed25519 policy signature."""
+    """Verify a policy signature against a pinned public key."""
     try:
+        signer: Signer
+        if signer_type == "ed25519":
+            signer = Ed25519Signer()
+        elif signer_type == "cosign":
+            signer = CosignSigner()
+        else:
+            raise typer.BadParameter("signer_type must be ed25519 or cosign")
         config_file = config_path.expanduser()
         signature_file = (
             signature.expanduser()
@@ -1948,7 +2100,7 @@ def policy_verify(
             else config_file.with_suffix(config_file.suffix + ".sig")
         )
         key = load_public_key(public_key.expanduser())
-        if not verify_file(config_file, signature_file, key, Ed25519Signer()):
+        if not verify_file(config_file, signature_file, key, signer):
             typer.echo("Policy signature verification failed.", err=True)
             raise typer.Exit(code=1)
         typer.echo("Policy signature verified.")
@@ -1971,6 +2123,9 @@ def policy_sign(
     """Sign a policy configuration file."""
 
     try:
+        signer: Signer
+        if signer_type not in {"ed25519", "cosign"}:
+            raise typer.BadParameter("signer_type must be ed25519 or cosign")
         if key is None:
             # Generate a new keypair if no key is provided
             if signer_type == "ed25519":
@@ -1992,9 +2147,7 @@ def policy_sign(
             if signer_type == "ed25519":
                 signer = Ed25519Signer(private_key_path=key_path)
             elif signer_type == "cosign":
-                raise typer.BadParameter("cosign signer is not yet implemented")
-            else:
-                raise typer.BadParameter("signer_type must be ed25519")
+                signer = CosignSigner(private_key_path=key_path)
 
         config_file = Path(config_path).expanduser()
         if not config_file.exists():

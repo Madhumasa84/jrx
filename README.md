@@ -260,6 +260,22 @@ Verify record hashes and chain continuity. Detecting the loss of an entire log o
 jrx audit verify
 ```
 
+### Decision reports
+
+```bash
+jrx audit report --path /var/log/jrx/audit.jsonl
+jrx audit report --config reflex.yaml --since 2026-10-01 --until 2026-11-01 --json
+jrx audit report --path /var/log/jrx/audit.jsonl --public-key /etc/jrx/audit-signing.pub --json
+```
+
+Reports verify the entire captured hash chain before applying inclusive date
+filters. They include decision totals, degraded evaluations, override counts,
+triggered local checks, policy hashes, and a snapshot digest. Raw actions,
+identities, and justifications are omitted. Configured public keys are used
+automatically; the report states whether signatures were checked. A missing or
+damaged log produces no report. Dates without a timezone use UTC; a date alone
+means midnight. Reports accept log files up to 128 MiB.
+
 ### Human Override Tracking
 Record local CLI overrides with an approver label and justification. The label is self-reported; use OIDC and reviewed approvals when verified identity is required:
 
@@ -287,6 +303,20 @@ jrx policy verify reflex.yaml --public-key ~/.jrx/keys/policy_signing.pub
 ```
 
 ## Policy rollout and operations dashboard
+
+Check a candidate policy before signing or rollout:
+
+```bash
+jrx policy lint --config proposed.yaml
+jrx policy lint --config proposed.yaml --strict --json
+```
+
+Linting checks the literal local file offline, including unknown fields, duplicate
+YAML keys, built-in signal names, conflicting threshold aliases, duplicate MCP
+rules, and inactive controls. Errors return exit code 1; `--strict` also fails on
+warnings. JSON diagnostics omit configuration values. This checks authoring
+mistakes; signature verification and golden policy tests remain separate steps.
+The linter accepts files up to 1 MiB and bounds YAML nesting and alias expansion.
 
 Policy simulation replays the deterministic findings, semantic signals, risk classification, and degraded state stored in new audit entries. It verifies the audit hash chain first, checks that each entry was evaluated under the baseline policy, and reports every `ALLOW`/`REVIEW`/`HOLD` transition. Older entries lacking replay inputs are counted as skipped. Simulation does not rerun the semantic model or reconstruct a command from its audit summary. Enable `audit.enabled: true` in the policy before collecting rollout evidence.
 
@@ -398,7 +428,23 @@ jrx session status agent-run-123 --config reflex.yaml
 jrx session stop agent-run-123 --config reflex.yaml
 ```
 
-The session ID must come from the trusted host and remain fixed for the agent run. The SQLite ledger atomically reserves calls and an operator-configured **upper-bound estimate** before each semantic evaluation. `reserved_spend_usd` is a budget estimate, not provider billing; set `reserved_cost_per_evaluation_usd` above the largest expected evaluation cost. The administrator stop blocks subsequent evaluations and tool calls and terminates a session-managed `jrx exec` process at its next check. A command is also terminated when `max_execution_seconds` elapses. Each repeated `REVIEW`, `HOLD`, or degraded action counts toward `max_risky_attempts`; reaching that limit persistently stops the session, including subsequent calls with different actions. When `access` is configured, `session stop` and `status` require an OIDC rule with `actions: [admin]`, `repositories: ['*']`, and the configured environment.
+Inspect all sessions and their remaining budgets:
+
+```bash
+jrx session list --config reflex.yaml
+jrx session list --config reflex.yaml --state exhausted --limit 25 --offset 0 --json
+```
+
+The overview orders sessions newest first and supports `active`, `stopped`,
+`expired`, and `exhausted` filters. `session status` also includes remaining call,
+evaluation, spend, and time budgets plus the limit reasons. An exhausted semantic
+budget can still permit a tool call that needs no semantic evaluation; the JSON
+shows separate permissions for a single tool-call reservation and a single
+semantic-evaluation reservation. A combined request needs both and may reserve
+multiple samples. Reading the overview does not consume budgets or reset stopped
+sessions. Results describe the configured limits at the time of the query.
+
+The session ID must come from the trusted host and remain fixed for the agent run. The SQLite ledger atomically reserves calls and an operator-configured **upper-bound estimate** before each semantic evaluation. `reserved_spend_usd` is a budget estimate, not provider billing; set `reserved_cost_per_evaluation_usd` above the largest expected evaluation cost. The administrator stop blocks subsequent evaluations and tool calls and terminates a session-managed `jrx exec` process at its next check. A command is also terminated when `max_execution_seconds` elapses. Each repeated `REVIEW`, `HOLD`, or degraded action counts toward `max_risky_attempts`; reaching that limit persistently stops the session, including subsequent calls with different actions. When `access` is configured, `session list`, `stop`, and `status` require an OIDC rule with `actions: [admin]`, `repositories: ['*']`, and the configured environment.
 
 The gateway checks repository-scoped `execute` permission when `access` is configured. It currently supports stdio MCP servers; Streamable HTTP transport is outside this gateway. Tool rules classify the known upstream tools and should be maintained when that server changes its catalog. The wire behavior follows the MCP [stdio transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports) and [tool error](https://modelcontextprotocol.io/specification/2025-06-18/server/tools) conventions.
 
@@ -480,11 +526,11 @@ agent hooks or upstream MCP servers.
 | `jrx compare` | `jrx compare --command "<cmd>"` | Compare deterministic-only rules versus combined JEV semantic evaluation. |
 | `jrx stability` | `jrx stability --runs 100 --command "<cmd>"` | Test decision consistency and calculate flip rates over repeated evaluations. |
 | `jrx broker` | `jrx broker [run\|start\|stop\|status]` | Manage the host-side semantic daemon and IPC socket. |
-| `jrx audit` | `jrx audit [verify\|overrides\|export]` | Audit log verification, override governance, and SIEM exports. |
-| `jrx policy` | `jrx policy [sign\|verify\|test\|keygen\|simulate\|rollout]` | Policy signing, regression testing, replay, and staged rollout. |
+| `jrx audit` | `jrx audit [verify\|tail\|overrides\|report]` | Audit log verification, override governance, and verified decision reports. |
+| `jrx policy` | `jrx policy [lint\|sign\|verify\|test\|keygen\|simulate\|rollout]` | Offline diagnostics, signing, regression testing, replay, and staged rollout. |
 | `jrx dashboard` | `jrx dashboard serve --config dashboard.yaml` | OIDC-protected local operations dashboard. |
 | `jrx mcp` | `jrx mcp serve --config reflex.yaml --server NAME -- <server command>` | Policy-enforcing stdio MCP gateway. |
-| `jrx session` | `jrx session [status\|stop] SESSION_ID --config reflex.yaml` | Inspect a session budget or stop the session. |
+| `jrx session` | `jrx session [list\|status\|stop] --config reflex.yaml` | List sessions, inspect remaining budgets, or stop a session by ID. |
 | `jrx benchmark` | `jrx benchmark [stability\|live]` | Run automated offline test suites or live TypeSafe API benchmarks. |
 
 ---
@@ -600,8 +646,9 @@ need a working daemon and cached images; follow the [end-to-end test instruction
 Live broker tests require explicit opt-in and API credentials. Offline demo results do
 not establish live service availability or semantic accuracy.
 
-Clock-skew detection has a skipped test placeholder and is not implemented. Secret
-redaction is heuristic; when Gitleaks is unavailable, local checks use a regex fallback.
+Broker clients reject responses whose timestamps exceed the permitted clock skew;
+boundary tests cover this check. Secret redaction is heuristic; when Gitleaks is
+unavailable, local checks use a regex fallback.
 Deployment security also depends on protecting host configuration, credentials, and
 state, and ensuring agents cannot bypass the execution gateway.
 

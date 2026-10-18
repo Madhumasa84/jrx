@@ -326,3 +326,49 @@ def test_dashboard_uses_broker_health_and_bounded_metrics(
     team = snapshot(config, Identity("operator", frozenset({"ops"})))["teams"][0]
     assert team["broker"]["running"] is True
     assert team["metrics"] == {"jrx_broker_uptime_seconds": 12.0}
+
+
+def test_dashboard_only_displays_the_audit_bytes_it_verified(tmp_path, monkeypatch):
+    policy = _policy(tmp_path)
+    _decision(policy)
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(yaml.safe_dump(policy.model_dump(mode="json")))
+    audit_path = tmp_path / "audit.jsonl"
+    config = DashboardConfig.model_validate(
+        {
+            "access": {
+                "issuer": "https://idp.example",
+                "audience": "jrx",
+                "jwks_uri": "https://idp.example/jwks",
+                "environment": "dashboard",
+                "rules": [
+                    {
+                        "role": "ops",
+                        "actions": ["view"],
+                        "repositories": ["repo-a"],
+                        "environments": ["dashboard"],
+                    }
+                ],
+            },
+            "sources": [
+                {
+                    "team": "a",
+                    "repository": "repo-a",
+                    "policy_path": str(policy_path),
+                    "audit_path": str(audit_path),
+                }
+            ],
+        }
+    )
+    original_verify = AuditLog.verify
+
+    def replace_after_verification(self, *args, **kwargs):
+        result = original_verify(self, *args, **kwargs)
+        audit_path.write_text(audit_path.read_text().replace('"REVIEW"', '"HOLD"'))
+        return result
+
+    monkeypatch.setattr(AuditLog, "verify", replace_after_verification)
+    team = snapshot(config, Identity("operator", frozenset({"ops"})))["teams"][0]
+    assert team["audit_integrity"]["valid"] is True
+    assert team["decisions"] == {"ALLOW": 0, "REVIEW": 1, "HOLD": 0}
+    assert team["blocked"] == []

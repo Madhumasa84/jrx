@@ -232,7 +232,11 @@ def compact_state(context: EvaluationContext, max_chars: int) -> dict[str, Any]:
     # shape, then fit the command text when possible; input and description are expendable.
     original_action = dict(state.get("proposed_action", {}))
     action_type = str(original_action.get("type") or "tool_call")
-    state["proposed_action"] = {"type": action_type, "command": None, "argv": []}
+    state["proposed_action"] = {
+        "type": action_type,
+        "command": original_action.get("command"),
+        "argv": original_action.get("argv", []),
+    }
     if size() <= max_chars:
         return state
 
@@ -581,7 +585,7 @@ def evaluate_context(
         semantic_source=semantic.source,
         samples=samples,
         aggregation=aggregation_used,
-        degraded=semantic.degraded and use_jev,
+        degraded=(semantic.degraded and use_jev) or gitleaks_failed,
         action=safe_action,
     )
     if session_store is not None:

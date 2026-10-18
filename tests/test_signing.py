@@ -146,14 +146,23 @@ def test_load_public_key_not_found() -> None:
         load_public_key(Path("/nonexistent/key.pem"))
 
 
-def test_cosign_signer_not_implemented() -> None:
-    """Test that CosignSigner raises NotImplementedError for sign/verify."""
+def test_cosign_signer_requires_a_local_private_key() -> None:
     signer = CosignSigner()
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError, match="requires a local private key"):
         signer.sign(b"test data")
+    assert not signer.verify(b"test data", b"", b"public key")
+    assert not signer.verify(b"test data", b"signature", b"")
 
-    with pytest.raises(NotImplementedError):
-        signer.verify(b"test data", b"signature", b"public_key")
+
+def test_cosign_missing_key_is_reported(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="private key file not found"):
+        CosignSigner(tmp_path / "missing").sign(b"data")
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf")])
+def test_cosign_rejects_invalid_timeouts(timeout: float) -> None:
+    with pytest.raises(ValueError, match="positive and finite"):
+        CosignSigner(timeout=timeout)
 
 
 def test_policy_signing_round_trip() -> None:

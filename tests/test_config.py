@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from jev_reflex.config import ReflexConfig, load_config
+from jev_reflex.config import ReflexConfig, load_bootstrap_config, load_config
 
 
 def test_defaults_are_advisory() -> None:
@@ -65,3 +65,17 @@ def test_invalid_yaml_is_reported_without_parser_details(tmp_path: Path) -> None
     path.write_text("mode: [not valid", encoding="utf-8")
     with pytest.raises(ValueError, match="configuration YAML is invalid"):
         load_config(path)
+
+
+@pytest.mark.parametrize("loader", [load_config, load_bootstrap_config])
+@pytest.mark.parametrize(
+    "tag,value",
+    [(tag, "password=private-fixture") for tag in ("bool", "timestamp", "int", "float")]
+    + [("int", ""), ("float", "")],
+)
+def test_invalid_typed_yaml_is_reported_without_values(tmp_path: Path, loader, tag, value) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(f"mode: !!{tag} {value}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="configuration YAML is invalid") as error:
+        loader(path)
+    assert "private-fixture" not in str(error.value)

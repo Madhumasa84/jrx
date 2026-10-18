@@ -19,6 +19,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build and validate Python distributions
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check dist/*
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -61,29 +72,34 @@ jobs:
         uses: anchore/sbom-action/download-syft@v0.15.0
 
       - name: Generate SBOM
+        env:
+          IMAGE_REF: ghcr.io/madhumasa84/jrx-broker@${{ steps.build.outputs.digest }}
         run: |
-          syft ghcr.io/madhumasa84/jrx-broker:${{ github.ref_name }} \
+          syft "$IMAGE_REF" \
             --output spdx-json \
             --file sbom.spdx.json
 
       - name: Sign the published Docker image with keyless OIDC
-        uses: sigstore/cosign-action@v3.5.0
-        with:
-          image-refs: ${{ steps.meta.outputs.tags }}
+        env:
+          IMAGE_REF: ghcr.io/madhumasa84/jrx-broker@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "$IMAGE_REF"
 
       - name: Attach SBOM to image and sign
+        env:
+          IMAGE_REF: ghcr.io/madhumasa84/jrx-broker@${{ steps.build.outputs.digest }}
         run: |
-          cosign attach sbom \
-            --sbom sbom.spdx.json \
+          cosign attest --yes \
             --type spdxjson \
-            ${{ steps.meta.outputs.tags }}
-          cosign sign ${{ steps.meta.outputs.tags }} \
-            --attachment sbom
+            --predicate sbom.spdx.json \
+            "$IMAGE_REF"
 
-      - name: Attach SBOM to GitHub Release
+      - name: Attach distributions and SBOM to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: sbom.spdx.json
+          files: |
+            sbom.spdx.json
+            dist/*.whl
+            dist/*.tar.gz
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

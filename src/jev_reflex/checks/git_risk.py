@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from ..models import DeterministicFinding, EvaluationContext
-from .common import action_argv, command_text
+from .common import GIT_COMMAND_PREFIX, git_command_text, git_option_sets
 
 
 def _finding(
@@ -25,25 +25,30 @@ def _finding(
 
 
 def evaluate(context: EvaluationContext) -> list[DeterministicFinding]:
-    text = command_text(context)
-    raw_argv = action_argv(context)
-    raw_text = " ".join(raw_argv)
-    if re.search(r"\bgit\s+push\b[^\n]*(?:--force(?:-with-lease)?|\s-f(?:\s|$))", text):
+    raw_text = git_command_text(context)
+    text = raw_text.lower()
+    if any(
+        flags & {"-f", "--force", "--force-with-lease", "--force-if-includes"}
+        for flags in git_option_sets(context, "push")
+    ) or re.search(GIT_COMMAND_PREFIX + r"push\b[^\n;&|]*\s\+\S+", text):
         return [_finding(triggered=True, severity="high", reason_code="FORCE_PUSH", blocking=True)]
-    if re.search(r"\bgit\s+branch\b[^\n]*\s-D(?:\s|$)", raw_text) or re.search(
-        r"\bgit\s+branch\b[^\n]*(?:--delete|-d)\b[^\n]*(?:--force|-f)\b", text
+    if any(
+        "-D" in flags or (flags & {"-d", "--delete"} and flags & {"-f", "--force"})
+        for flags in git_option_sets(context, "branch")
     ):
         return [
             _finding(
                 triggered=True, severity="high", reason_code="BRANCH_DELETE_FORCE", blocking=True
             )
         ]
-    if re.search(r"\bgit\s+(?:filter-repo|filter-branch|rebase\s+-i)\b", text):
+    if re.search(GIT_COMMAND_PREFIX + r"(?:filter-repo|filter-branch)\b", text) or any(
+        flags & {"-i", "--interactive"} for flags in git_option_sets(context, "rebase")
+    ):
         return [
             _finding(triggered=True, severity="high", reason_code="HISTORY_REWRITE", blocking=True)
         ]
-    if re.search(r"\bgit\s+commit\b[^\n]*--amend\b", text):
+    if any("--amend" in flags for flags in git_option_sets(context, "commit")):
         return [_finding(triggered=True, severity="medium", reason_code="COMMIT_AMEND")]
-    if re.search(r"\bgit\s+(?:status|diff)\b", text):
+    if re.search(GIT_COMMAND_PREFIX + r"(?:status|diff)\b", text):
         return [_finding(triggered=False, severity="low", reason_code="KNOWN_SAFE_GIT")]
     return [_finding(triggered=False, severity="low", reason_code="CLEAR")]

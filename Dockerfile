@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY . .
 
 # Install the package with runtime dependencies only
+RUN python -m pip install --no-cache-dir --upgrade pip==26.2.1 setuptools==84.0.0
 RUN pip install --no-cache-dir --prefix /install .
 
 # Bundle the optional deep secret scanner in the production image. Verify
@@ -41,6 +42,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Replace vulnerable packaging tools inherited from the Python base image.
+RUN python -m pip install --no-cache-dir --upgrade pip==26.2.1 setuptools==84.0.0
 
 # Copy installed package from builder
 COPY --from=builder /install /usr/local

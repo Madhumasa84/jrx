@@ -107,7 +107,7 @@ def test_merge_local_cannot_raise_review_threshold() -> None:
 
 
 def test_merge_local_can_tighten_mode() -> None:
-    """Test that local policy can tighten mode (advisory -> review -> enforce)."""
+    """Test that local policy can tighten mode from advisory to enforce."""
     central = ReflexConfig(mode="advisory")
     local = ReflexConfig(mode="enforce")
 
@@ -137,7 +137,7 @@ def test_merge_complex_scenario() -> None:
         thresholds=ThresholdConfig(strong=0.9, review=0.7),
     )
     local = ReflexConfig(
-        mode="enforce",  # Tighten
+        mode="enforce",  # Attempts to permit REVIEW actions
         hold_on=["destructive"],  # Attempts to remove secret_exposure
         review_on=["security_sensitive", "new_rule"],  # Add new rule
         thresholds=ThresholdConfig(
@@ -147,8 +147,8 @@ def test_merge_complex_scenario() -> None:
 
     merged = PolicyMerger.merge_policies(central, local)
 
-    # Mode should be enforced (stricter)
-    assert merged.mode == "enforce"
+    # Central review mode must continue blocking REVIEW actions.
+    assert merged.mode == "review"
 
     # Central hold_on entries should be retained
     assert "destructive" in merged.hold_on
@@ -179,7 +179,7 @@ def test_merge_local_none_returns_central() -> None:
 @pytest.mark.parametrize("central_mode", ["advisory", "review", "enforce"])
 @pytest.mark.parametrize("local_mode", ["advisory", "review", "enforce"])
 def test_merge_never_loosens_mode_or_central_rules(central_mode: str, local_mode: str) -> None:
-    strictness = {"advisory": 0, "review": 1, "enforce": 2}
+    strictness = {"advisory": 0, "enforce": 1, "review": 1}
     central = ReflexConfig(
         mode=central_mode,
         hold_on=["destructive", "secret_exposure"],
@@ -204,6 +204,8 @@ def test_merge_never_loosens_mode_or_central_rules(central_mode: str, local_mode
     assert merged.thresholds.strong <= central.thresholds.strong
     assert merged.thresholds.review <= central.thresholds.review
     assert strictness[merged.mode] >= strictness[central.mode]
+    if central.mode != "advisory":
+        assert merged.mode == central.mode
     assert merged.policy.allow_hold_override is False
 
 

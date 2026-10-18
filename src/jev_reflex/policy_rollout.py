@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import io
 import json
 import os
 import stat
@@ -23,12 +24,30 @@ def policy_hash(config: ReflexConfig) -> str:
 
 
 def simulate(audit_path: Path, baseline: ReflexConfig, candidate: ReflexConfig) -> dict[str, Any]:
-    """Replay stored deterministic inputs without contacting a semantic model."""
+    """Replay policy decisions over recorded findings, not original actions."""
+    # Audit records cannot reconstruct raw commands, context, semantic samples,
+    # or enforcement side effects. Only the pure decision inputs may change.
+    replayable = {"mode", "thresholds", "hold_on", "review_on", "stability", "stability_policy"}
+    baseline_data = baseline.model_dump(mode="json")
+    candidate_data = candidate.model_dump(mode="json")
+    unsupported = sorted(
+        name
+        for name in baseline_data
+        if name not in replayable and baseline_data[name] != candidate_data[name]
+    )
+    if baseline.stability_policy.mode != candidate.stability_policy.mode and "majority" in {
+        baseline.stability_policy.mode,
+        candidate.stability_policy.mode,
+    }:
+        unsupported.append("stability_policy.majority")
+    if unsupported:
+        raise ValueError("cannot replay configuration changes: " + ", ".join(unsupported))
+    snapshot = audit_path.read_text(encoding="utf-8")
     valid, reason = AuditLog(
         baseline.model_copy(
             update={"audit": baseline.audit.model_copy(update={"path": str(audit_path)})}
         )
-    ).verify()
+    ).verify(snapshot=snapshot)
     if not valid:
         raise ValueError(f"audit chain verification failed: {reason}")
     report: dict[str, Any] = {
@@ -49,10 +68,8 @@ def simulate(audit_path: Path, baseline: ReflexConfig, candidate: ReflexConfig) 
         },
         "examples": [],
     }
-    if not audit_path.exists():
-        raise ValueError("audit log does not exist")
     baseline_version = AuditLog(baseline)._compute_policy_version_hash(baseline)
-    with audit_path.open(encoding="utf-8") as handle:
+    with io.StringIO(snapshot) as handle:
         for line in handle:
             entry = json.loads(line)
             if (

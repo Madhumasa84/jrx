@@ -64,3 +64,10 @@ and check that the upstream server only receives allowed calls:
 ```bash
 .venv/bin/python -m pytest tests/test_mcp_argument_policy.py tests/test_mcp_schema_pin.py tests/test_mcp_session.py
 ```
+
+On POSIX, the gateway starts the upstream server in its own process group. Gateway
+exit, interrupted input, a tool execution timeout, or session stop terminates that
+group and kills remaining group
+members, including children that ignore termination. A descendant that deliberately
+creates a separate session or process group escapes this cleanup boundary; use an
+OS sandbox when process isolation is required.

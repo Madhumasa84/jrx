@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -80,6 +81,7 @@ class MCPGateway:
         self.session_id = session_id or os.environ.get("JRX_SESSION_ID", "")
         if config.session.enabled:
             SessionStore._id(self.session_id)
+        self._upstream_group: int | None = None
         self._output_lock = threading.Lock()
         self._pending_lock = threading.Lock()
         self._catalog_lock = threading.Lock()
@@ -231,6 +233,35 @@ class MCPGateway:
         process.stdin.write(raw)
         process.stdin.flush()
 
+    def _stop_upstream(self, process: subprocess.Popen[bytes]) -> int:
+        """Stop the isolated upstream group, including children ignoring SIGTERM."""
+        group = self._upstream_group if self._upstream_group == process.pid else None
+        if os.name == "posix" and group is None:
+            try:
+                if os.getpgid(process.pid) == process.pid:
+                    group = process.pid
+            except ProcessLookupError:
+                pass
+        try:
+            if group is not None:
+                os.killpg(group, signal.SIGTERM)
+            else:
+                process.terminate()
+        except ProcessLookupError:
+            pass
+        try:
+            return process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return process.wait()
+        finally:
+            # The parent can exit on TERM while its children ignore it.
+            if group is not None:
+                try:
+                    os.killpg(group, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
     def _expired(self, process: subprocess.Popen[bytes], key: str) -> None:
         with self._pending_lock:
             pending = self._pending.pop(key, None)
@@ -238,19 +269,19 @@ class MCPGateway:
                 self._expired_ids.add(key)
         if pending is not None:
             self._send(_tool_error(pending[0], "MCP tool execution time limit reached"))
-            process.terminate()
+            self._stop_upstream(process)
 
     def _read_upstream(self, process: subprocess.Popen[bytes]) -> None:
         assert process.stdout is not None
         try:
             while raw := process.stdout.readline(self.config.mcp.max_message_bytes + 1):
                 if len(raw) > self.config.mcp.max_message_bytes or not raw.endswith(b"\n"):
-                    process.terminate()
+                    self._stop_upstream(process)
                     break
                 try:
                     message = _load_message(raw)
                 except (ValueError, UnicodeDecodeError, RecursionError):
-                    process.terminate()
+                    self._stop_upstream(process)
                     break
                 if (
                     isinstance(message, dict)
@@ -446,36 +477,40 @@ class MCPGateway:
             stderr=sys.stderr,
             env=child_env,
             shell=False,
+            start_new_session=os.name == "posix",
         ) as process:
-            reader = threading.Thread(target=self._read_upstream, args=(process,), daemon=True)
-            reader.start()
-            if self.config.session.enabled:
-
-                def watch_stop() -> None:
-                    store = SessionStore(self.config.session)
-                    while process.poll() is None:
-                        try:
-                            if store.status(self.session_id)["stopped"]:
-                                process.terminate()
-                                return
-                        except ValueError:
-                            pass
-                        time.sleep(0.1)
-
-                threading.Thread(target=watch_stop, daemon=True).start()
-            while raw := self.source.readline(self.config.mcp.max_message_bytes + 1):
-                if len(raw) > self.config.mcp.max_message_bytes or not raw.endswith(b"\n"):
-                    self._send(_rpc_error(None, -32600, "MCP message exceeds configured limit"))
-                    break
-                self._handle(process, raw)
-            if process.stdin:
-                process.stdin.close()
+            if os.name == "posix":
+                self._upstream_group = process.pid
             try:
-                return process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.terminate()
+                reader = threading.Thread(target=self._read_upstream, args=(process,), daemon=True)
+                reader.start()
+                if self.config.session.enabled:
+
+                    def watch_stop() -> None:
+                        store = SessionStore(self.config.session)
+                        while process.poll() is None:
+                            try:
+                                if store.status(self.session_id)["stopped"]:
+                                    self._stop_upstream(process)
+                                    return
+                            except ValueError:
+                                pass
+                            time.sleep(0.1)
+
+                    threading.Thread(target=watch_stop, daemon=True).start()
+                while raw := self.source.readline(self.config.mcp.max_message_bytes + 1):
+                    if len(raw) > self.config.mcp.max_message_bytes or not raw.endswith(b"\n"):
+                        self._send(_rpc_error(None, -32600, "MCP message exceeds configured limit"))
+                        break
+                    self._handle(process, raw)
+                if process.stdin:
+                    process.stdin.close()
                 try:
                     return process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    process.kill()
-                    return process.wait()
+                    return self._stop_upstream(process)
+            finally:
+                try:
+                    self._stop_upstream(process)
+                finally:
+                    self._upstream_group = None

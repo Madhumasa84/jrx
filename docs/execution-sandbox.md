@@ -1,7 +1,7 @@
 # Isolated command execution
 
 `jrx exec` can run an approved command in a Docker container. The feature is opt-in;
-without `sandbox.enabled`, command execution keeps its existing host behavior. When it
+without `sandbox.enabled`, commands run on the host. When it
 is enabled, Docker startup failures block the command and JRX never falls back to
 running it on the host.
 
@@ -36,6 +36,12 @@ The container runs as the invoking host UID and GID. It receives no host environ
 variables, uses a read-only container root, drops Linux capabilities, enables
 `no-new-privileges`, and has configured CPU, memory, PID, `/tmp`, and wall-clock limits.
 Set `sandbox.runtime` to a trusted installed runtime such as gVisor when available.
+
+On POSIX systems, JRX stops remaining command processes when the main command exits,
+times out, is interrupted, or receives SIGTERM. This includes descendants that ignore
+SIGTERM. Containers and temporary egress resources are also removed. Commands must
+finish their work before their main process exits; launch persistent background
+services outside `jrx exec`.
 
 By default, the sandbox has no network and external DNS lookup fails. To permit selected
 outbound connections, set `proxy_image`, `allowed_hosts`, and `allowed_ports`. JRX starts
