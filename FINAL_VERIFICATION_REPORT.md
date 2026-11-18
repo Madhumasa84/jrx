@@ -1,3 +1,6 @@
+> Historical verification report. See [the completed audit](docs/audit-2026-10-04.md)
+> for the current fixes, test evidence, and integration limitations.
+
 # JEV REFLEX (`jrx`) — FINAL INDEPENDENT VERIFICATION & AUDIT REPORT
 
 **Audit Date:** 2026-09-21  

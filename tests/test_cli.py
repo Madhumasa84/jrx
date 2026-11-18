@@ -153,13 +153,13 @@ def test_exec_does_not_interpret_shell_metacharacters(tmp_path: Path) -> None:
 
 def test_exec_subprocesses_are_shell_free(tmp_path: Path, monkeypatch: object) -> None:
     calls: list[dict[str, object]] = []
-    original_run = subprocess.run
+    original_spawn = subprocess.Popen
 
-    def spy_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+    def spy_spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
         calls.append(kwargs)
-        return original_run(*args, **kwargs)
+        return original_spawn(*args, **kwargs)
 
-    monkeypatch.setattr(subprocess, "run", spy_run)
+    monkeypatch.setattr(subprocess, "Popen", spy_spawn)
     result = runner.invoke(
         app,
         ["exec", "--demo", "--cwd", str(tmp_path), "--", sys.executable, "-c", "pass"],

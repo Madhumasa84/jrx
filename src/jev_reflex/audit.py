@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import io
 import json
 import os
 import stat
@@ -17,7 +18,7 @@ from .config import ReflexConfig
 from .models import DeterministicFinding, HookAuditCorrelation
 from .policy import PolicyDecision
 from .redaction import redact_obj
-from .signing import Ed25519Signer
+from .signing import CosignSigner, Ed25519Signer, Signer
 
 GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000"
 
@@ -146,14 +147,17 @@ class AuditLog:
     def __init__(self, config: ReflexConfig) -> None:
         self.config = config
         self._ensure_log_directory()
-        self._signer = None
+        self._signer: Signer | None = None
 
         # Initialize signer if signing is configured
         if config.signing.private_key_path:
-            if config.signing.signer_type != "ed25519":
-                raise ValueError("audit signing requires a supported Ed25519 signer")
             key_path = Path(config.signing.private_key_path).expanduser()
-            self._signer = Ed25519Signer(private_key_path=key_path)
+            if config.signing.signer_type == "ed25519":
+                self._signer = Ed25519Signer(private_key_path=key_path)
+            elif config.signing.signer_type == "cosign":
+                self._signer = CosignSigner(private_key_path=key_path)
+            else:
+                raise ValueError("unsupported audit signer type")
 
     def _ensure_log_directory(self) -> None:
         """Create the log directory if it doesn't exist."""
@@ -238,18 +242,9 @@ class AuditLog:
 
     def _compute_policy_version_hash(self, config: ReflexConfig) -> str:
         """Compute a hash of the policy configuration for version tracking."""
-        policy_data = {
-            "mode": config.mode,
-            "thresholds": {
-                "strong": config.thresholds.strong,
-                "review": config.thresholds.review,
-            },
-            "hold_on": sorted(config.hold_on),
-            "review_on": sorted(config.review_on),
-            "allow_hold_override": (
-                config.policy.allow_hold_override if hasattr(config, "policy") else False
-            ),
-        }
+        # Bind records to the complete effective configuration. A partial hash
+        # can conflate distinct evaluation and execution policies during replay.
+        policy_data = config.model_dump(mode="json")
         canonical = json.dumps(policy_data, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -450,34 +445,46 @@ class AuditLog:
         except OSError:
             return []
 
-    def verify(self, public_key_path: Path | None = None) -> tuple[bool, str]:
+    def verify(
+        self, public_key_path: Path | None = None, *, snapshot: str | None = None
+    ) -> tuple[bool, str]:
         """Verify the integrity of the hash chain and optionally decision signatures.
 
         Args:
             public_key_path: Optional path to public key for signature verification.
+            snapshot: Optional captured log text to verify instead of reopening the file.
 
         Returns:
             (is_valid, message) where message describes the result or first broken link.
         """
         log_path = self._get_log_path()
-        if not log_path.exists():
+        if snapshot is None and not log_path.exists():
             return True, "chain intact, 0 entries"
 
         # Load public key if provided
-        signer = None
+        signer: Signer | None = None
         if public_key_path is not None:
             try:
                 from .signing import Ed25519Signer, load_public_key
 
                 public_key = load_public_key(public_key_path)
-                signer = Ed25519Signer()
+                if self.config.signing.signer_type == "ed25519":
+                    signer = Ed25519Signer()
+                elif self.config.signing.signer_type == "cosign":
+                    signer = CosignSigner()
+                else:
+                    return False, "unsupported audit signer type"
             except Exception:
                 return False, f"failed to load public key from {public_key_path}"
 
         try:
             prev_hash = GENESIS_HASH
             count = 0
-            with log_path.open("r", encoding="utf-8") as f:
+            with (
+                io.StringIO(snapshot)
+                if snapshot is not None
+                else log_path.open("r", encoding="utf-8")
+            ) as f:
                 for i, line in enumerate(f):
                     if not line.endswith("\n") or not line.strip():
                         return False, f"incomplete audit record at line {i + 1}"
@@ -518,6 +525,8 @@ class AuditLog:
             signature_status = " (signatures verified)" if signer else ""
             return True, f"chain intact, {count} entries{signature_status}"
 
+        except RuntimeError:
+            return False, "signature verification is unavailable"
         except (OSError, UnicodeError) as e:
             return False, f"error reading log: {e}"
 

@@ -122,6 +122,41 @@ def _terminate(process: subprocess.Popen[bytes]) -> None:
     process.wait(timeout=2)
 
 
+def enforce_harness_action(
+    action: ProposedAction,
+    workspace: Path,
+    config: ReflexConfig,
+    objective: str,
+    session_id: str,
+    *,
+    changed_files: list[str] | None = None,
+    deadline: float | None = None,
+) -> None:
+    """Apply the harness policy gate to an action before its side effect."""
+    if config.access is not None:
+        raise ValueError("enterprise access configuration is unsupported by this harness")
+    root = Path(workspace).resolve(strict=True)
+    if not root.is_dir() or root == Path("/"):
+        raise ValueError("a workspace directory below the filesystem root is required")
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError("harness deadline reached")
+    result = DefaultEvaluator(config).evaluate(
+        EvaluationContext(
+            user_task=objective,
+            repository=str(root),
+            repository_root=str(root),
+            working_directory=str(root),
+            proposed_action=action,
+            changed_files=changed_files or [],
+            recent_context=f"Harness session: {session_id}",
+        )
+    )
+    if result.degraded or result.decision == "HOLD":
+        raise PermissionError("JRX blocked the action: " + result.reason_summary())
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError("harness deadline reached")
+
+
 def build_tools(
     workspace: Path,
     config: ReflexConfig,
@@ -154,21 +189,15 @@ def build_tools(
             before_tool(name)
 
     def gate(action: ProposedAction, changed: list[str] | None = None) -> None:
-        result = DefaultEvaluator(config).evaluate(
-            EvaluationContext(
-                user_task=objective,
-                repository=str(root),
-                repository_root=str(root),
-                working_directory=str(root),
-                proposed_action=action,
-                changed_files=changed or [],
-                recent_context=f"Harness session: {session_id}",
-            )
+        enforce_harness_action(
+            action,
+            root,
+            config,
+            objective,
+            session_id,
+            changed_files=changed,
+            deadline=deadline,
         )
-        if result.degraded or result.decision == "HOLD":
-            raise PermissionError("JRX blocked the action: " + result.reason_summary())
-        if deadline is not None and time.monotonic() >= deadline:
-            raise TimeoutError("harness deadline reached")
 
     def workspace_list(path: str = ".") -> dict[str, Any]:
         """List up to 200 immediate safe entries in a relative workspace directory."""

@@ -1158,7 +1158,7 @@ def _handoff_screen(
             if snapshot_status == "incomplete":
                 _message(
                     window,
-                    "A changed file exceeds JRX's safe fingerprint limit, so workspace stability cannot be verified.\n"
+                    "Workspace changes exceed JRX's safe file-count or fingerprint limits, so workspace stability cannot be verified.\n"
                     f"Checkpoint retained at {task_path}; review and continue manually in the destination's native CLI.",
                 )
                 return record
@@ -1218,7 +1218,7 @@ def _handoff_screen(
             if snapshot_status == "incomplete":
                 _message(
                     window,
-                    "A changed file exceeds JRX's safe fingerprint limit, so workspace stability cannot be verified.\n"
+                    "Workspace changes exceed JRX's safe file-count or fingerprint limits, so workspace stability cannot be verified.\n"
                     f"Checkpoint retained at {task_path}; review and continue manually in the destination's native CLI.",
                 )
                 return record
@@ -1255,6 +1255,7 @@ def _handoff_screen(
         if codex_sandbox_mode:
             record["session"]["sandbox_mode"] = codex_sandbox_mode
         save_task_record(record)
+        view: _StreamView | None = None
         if destination.provider.key == "antigravity":
             view = _StreamView(window, destination.provider.key)
             exit_code, _argv = stream_structured(
@@ -1331,7 +1332,7 @@ def _handoff_screen(
                 f"exited with code {exit_code}" if exit_code is not None else "spawn failed"
             )
         record["session"]["task_completion"] = "not independently verified"
-        if view.cancelled:
+        if view is not None and view.cancelled:
             record_delivery(record, "destination run cancelled; checkpoint retained")
         elif exit_code is None:
             record_delivery(record, "destination launch failed; checkpoint retained")

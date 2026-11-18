@@ -3,37 +3,9 @@
 from __future__ import annotations
 
 import re
-import shlex
 
 from ..models import DeterministicFinding, EvaluationContext
-from .common import action_argv, command_text
-
-
-def git_operations(argv: list[str], depth: int = 0) -> list[list[str]]:
-    """Find Git subcommands after global options, preserving case-sensitive flags."""
-    operations: list[list[str]] = []
-    if depth < 4:
-        for token in argv:
-            if any(char.isspace() for char in token):
-                try:
-                    nested = shlex.split(token)
-                except ValueError:
-                    continue
-                operations.extend(git_operations(nested, depth + 1))
-    for start, token in enumerate(argv):
-        if token.rsplit("/", 1)[-1] != "git":
-            continue
-        index = start + 1
-        while index < len(argv):
-            option = argv[index]
-            if option in {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--config-env"}:
-                index += 2
-            elif option.startswith("-"):
-                index += 1
-            else:
-                operations.append(argv[index:])
-                break
-    return operations
+from .common import GIT_COMMAND_PREFIX, git_command_text, git_option_sets
 
 
 def _finding(
@@ -53,53 +25,36 @@ def _finding(
 
 
 def evaluate(context: EvaluationContext) -> list[DeterministicFinding]:
-    text = command_text(context)
-    raw_argv = action_argv(context)
-    raw_text = " ".join(raw_argv)
-    # Parse the Git invocation rather than requiring the program and subcommand
-    # to be adjacent. The legacy text checks also cover shell snippets.
-    for operation in git_operations(raw_argv):
-        subcommand, *flags = operation
-        reason = None
-        if subcommand == "reset" and "--hard" in flags:
-            reason = "GIT_HARD_RESET"
-        elif subcommand == "push" and any(
-            flag == "-f" or flag.split("=", 1)[0] in {"--force", "--force-with-lease"}
-            for flag in flags
-        ):
-            reason = "FORCE_PUSH"
-        elif subcommand == "branch":
-            short = "".join(
-                flag[1:] for flag in flags if flag.startswith("-") and not flag.startswith("--")
-            )
-            if "D" in short or (
-                ("d" in short or "--delete" in flags) and ("f" in short or "--force" in flags)
-            ):
-                reason = "BRANCH_DELETE_FORCE"
-        elif subcommand == "clean" and any(
-            flag.startswith("-") and not flag.startswith("--") and "f" in flag[1:] for flag in flags
-        ):
-            reason = "GIT_CLEAN_FORCE"
-        elif subcommand in {"filter-repo", "filter-branch"}:
-            reason = "HISTORY_REWRITE"
-        if reason:
+    raw_text = git_command_text(context)
+    text = raw_text.lower()
+    for subcommand, options, reason in (
+        ("reset", {"--hard"}, "GIT_HARD_RESET"),
+        ("clean", {"-f", "--force"}, "GIT_CLEAN_FORCE"),
+    ):
+        if any(flags & options for flags in git_option_sets(context, subcommand)):
             return [_finding(triggered=True, severity="high", reason_code=reason, blocking=True)]
-    if re.search(r"\bgit\s+push\b[^\n]*(?:--force(?:-with-lease)?|\s-f(?:\s|$))", text):
+    if any(
+        flags & {"-f", "--force", "--force-with-lease", "--force-if-includes"}
+        for flags in git_option_sets(context, "push")
+    ) or re.search(GIT_COMMAND_PREFIX + r"push\b[^\n;&|]*\s\+\S+", text):
         return [_finding(triggered=True, severity="high", reason_code="FORCE_PUSH", blocking=True)]
-    if re.search(r"\bgit\s+branch\b[^\n]*\s-D(?:\s|$)", raw_text) or re.search(
-        r"\bgit\s+branch\b[^\n]*(?:--delete|-d)\b[^\n]*(?:--force|-f)\b", text
+    if any(
+        "-D" in flags or (flags & {"-d", "--delete"} and flags & {"-f", "--force"})
+        for flags in git_option_sets(context, "branch")
     ):
         return [
             _finding(
                 triggered=True, severity="high", reason_code="BRANCH_DELETE_FORCE", blocking=True
             )
         ]
-    if re.search(r"\bgit\s+(?:filter-repo|filter-branch|rebase\s+-i)\b", text):
+    if re.search(GIT_COMMAND_PREFIX + r"(?:filter-repo|filter-branch)\b", text) or any(
+        flags & {"-i", "--interactive"} for flags in git_option_sets(context, "rebase")
+    ):
         return [
             _finding(triggered=True, severity="high", reason_code="HISTORY_REWRITE", blocking=True)
         ]
-    if re.search(r"\bgit\s+commit\b[^\n]*--amend\b", text):
+    if any("--amend" in flags for flags in git_option_sets(context, "commit")):
         return [_finding(triggered=True, severity="medium", reason_code="COMMIT_AMEND")]
-    if re.search(r"\bgit\s+(?:status|diff)\b", text):
+    if re.search(GIT_COMMAND_PREFIX + r"(?:status|diff)\b", text):
         return [_finding(triggered=False, severity="low", reason_code="KNOWN_SAFE_GIT")]
     return [_finding(triggered=False, severity="low", reason_code="CLEAR")]

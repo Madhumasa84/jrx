@@ -279,9 +279,8 @@ def test_tls_broker_accepts_trusted_client_and_rejects_untrusted_client(
                     }
                 )
 
-            trusted_health = await asyncio.to_thread(
-                BrokerClient(client_config(client_certificate_path, client_key_path)).health
-            )
+            client = BrokerClient(client_config(client_certificate_path, client_key_path))
+            trusted_health = await asyncio.to_thread(client.health)
             untrusted_health = await asyncio.to_thread(
                 BrokerClient(
                     client_config(rogue_client_certificate_path, rogue_client_key_path)
@@ -291,6 +290,10 @@ def test_tls_broker_accepts_trusted_client_and_rejects_untrusted_client(
             assert trusted_health["running"] is expected_running
             assert trusted_health["jev_configured"] is expected_running
             assert untrusted_health["running"] is False
+            if expected_running:
+                response = await asyncio.to_thread(client.request, "stop")
+                assert response["error_code"] == "FORBIDDEN"
+                assert not service.stop_event.is_set()
         finally:
             server.close()
             await server.wait_closed()

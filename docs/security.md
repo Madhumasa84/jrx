@@ -135,7 +135,7 @@ jrx audit tail [-n 10] [--json] [--path /path/to/audit.log]
 
 ### Known limitations
 
-1. **Optional signing**: Ed25519 decision signing is implemented when configured. Unsigned chains can be recomputed; even signed chains do not detect valid suffix deletion without an external checkpoint.
+1. **Trusted checkpoints**: Optional Ed25519 or Cosign signatures authenticate audit entries. Detecting deletion of an entire log or a valid trailing segment still requires an independently retained checkpoint or copy.
 2. **No automatic rotation**: While a `rotate_mb` configuration option exists, automatic log rotation is not yet implemented. Administrators should monitor log size and rotate manually as needed.
 3. **No compression**: Logs are stored as plain text JSONL. Compression or archival strategies are left to the administrator.
 
@@ -186,7 +186,8 @@ This command runs a comprehensive test matrix against mock failure modes and rep
 
 ### Known limitations
 
-- Broker responses are bound to request IDs and finite timestamps with bounded clock skew. This is response validation, not remote host attestation.
+- Broker responses are bound to request IDs and checked for finite timestamps and bounded clock skew.
+  Protect host time synchronization and broker credentials separately.
 - The fail-closed behavior applies to semantic evaluation failures; hard rules (deterministic checks) continue to function independently
 
 ## Central policy mode
@@ -289,7 +290,21 @@ Policy files can be cryptographically signed to prevent unauthorized modificatio
 **Signer types:**
 
 - `ed25519`: Local Ed25519 keypair using the cryptography library (recommended, fully implemented)
-- `cosign`: Cosign integration (stub for future implementation)
+- `cosign`: Local detached key signatures using the Cosign CLI. Install Cosign
+  2.6 or 3.x, generate a local key with `cosign generate-key-pair`, and supply
+  its password through `COSIGN_PASSWORD`. JRX signs private policy/audit bytes
+  without uploading them to Rekor and verifies against the pinned public key
+  offline. This adapter uses raw detached signatures, rather than Sigstore bundles.
+
+  ```bash
+  jrx policy sign reflex.yaml --key cosign.key --signer-type cosign
+  jrx policy verify reflex.yaml --public-key cosign.pub --signer-type cosign
+  ```
+
+  Set `signer_type: cosign` in the protected bootstrap configuration when
+  requiring these policy signatures. Signature formats are specific to the
+  selected signer. See [Cosign blob signing](https://docs.sigstore.dev/cosign/signing/signing_with_blobs/)
+  for the upstream CLI protocol.
 
 ### Decision signing
 
@@ -322,7 +337,10 @@ This checks both hash chain integrity and decision signatures, reporting any mis
 
 ### Limitations
 
-- **Cosign signer**: The CosignSigner stub is not yet fully implemented; use Ed25519Signer for now
+- **Cosign scope**: The local adapter requires the Cosign executable and a local
+  key. It does not support keyless identities, KMS references, transparency log
+  attestations, or bundle verification. A missing binary or a 30-second command
+  timeout causes signing/verification to fail.
 - **Key rotation**: Manual key rotation is required; there is no automated key rotation mechanism
 - **Audit log performance**: Signing adds a small performance overhead to audit log writes
 - **Bootstrap config protection**: The bootstrap config file itself is not signed; protect it with filesystem permissions (mode 0600, owned by root or a dedicated user)

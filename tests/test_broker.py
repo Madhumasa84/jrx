@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
 import socket
+import stat
 import tempfile
 import threading
 import time
@@ -13,9 +15,9 @@ import pytest
 from typer.testing import CliRunner
 
 from jev_reflex.adapters.codex import evaluate_codex_hook
-from jev_reflex.broker import MAX_BYTES, BrokerClient, BrokerServer, verify_socket
+from jev_reflex.broker import MAX_BYTES, BrokerClient, BrokerServer, secure_directory, verify_socket
 from jev_reflex.cli import app
-from jev_reflex.config import ReflexConfig
+from jev_reflex.config import BrokerTLSConfig, ReflexConfig
 from jev_reflex.evaluator import JUDGMENT_NAMES, DefaultEvaluator
 from jev_reflex.models import EvaluationContext, ProposedAction, RiskInfo, SemanticSignals
 
@@ -210,8 +212,10 @@ def test_timeout_and_failure(tmp_path, failure, capsys):
         request_timeout=0.02 if failure == "request_timeout" else 1,
     ) as (config, _):
         started = time.monotonic()
-        result = BrokerClient(config).evaluate(context())
+        client = BrokerClient(config)
+        result = client.evaluate(context())
         assert result.degraded
+        assert client.last_api_requests == (1 if failure == "exception" else None)
         assert time.monotonic() - started < 1
         time.sleep(0.18)
     assert "must-never-be-logged" not in capsys.readouterr().err
@@ -224,17 +228,47 @@ def test_unsafe_socket_is_rejected(tmp_path):
         assert BrokerClient(config).evaluate(context()).degraded
 
 
-def test_real_lifecycle_cli():
+def test_rejected_symlink_directory_is_left_untouched(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir(mode=0o755)
+    original_mode = stat.S_IMODE(target.stat().st_mode)
+    alias = tmp_path / "alias"
+    alias.symlink_to(target, target_is_directory=True)
+    for path in (alias, alias / "child"):
+        with pytest.raises(ValueError, match="symbolic links"):
+            secure_directory(path, create=True)
+    assert stat.S_IMODE(target.stat().st_mode) == original_mode
+    assert not (target / "child").exists()
+
+
+def test_real_lifecycle_cli(monkeypatch):
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+    monkeypatch.setenv("JRX_METRICS_PORT", str(port))
     base = Path("/tmp").resolve()
     with tempfile.TemporaryDirectory(prefix="jrx-", dir=base) as td:
-        path = Path(td) / "reflex.sock"
+        path = Path(td) / "run" / "reflex.sock"
         runner = CliRunner()
         started = runner.invoke(app, ["broker", "start", "--socket", str(path)])
         assert started.exit_code == 0, started.stdout
         try:
-            status = runner.invoke(app, ["broker", "status", "--socket", str(path), "--json"])
+            status = runner.invoke(
+                app, ["broker", "status", "--socket", str(path), "--local", "--json"]
+            )
             assert json.loads(status.stdout)["running"]
             assert path.stat().st_mode & 0o777 == 0o600
+            assert path.parent.stat().st_mode & 0o777 == 0o700
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+            try:
+                connection.request("GET", "/metrics")
+                response = connection.getresponse()
+                assert response.status == 200
+                assert b"jrx_broker_uptime_seconds" in response.read()
+                connection.request("GET", "/metrics", headers={"X-Padding": "x" * 8192})
+                assert connection.getresponse().status == 431
+            finally:
+                connection.close()
             duplicate = runner.invoke(app, ["broker", "start", "--socket", str(path)])
             assert duplicate.exit_code == 0
         finally:
@@ -245,6 +279,82 @@ def test_real_lifecycle_cli():
                 break
             time.sleep(0.02)
         assert not path.exists()
+
+
+def test_tls_startup_failure_closes_metrics_and_local_socket(monkeypatch):
+    with tempfile.TemporaryDirectory(prefix="jrx-", dir=Path("/tmp").resolve()) as td:
+        path = Path(td) / "run" / "reflex.sock"
+        config = ReflexConfig(
+            jev={
+                "transport": "broker-tls",
+                "socket": str(path),
+                "broker_tls": {
+                    "cert_path": "server.crt",
+                    "key_path": "server.key",
+                    "client_ca_path": "ca.crt",
+                },
+            }
+        )
+        service = BrokerServer(config, evaluator=MockJEV(), metrics_port=0)
+        start_server = asyncio.start_server
+        metrics_servers = []
+
+        async def capture_metrics(*args, **kwargs):
+            server = await start_server(*args, **kwargs)
+            metrics_servers.append(server)
+            return server
+
+        async def fail_tls():
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                with pytest.raises(ConnectionRefusedError):
+                    client.connect(str(path))
+            raise ValueError("TLS configuration unavailable")
+
+        monkeypatch.setattr(asyncio, "start_server", capture_metrics)
+        monkeypatch.setattr(service, "_start_tls_server", fail_tls)
+        with pytest.raises(ValueError, match="TLS configuration unavailable"):
+            asyncio.run(service.run())
+        assert not path.exists()
+        assert len(metrics_servers) == 1
+        assert not metrics_servers[0].sockets
+
+
+def test_local_status_with_tls_server_config(tmp_path):
+    with running_broker() as (config, _):
+        config.jev.transport = "broker-tls"
+        config.jev.broker_tls = BrokerTLSConfig(
+            listen_addr="127.0.0.1:8443",
+            cert_path="server.crt",
+            key_path="server.key",
+            client_ca_path="ca.crt",
+        )
+        config_path = tmp_path / "tls.json"
+        config_path.write_text(json.dumps({"jev": config.jev.model_dump()}))
+        runner = CliRunner()
+        args = ["broker", "status", "--config", str(config_path), "--json"]
+        remote = runner.invoke(app, args)
+        assert remote.exit_code == 1
+        local = runner.invoke(app, [*args, "--local"])
+        assert local.exit_code == 0
+        assert json.loads(local.stdout)["socket"] == config.jev.socket
+        start = runner.invoke(app, ["broker", "start", "--config", str(config_path)])
+        assert start.exit_code == 0
+        stop = ["broker", "stop", "--config", str(config_path)]
+        assert runner.invoke(app, stop).exit_code == 2
+        assert runner.invoke(app, [*args, "--local"]).exit_code == 0
+        assert runner.invoke(app, [*stop, "--local"]).exit_code == 0
+
+
+def test_broker_captures_evaluation_accounting_in_worker():
+    evaluator = MockJEV()
+    evaluator.last_api_requests = 1
+    evaluator.last_usage = {"input_tokens": 5}
+    service = BrokerServer(ReflexConfig(), evaluator)
+    outcome = asyncio.run(service.evaluate(context()))
+    evaluator.last_api_requests = 0
+    evaluator.last_usage["input_tokens"] = 99
+    assert outcome.api_requests == 1
+    assert outcome.usage == {"input_tokens": 5}
 
 
 def test_client_ignores_remote_decision_and_keeps_hard_hold(monkeypatch):

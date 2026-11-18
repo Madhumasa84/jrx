@@ -12,6 +12,8 @@ from pathlib import Path
 
 from .config import SessionLimitsConfig
 
+MAX_SESSION_OFFSET = 2**63 - 1
+
 
 class SessionLimitError(ValueError):
     """A session is stopped or has exhausted a configured limit."""
@@ -147,6 +149,33 @@ class SessionStore:
             ).fetchone()
         if row is None:
             raise SessionLimitError("session not found")
+        return self._status_row(session_id, row, time.time())
+
+    def _status_row(self, session_id: str, row: tuple, now: float) -> dict[str, object]:
+        elapsed = max(0.0, now - row[0])
+        reasons = []
+        if row[1]:
+            reasons.append("session_stopped")
+        if elapsed >= self.config.max_elapsed_seconds:
+            reasons.append("elapsed_time_exhausted")
+        if row[2] >= self.config.max_tool_calls:
+            reasons.append("tool_calls_exhausted")
+        if row[3] >= self.config.max_semantic_evaluations:
+            reasons.append("semantic_evaluations_exhausted")
+        if (
+            row[4] + self.config.reserved_cost_per_evaluation_usd
+            > self.config.max_semantic_spend_usd + 1e-9
+        ):
+            reasons.append("semantic_spend_insufficient")
+        state = (
+            "stopped"
+            if row[1]
+            else "expired"
+            if "elapsed_time_exhausted" in reasons
+            else "exhausted"
+            if reasons
+            else "active"
+        )
         return {
             "session_id": session_id,
             "started": row[0],
@@ -154,4 +183,75 @@ class SessionStore:
             "tool_calls": row[2],
             "semantic_evaluations": row[3],
             "reserved_spend_usd": row[4],
+            "state": state,
+            "limit_reasons": reasons,
+            "elapsed_seconds": elapsed,
+            "remaining": {
+                "tool_calls": max(0, self.config.max_tool_calls - row[2]),
+                "semantic_evaluations": max(0, self.config.max_semantic_evaluations - row[3]),
+                "semantic_spend_usd": max(0.0, self.config.max_semantic_spend_usd - row[4]),
+                "elapsed_seconds": max(0.0, self.config.max_elapsed_seconds - elapsed),
+            },
+            # These refer to single reservations; actual calls may reserve a
+            # larger semantic sample count. Reserved spend is never billing.
+            "can_reserve_one_tool_call": not any(
+                reason in reasons
+                for reason in (
+                    "session_stopped",
+                    "elapsed_time_exhausted",
+                    "tool_calls_exhausted",
+                )
+            )
+            and row[3] <= self.config.max_semantic_evaluations
+            and row[4] <= self.config.max_semantic_spend_usd + 1e-9,
+            "can_reserve_one_semantic_evaluation": not any(
+                reason in reasons
+                for reason in (
+                    "session_stopped",
+                    "elapsed_time_exhausted",
+                    "semantic_evaluations_exhausted",
+                    "semantic_spend_insufficient",
+                )
+            )
+            and row[2] <= self.config.max_tool_calls,
         }
+
+    def list_sessions(
+        self, *, state: str | None = None, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, object]]:
+        """Return a bounded page, newest first, without reserving or resetting budgets."""
+        if state not in {None, "active", "stopped", "expired", "exhausted"}:
+            raise SessionLimitError("invalid session state filter")
+        if (
+            type(limit) is not int
+            or not 1 <= limit <= 500
+            or type(offset) is not int
+            or not 0 <= offset <= MAX_SESSION_OFFSET
+        ):
+            raise SessionLimitError("invalid session page")
+        if not self.path.exists():
+            return []
+        now = time.time()
+        cutoff = now - self.config.max_elapsed_seconds
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT id, started, stopped, calls, semantic, reserved_usd FROM sessions"
+                " WHERE ? IS NULL OR ? = CASE"
+                " WHEN stopped != 0 THEN 'stopped'"
+                " WHEN started <= ? THEN 'expired'"
+                " WHEN calls >= ? OR semantic >= ? OR reserved_usd + ? > ? THEN 'exhausted'"
+                " ELSE 'active' END"
+                " ORDER BY started DESC, id ASC LIMIT ? OFFSET ?",
+                (
+                    state,
+                    state,
+                    cutoff,
+                    self.config.max_tool_calls,
+                    self.config.max_semantic_evaluations,
+                    self.config.reserved_cost_per_evaluation_usd,
+                    self.config.max_semantic_spend_usd + 1e-9,
+                    limit,
+                    offset,
+                ),
+            ).fetchall()
+        return [self._status_row(row[0], row[1:], now) for row in rows]

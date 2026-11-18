@@ -19,6 +19,9 @@ jrx broker run --metrics-host 0.0.0.0 --metrics-port 9091
 jrx broker start --metrics-host 0.0.0.0 --metrics-port 9091
 ```
 
+Set `JRX_METRICS_HOST` and `JRX_METRICS_PORT` when configuring the broker through
+the environment. Explicit CLI flags take precedence.
+
 ### Available Metrics
 
 #### Decision Metrics

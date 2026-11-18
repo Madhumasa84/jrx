@@ -21,6 +21,30 @@ Create a default fully qualified app name.
 {{- end }}
 {{- end }}
 
+{{- define "jrx-broker.tlsVolume" -}}
+{{- $volume := .Values.volumes.tls -}}
+{{- $secret := .Values.secrets.tls -}}
+{{- $tls := .Values.config.jev.brokerTls -}}
+{{- if $volume.existingClaim }}
+persistentVolumeClaim:
+  claimName: {{ $volume.existingClaim | quote }}
+{{- else }}
+{{- $prefix := printf "%s/" (trimSuffix "/" $volume.mountPath) }}
+secret:
+  secretName: {{ required "secrets.tls.existingSecret is required for the TLS Secret volume" $secret.existingSecret | quote }}
+  defaultMode: 0440
+  items:
+    {{- range $item := list (dict "key" $secret.certKey "path" $tls.certPath) (dict "key" $secret.keyKey "path" $tls.keyPath) (dict "key" $secret.caKey "path" $tls.clientCaPath) }}
+    {{- $path := clean $item.path }}
+    {{- if not (hasPrefix $prefix $path) }}
+    {{- fail "TLS Secret file paths must be under volumes.tls.mountPath" }}
+    {{- end }}
+    - key: {{ $item.key | quote }}
+      path: {{ trimPrefix $prefix $path | quote }}
+    {{- end }}
+{{- end }}
+{{- end }}
+
 {{/*
 Create chart name and version as used by the chart label.
 */}}

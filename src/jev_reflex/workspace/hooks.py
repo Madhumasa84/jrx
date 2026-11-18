@@ -144,8 +144,23 @@ def _remove_provider_hook(config: dict[str, Any], provider: str, command: str) -
     event_list = hooks.get("PreToolUse")
     if not isinstance(event_list, list):
         return False
-    kept = [item for item in event_list if not _contains_command(item, command)]
-    changed = len(kept) != len(event_list)
+    kept = []
+    changed = False
+    for item in event_list:
+        if not isinstance(item, dict) or not isinstance(item.get("hooks"), list):
+            kept.append(item)
+            continue
+        remaining = [
+            hook
+            for hook in item["hooks"]
+            if not (isinstance(hook, dict) and hook.get("command") == command)
+        ]
+        if len(remaining) == len(item["hooks"]):
+            kept.append(item)
+            continue
+        changed = True
+        if remaining:
+            kept.append({**item, "hooks": remaining})
     if changed:
         hooks["PreToolUse"] = kept
     if namespace and not hooks:
@@ -178,7 +193,7 @@ def _write_config(path: Path, payload: bytes, mode: int) -> None:
     temporary = Path(temp_name)
     try:
         os.fchmod(descriptor, mode)
-        with os.fdopen(descriptor, "wb") as handle:
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
@@ -189,15 +204,10 @@ def _write_config(path: Path, payload: bytes, mode: int) -> None:
         finally:
             os.close(directory_fd)
     except BaseException:
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+        temporary.unlink(missing_ok=True)
         raise
+    finally:
+        os.close(descriptor)
 
 
 def preview_hook_change(

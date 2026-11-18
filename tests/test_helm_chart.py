@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from jev_reflex.config import ReflexConfig
+
 HELM_BIN = shutil.which("helm")
 CHART_DIR = Path(__file__).resolve().parents[1] / "helm" / "jrx-broker"
 
@@ -99,3 +101,65 @@ def test_helm_statefulset_with_data_volume_claim_template():
     mounts = {m["name"]: m["mountPath"] for m in container["volumeMounts"]}
     assert mounts["tmp"] == "/tmp"
     assert mounts["data"] == "/home/jrx/.jev-reflex"
+
+
+@pytest.mark.parametrize("kind", ["Deployment", "StatefulSet"])
+def test_helm_broker_tls_configuration_and_local_probes(kind):
+    docs = _render_chart(
+        "--set",
+        f"kind={kind},config.jev.transport=broker-tls,config.policy.allowHoldOverride=true",
+        "--set",
+        "config.jev.brokerTls.listenAddr=0.0.0.0:9443",
+        "--set",
+        "volumes.tls.enabled=true,secrets.tls.existingSecret=test-tls",
+        "--set",
+        "secrets.tls.certKey=server-cert,secrets.tls.keyKey=server-key,secrets.tls.caKey=client-ca",
+        "--set-json",
+        "config.holdOn=[]",
+        "--set-json",
+        "config.reviewOn=[]",
+    )
+    by_kind = {doc["kind"]: doc for doc in docs}
+    config = ReflexConfig.model_validate(
+        yaml.safe_load(by_kind["ConfigMap"]["data"]["reflex.yaml"])
+    )
+    assert config.policy.allow_hold_override is True
+    assert config.hold_on == config.review_on == []
+    assert config.jev.socket == "/tmp/jrx/reflex.sock"
+    assert config.jev.broker_tls.listen_addr == "0.0.0.0:9443"
+
+    pod = by_kind[kind]["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+    assert next(p for p in container["ports"] if p["name"] == "broker")["containerPort"] == 9443
+    for probe in ("livenessProbe", "readinessProbe"):
+        assert container[probe]["exec"]["command"] == [
+            "jrx",
+            "broker",
+            "status",
+            "--local",
+            "--json",
+        ]
+    assert pod["securityContext"]["fsGroup"] == 1000
+    secret = next(volume["secret"] for volume in pod["volumes"] if volume["name"] == "tls")
+    assert secret["secretName"] == "test-tls"
+    assert secret["defaultMode"] == 0o440
+    assert {item["key"]: item["path"] for item in secret["items"]} == {
+        "server-cert": "tls.crt",
+        "server-key": "tls.key",
+        "client-ca": "ca.crt",
+    }
+
+
+@pytest.mark.parametrize("kind", ["Deployment", "StatefulSet"])
+def test_helm_autoscaling_targets_the_selected_workload(kind):
+    docs = _render_chart("--set", f"kind={kind},autoscaling.enabled=true")
+    by_kind = {doc["kind"]: doc for doc in docs}
+    workload = by_kind[kind]
+    assert "replicas" not in workload["spec"]
+    scaling = by_kind["HorizontalPodAutoscaler"]["spec"]
+    assert scaling["scaleTargetRef"] == {
+        "apiVersion": "apps/v1",
+        "kind": kind,
+        "name": workload["metadata"]["name"],
+    }
+    assert {metric["resource"]["name"] for metric in scaling["metrics"]} == {"cpu", "memory"}

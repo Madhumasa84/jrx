@@ -283,7 +283,8 @@ def test_stdio_mcp_gateway_blocks_unknown_and_write_calls(tmp_path: Path) -> Non
         input="".join(json.dumps(item) + "\n" for item in requests),
         text=True,
         capture_output=True,
-        timeout=10,
+        # Include CLI imports and local scanning on a busy build host.
+        timeout=30,
         check=False,
         env={**os.environ, "JRX_SESSION_ID": "agent-1"},
     )
@@ -339,7 +340,8 @@ def test_mcp_gateway_times_out_upstream_tool(tmp_path: Path) -> None:
         input=json.dumps(request) + "\n",
         text=True,
         capture_output=True,
-        timeout=5,
+        # This outer deadline includes startup; the upstream limit stays 0.2s.
+        timeout=30,
         check=False,
     )
     response = json.loads(completed.stdout.splitlines()[0])
@@ -377,3 +379,68 @@ def test_mcp_gateway_upstream_process_does_not_inherit_jrx_credentials(
     assert "JRX_API_KEY" not in captured
     assert "JRX_SECRET_TOKEN" not in captured
     assert captured.get("USER_ALLOWED_VAR") == "mcp-allowed-value"
+
+
+def test_mcp_timeout_kills_upstream_that_ignores_termination() -> None:
+    import io
+    import threading
+
+    from jev_reflex.mcp_gateway import MCPGateway
+
+    gateway = MCPGateway(ReflexConfig(), "test", [sys.executable], sink=io.BytesIO())
+    with subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            'print("ready", flush=True); time.sleep(30)',
+        ],
+        stdout=subprocess.PIPE,
+    ) as process:
+        try:
+            assert process.stdout.readline() == b"ready\n"
+            gateway._pending["1"] = (1, threading.Timer(30, lambda: None))
+            gateway._expired(process, "1")
+            assert process.wait(timeout=0.5) < 0
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups")
+def test_mcp_timeout_kills_upstream_descendant(tmp_path):
+    import io
+    import signal
+    import threading
+
+    from jev_reflex.mcp_gateway import MCPGateway
+
+    marker = tmp_path / "descendant-survived"
+    child = (
+        "import signal,time; from pathlib import Path; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        'print("ready", flush=True); time.sleep(2); '
+        f"Path({str(marker)!r}).touch()"
+    )
+    parent = (
+        "import subprocess,sys,time; "
+        f'p=subprocess.Popen([sys.executable,"-c",{child!r}],stdout=subprocess.PIPE); '
+        'p.stdout.readline(); print("ready",flush=True); time.sleep(30)'
+    )
+    gateway = MCPGateway(ReflexConfig(), "test", [sys.executable], sink=io.BytesIO())
+    with subprocess.Popen(
+        [sys.executable, "-c", parent], stdout=subprocess.PIPE, start_new_session=True
+    ) as process:
+        try:
+            assert process.stdout.readline() == b"ready\n"
+            gateway._pending["1"] = (1, threading.Timer(30, lambda: None))
+            gateway._expired(process, "1")
+            time.sleep(2.2)
+            assert not marker.exists()
+        finally:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()

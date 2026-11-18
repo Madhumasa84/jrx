@@ -859,6 +859,51 @@ def test_workspace_lock_recovers_when_managed_process_exits(tmp_path: Path) -> N
         pass
 
 
+def test_workspace_lock_releases_descriptor_when_record_sync_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock = state.WorkspaceLock(tmp_path)
+
+    def fail_sync(_fd: int) -> None:
+        raise OSError("sync failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "fsync", fail_sync)
+        with pytest.raises(OSError, match="sync failed") as failure:
+            lock.acquire()
+    # The retained traceback keeps acquire's locals alive during the retry.
+    assert failure.value.__traceback__ is not None
+    with state.WorkspaceLock(tmp_path):
+        pass
+
+
+@pytest.mark.parametrize("write", [state.atomic_write, hooks._write_config])
+def test_failed_atomic_replace_leaves_other_open_file_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write
+) -> None:
+    tmp_path.chmod(0o700)
+    target = tmp_path / "settings"
+    target.write_bytes(b"original")
+    unrelated = tmp_path / "unrelated"
+    unrelated.write_bytes(b"still readable")
+    opened = []
+
+    def fail_replace(_source: Path, _target: Path) -> None:
+        opened.append(unrelated.open("rb"))
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    try:
+        with pytest.raises(OSError, match="replace failed"):
+            write(target, b"updated", mode=0o600)
+        assert opened[0].read() == b"still readable"
+        assert target.read_bytes() == b"original"
+        assert set(tmp_path.iterdir()) == {target, unrelated}
+    finally:
+        for handle in opened:
+            handle.close()
+
+
 def test_corrupt_and_oversized_task_records_are_skipped(tmp_path: Path) -> None:
     root = _repository(tmp_path / "repo")
     task_dir = state.private_state_directory() / "tasks"
@@ -1264,3 +1309,200 @@ def test_advisory_provider_launch_requires_explicit_selection(
     assert len(prompts) == 1
     assert "Policy mode is advisory" in prompts[0]
     assert "will not block provider actions" in prompts[0]
+
+
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_handoff_native_completion_and_scope_decline_are_persisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    class Window:
+        def getch(self) -> int:
+            return ord("1")
+
+    selected = providers.ProviderStatus(
+        providers.provider_by_key(provider),
+        "installed",
+        "fixture",
+        "1.0",
+        "unknown",
+        False,
+        False,
+        "fixture",
+        True,
+    )
+    monkeypatch.setattr(ui, "_draw_lines", lambda *args: None)
+    monkeypatch.setattr(ui, "_prompt", lambda *args, **kwargs: "")
+    monkeypatch.setattr(ui, "_review_text", lambda *args: True)
+    monkeypatch.setattr(ui, "_enforcement_confirmation", lambda *args: True)
+    monkeypatch.setattr(ui, "_confirm", lambda *args: False)
+    monkeypatch.setattr(ui, "_launch_in_native_terminal", lambda *args, **kwargs: (0, []))
+    record = ui._handoff_screen(
+        Window(), tmp_path, ReflexConfig(mode="advisory"), (selected,), None, "objective"
+    )
+    assert record is not None
+    saved = state.load_task_record(
+        state.private_state_directory() / "tasks" / f"{record['task_id']}.json"
+    )
+    if provider == "claude":
+        assert saved["session"]["process_state"] == "exited with code 0"
+    else:
+        assert saved["context_delivery"] == "destination write scope declined; checkpoint retained"
+        assert "session" not in saved
+
+
+@pytest.mark.parametrize("provider", ["codex", "claude", "antigravity"])
+def test_hook_rollback_preserves_other_commands_in_same_group(provider: str) -> None:
+    command = hooks.hook_command(providers.provider_by_key(provider))
+    namespace = "jev-reflex" if provider == "antigravity" else "hooks"
+    keep = {"type": "command", "command": "keep-me"}
+    config = {
+        namespace: {
+            "PreToolUse": [
+                {"matcher": "Bash", "hooks": [keep, {"type": "command", "command": command}]}
+            ]
+        }
+    }
+    assert hooks._remove_provider_hook(config, provider, command)
+    assert config[namespace]["PreToolUse"] == [{"matcher": "Bash", "hooks": [keep]}]
+
+
+@pytest.mark.parametrize("error", [RuntimeError, SystemExit])
+def test_stream_callback_exception_cleans_process_and_releases_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: type[BaseException]
+) -> None:
+    import signal
+
+    bin_dir = tmp_path / "bin"
+    _fake_cli(bin_dir, "codex", 'import time; print("{}", flush=True); time.sleep(30)')
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    spawned: list[subprocess.Popen[bytes]] = []
+    original = subprocess.Popen
+
+    def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        child = original(*args, **kwargs)
+        spawned.append(child)
+        return child
+
+    def callback(event: streaming.NormalizedEvent) -> bool:
+        raise error("fixture callback failure")
+
+    monkeypatch.setattr(process.subprocess, "Popen", spawn)
+    try:
+        with pytest.raises(error):
+            process.stream_structured("codex", tmp_path, "fixture", callback)
+        assert spawned[0].poll() is not None
+        assert spawned[0].stdout.closed and spawned[0].stderr.closed
+        with state.WorkspaceLock(tmp_path):
+            pass
+    finally:
+        if spawned and spawned[0].poll() is None:
+            os.killpg(spawned[0].pid, signal.SIGKILL)
+            spawned[0].wait()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="uses Linux process state to exclude zombies")
+def test_process_tree_cleanup_kills_descendant_that_ignores_sigint(tmp_path: Path) -> None:
+    import signal
+
+    pidfile = tmp_path / "descendant.pid"
+    child_source = (
+        "import os,signal,time;from pathlib import Path;"
+        "signal.signal(signal.SIGINT,signal.SIG_IGN);"
+        f"Path({str(pidfile)!r}).write_text(str(os.getpid()));time.sleep(30)"
+    )
+    leader_source = (
+        f"import subprocess,sys,time;subprocess.Popen([sys.executable,'-c',{child_source!r}]);"
+        "time.sleep(30)"
+    )
+    leader = subprocess.Popen(
+        [sys.executable, "-c", leader_source], start_new_session=True, stderr=subprocess.DEVNULL
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not pidfile.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert pidfile.exists()
+        descendant = int(pidfile.read_text())
+        process._terminate_group(leader)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            proc = Path(f"/proc/{descendant}/stat")
+            if not proc.exists() or proc.read_text().split()[2] == "Z":
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("descendant survived cancellation after its group leader exited")
+    finally:
+        try:
+            os.killpg(leader.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        leader.wait()
+
+
+def test_handoff_rejects_truncated_changed_file_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repository(tmp_path / "repo")
+    monkeypatch.setattr(state, "MAX_CHANGED_FILES", 2)
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (root / name).write_text("before")
+    record = {"workspace": state.collect_workspace_state(root)}
+    (root / "c.txt").write_text("after")
+    assert handoff.refresh_workspace_snapshot(record, root) == "incomplete"
+
+
+@pytest.mark.parametrize("response", ["", "Permission is required"])
+def test_antigravity_waiting_result_stops_stream_for_native_approval(
+    monkeypatch: pytest.MonkeyPatch, response: str
+) -> None:
+    class Window:
+        def getmaxyx(self) -> tuple[int, int]:
+            return 24, 80
+
+    monkeypatch.setattr(ui, "_draw_lines", lambda *args: None)
+    event = streaming.parse_provider_event(
+        "antigravity",
+        json.dumps(
+            {
+                "event": "result",
+                "conversation_id": "fixture-session",
+                "result": {"status": "WAITING", "response": response},
+            }
+        ),
+    )
+    view = ui._StreamView(Window(), "antigravity")
+    assert view(event) is False
+    assert view.requires_native_fallback
+    assert view.session_id == "fixture-session"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="uses Linux process state to exclude zombies")
+def test_sigterm_during_stream_cleans_provider_before_exiting(tmp_path: Path) -> None:
+    import signal
+
+    pidfile = tmp_path / "provider.pid"
+    provider_script = (
+        "import os,time;from pathlib import Path;"
+        f"Path({str(pidfile)!r}).write_text(str(os.getpid()));"
+        "print('{}',flush=True);time.sleep(30)"
+    )
+    wrapper = (
+        "import os,signal,sys;from pathlib import Path;"
+        "from jev_reflex.workspace import process;"
+        f"process.structured_argv=lambda *a,**k:[sys.executable,'-c',{provider_script!r}];"
+        f"process.stream_structured('codex',Path({str(tmp_path)!r}),'fixture',"
+        "lambda event:os.kill(os.getpid(),signal.SIGTERM))"
+    )
+    try:
+        result = subprocess.run([sys.executable, "-c", wrapper], capture_output=True, timeout=10)
+        assert result.returncode == 143
+        provider_pid = int(pidfile.read_text())
+        proc = Path(f"/proc/{provider_pid}/stat")
+        assert not proc.exists() or proc.read_text().split()[2] == "Z"
+    finally:
+        if pidfile.exists():
+            try:
+                os.killpg(int(pidfile.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass

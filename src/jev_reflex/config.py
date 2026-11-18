@@ -524,7 +524,15 @@ def load_config(
         _verify_config_signature(config_path, bootstrap, data=raw)
     try:
         loaded = safe_yaml_load(raw.decode("utf-8"))
-    except yaml.YAMLError:
+    except (
+        yaml.YAMLError,
+        ValueError,
+        TypeError,
+        LookupError,
+        AttributeError,
+        OverflowError,
+        RecursionError,
+    ):
         raise ValueError("configuration YAML is invalid") from None
     if loaded is None:
         loaded = {}
@@ -559,7 +567,7 @@ def _verify_config_signature(
     Raises:
         ValueError: If signature verification fails or signature is missing.
     """
-    from .signing import Ed25519Signer, load_public_key, verify_file
+    from .signing import CosignSigner, Ed25519Signer, Signer, load_public_key, verify_file
 
     signature_path = config_path.with_suffix(config_path.suffix + ".sig")
 
@@ -577,13 +585,11 @@ def _verify_config_signature(
     public_key = load_public_key(public_key_path)
 
     # Create appropriate signer
+    signer: Signer
     if bootstrap.signer_type == "ed25519":
         signer = Ed25519Signer()
     elif bootstrap.signer_type == "cosign":
-        raise ValueError(
-            "Cosign signature verification is not yet implemented. "
-            "Please use ed25519 signer for now."
-        )
+        signer = CosignSigner()
     else:
         raise ValueError(f"Unsupported signer type: {bootstrap.signer_type}")
 
@@ -620,7 +626,15 @@ def load_bootstrap_config(path: Path | None = None) -> BootstrapConfig:
     try:
         with path.open("r", encoding="utf-8") as handle:
             loaded = safe_yaml_load(handle.read(1_048_577))
-    except yaml.YAMLError:
+    except (
+        yaml.YAMLError,
+        ValueError,
+        TypeError,
+        LookupError,
+        AttributeError,
+        OverflowError,
+        RecursionError,
+    ):
         raise ValueError("bootstrap configuration YAML is invalid") from None
 
     if loaded is None:

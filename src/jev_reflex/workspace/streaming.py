@@ -151,11 +151,18 @@ def parse_provider_event(
             item = payload.get("result")
             if isinstance(item, dict):
                 status = str(item.get("status", "unknown"))
+                result_kind: EventKind = (
+                    "turn_ended"
+                    if status == "SUCCESS"
+                    else "approval_request"
+                    if status == "WAITING"
+                    else "failure"
+                )
                 response = item.get("response", "")
                 if isinstance(response, str) and response:
                     return _event(
                         provider,
-                        "turn_ended" if status == "SUCCESS" else "failure",
+                        result_kind,
                         raw_type,
                         session=session,
                         text=response,
@@ -163,7 +170,7 @@ def parse_provider_event(
                     )
                 return _event(
                     provider,
-                    "turn_ended" if status == "SUCCESS" else "failure",
+                    result_kind,
                     raw_type,
                     session=session,
                     text=f"Antigravity provider status: {status}",

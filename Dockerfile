@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY . .
 
 # Install the package with runtime dependencies only
+RUN python -m pip install --no-cache-dir --upgrade pip==26.2.1 setuptools==84.1.0
 RUN pip install --no-cache-dir --prefix /install .
 
 # Bundle the optional deep secret scanner in the production image. Verify
@@ -41,6 +42,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Replace vulnerable packaging tools inherited from the Python base image.
+RUN python -m pip install --no-cache-dir --upgrade pip==26.2.1 setuptools==84.1.0
 
 # Copy installed package from builder
 COPY --from=builder /install /usr/local
@@ -68,7 +72,7 @@ EXPOSE 8443
 
 # Health check using the broker CLI
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD jrx broker status --json || exit 1
+    CMD jrx broker status --local --json || exit 1
 
 # Default entrypoint: run the broker
 ENTRYPOINT ["jrx", "broker", "run"]
@@ -76,12 +80,6 @@ ENTRYPOINT ["jrx", "broker", "run"]
 # Allow configuration via environment variables
 # TYPESAFE_API_KEY: Required for live JEV semantic evaluations
 # JRX_DEBUG: Debug mode (1 to enable, 0 to disable)
-# JRX_MODE: Execution mode (advisory, review, enforce)
-# JRX_TRANSPORT: Transport type (direct, broker, broker-tls)
-# JRX_SOCKET: Socket path for unix domain socket transport
 # JRX_METRICS_HOST: Metrics HTTP server host (default: 127.0.0.1)
 # JRX_METRICS_PORT: Metrics HTTP server port (default: 9090)
-# JRX_BROKER_TLS_LISTEN_ADDR: Listen address for TLS transport (default: 0.0.0.0:8443)
-# JRX_BROKER_TLS_CERT_PATH: Path to TLS certificate file
-# JRX_BROKER_TLS_KEY_PATH: Path to TLS private key file
-# JRX_BROKER_TLS_CLIENT_CA_PATH: Path to TLS client CA file
+# Mount reflex.yaml at /home/jrx/reflex.yaml to configure policy and transport.

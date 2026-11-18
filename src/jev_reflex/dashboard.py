@@ -126,20 +126,20 @@ def snapshot(config: DashboardConfig, identity: Identity) -> dict[str, Any]:
             audit_config = policy.model_copy(
                 update={"audit": policy.audit.model_copy(update={"path": str(audit_path)})}
             )
+            # Verify and render the same captured bytes even if the log changes.
+            audit_text = audit_path.read_text(encoding="utf-8") if audit_path.exists() else ""
             valid, message = AuditLog(audit_config).verify(
                 Path(source.audit_public_key_path).expanduser()
                 if source.audit_public_key_path
-                else None
+                else None,
+                snapshot=audit_text,
             )
             result["audit_integrity"] = {"valid": valid, "message": message}
             if not valid:
                 result["error"] = "Audit chain verification failed"
                 teams.append(result)
                 continue
-            entries = []
-            if audit_path.exists():
-                with audit_path.open(encoding="utf-8") as handle:
-                    entries = [json.loads(line) for line in handle if line.strip()]
+            entries = [json.loads(line) for line in audit_text.splitlines() if line.strip()]
             decisions = Counter(
                 entry.get("policy_decision")
                 for entry in entries

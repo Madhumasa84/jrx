@@ -35,7 +35,8 @@ def _terminate_group(process: subprocess.Popen[Any]) -> None:
             break
         try:
             process.wait(timeout=timeout)
-            break
+            # A group leader may exit while descendants ignore the signal.
+            # Continue escalation until the entire group is gone.
         except subprocess.TimeoutExpired:
             continue
 
@@ -227,9 +228,18 @@ def stream_structured(
     manager = lock or WorkspaceLock(canonical)
     held = lock is not None
     process: subprocess.Popen[bytes] | None = None
+    selector: selectors.BaseSelector | None = None
+    old_term = None
     if not held:
         manager.acquire()
     try:
+        if os.name != "nt":
+            old_term = signal.getsignal(signal.SIGTERM)
+
+            def terminate_handler(signum: int, _frame: Any) -> None:
+                raise SystemExit(128 + signum)
+
+            signal.signal(signal.SIGTERM, terminate_handler)
         process = subprocess.Popen(
             argv,
             cwd=canonical,
@@ -348,14 +358,22 @@ def stream_structured(
                     _terminate_group(process)
                     return process.returncode, argv
         return _wait_with_cleanup(process), argv
-    except KeyboardInterrupt:
-        if process is not None:
-            _terminate_group(process)
-        raise
     except (OSError, WorkspaceError):
         if process is not None:
             _terminate_group(process)
         return None, argv
+    except BaseException:
+        if process is not None:
+            _terminate_group(process)
+        raise
     finally:
+        if selector is not None:
+            selector.close()
+        if process is not None:
+            for output_stream in (process.stdout, process.stderr):
+                if output_stream is not None:
+                    output_stream.close()
         if not held:
             manager.release()
+        if old_term is not None:
+            signal.signal(signal.SIGTERM, old_term)

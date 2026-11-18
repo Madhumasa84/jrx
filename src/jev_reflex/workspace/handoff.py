@@ -96,6 +96,7 @@ def handoff_payload(record: dict[str, Any]) -> dict[str, Any]:
             "current_commit": workspace.get("current_commit"),
             "capabilities": workspace.get("capabilities"),
             "changed_file_metadata": workspace.get("files", [])[:500],
+            "changed_file_metadata_truncated": workspace.get("files_truncated", False),
         },
         "test_results_with_provenance": record.get("tests", []),
         "open_questions": record.get("open_questions", []),
@@ -201,6 +202,8 @@ def refresh_workspace_snapshot(record: dict[str, Any], workspace: Path) -> str:
         raise WorkspaceError("checkpoint has no workspace snapshot")
     current = collect_workspace_state(validate_workspace(workspace))
     for snapshot in (before, current):
+        if snapshot.get("files_truncated"):
+            return "incomplete"
         files = snapshot.get("files", [])
         if isinstance(files, list) and any(
             isinstance(item, dict)
@@ -218,6 +221,7 @@ def record_delivery(record: dict[str, Any], status: str) -> None:
         "workspace changed; refresh required",
         "user declined sharing",
         "destination validation failed; checkpoint retained",
+        "destination write scope declined; checkpoint retained",
         "destination launch failed; checkpoint retained",
         "destination run cancelled; checkpoint retained",
         "prompt passed as initial input; provider receipt unconfirmed",

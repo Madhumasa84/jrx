@@ -9,7 +9,7 @@ import pytest
 from jev_reflex.audit import GENESIS_HASH, AuditLog
 from jev_reflex.config import ReflexConfig
 from jev_reflex.models import DeterministicFinding
-from jev_reflex.policy import PolicyDecision
+from jev_reflex.policy import PolicyDecision, decide
 
 
 @pytest.fixture
@@ -427,6 +427,8 @@ def test_invalid_signing_key_refuses_unsigned_audit(tmp_path, signer_type):
         audit={"enabled": True, "path": str(tmp_path / "audit.log")},
         signing={"private_key_path": str(key), "signer_type": signer_type},
     )
-    with pytest.raises((OSError, ValueError)):
-        AuditLog(config)
-    assert not (tmp_path / "audit.log").exists()
+    with pytest.raises((OSError, ValueError, RuntimeError)):
+        audit = AuditLog(config)
+        audit.write_entry("fixture", [], {}, decide([], {}, config))
+    path = tmp_path / "audit.log"
+    assert not path.exists() or path.read_bytes() == b""

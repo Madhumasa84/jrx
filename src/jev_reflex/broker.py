@@ -14,6 +14,8 @@ import sys
 import threading
 import time
 import uuid
+from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,8 @@ from .redaction import redact_text
 PROTOCOL_VERSION = 1
 MAX_BYTES = 262_144
 MAX_CLOCK_SKEW_SECONDS = 300
+MAX_METRICS_HEADER_BYTES = 8192
+METRICS_HEADER_TIMEOUT = 5
 ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 
 
@@ -34,14 +38,20 @@ def socket_path(config: ReflexConfig) -> Path:
 
 
 def secure_directory(path: Path, *, create: bool = False) -> None:
+    if path.resolve() != path:
+        raise ValueError("broker directory must not use symbolic links")
     if create:
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
-        try:
-            if path.stat().st_uid == os.getuid():
-                path.chmod(0o700)
-        except OSError:
-            pass
     info = path.lstat()
+    if create and stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid():
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            info = os.fstat(descriptor)
+            if info.st_uid == os.getuid():
+                os.fchmod(descriptor, 0o700)
+                info = os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise ValueError("broker directory must be owned by the current user with mode 0700")
     if path.resolve() != path:
@@ -237,7 +247,7 @@ class BrokerClient:
             action = state.pop("proposed_action")
             response = self.request("evaluate", action=action, context=state)
             count = response.get("api_requests", 0)
-            if type(count) is not int or count not in {0, 1}:
+            if count is not None and (type(count) is not int or count not in {0, 1}):
                 raise ValueError("invalid request count")
             self.last_api_requests = count
             latency = response.get("jev_latency_ms")
@@ -278,6 +288,13 @@ class BrokerClient:
                 degraded=True,
                 warnings=["Broker semantic evaluation unavailable; fail-safe policy applied."],
             )
+
+
+@dataclass(frozen=True)
+class _EvaluationResult:
+    signals: SemanticSignals | None
+    api_requests: int | None
+    usage: dict[str, int] | None
 
 
 class BrokerServer:
@@ -327,20 +344,26 @@ class BrokerServer:
             },
         )
 
-    async def evaluate(self, context: EvaluationContext) -> SemanticSignals:
+    async def evaluate(self, context: EvaluationContext) -> _EvaluationResult:
         if not self.worker_lock.acquire(blocking=False):
             raise BlockingIOError("busy")
         loop = asyncio.get_running_loop()
-        future = loop.create_future()
+        future: asyncio.Future[_EvaluationResult] = loop.create_future()
 
-        def deliver(value: SemanticSignals | None) -> None:
+        def deliver(value: _EvaluationResult) -> None:
             if not future.done():
                 future.set_result(value)
 
         def worker() -> None:
-            value = None
+            value = _EvaluationResult(None, None, None)
             try:
-                value = self.evaluator.evaluate(context)
+                try:
+                    signals = self.evaluator.evaluate(context)
+                except Exception:
+                    signals = None
+                api_requests = getattr(self.evaluator, "last_api_requests", 1)
+                usage = getattr(self.evaluator, "last_usage", None)
+                value = _EvaluationResult(signals, api_requests, dict(usage) if usage else None)
             except Exception:
                 pass
             finally:
@@ -350,17 +373,19 @@ class BrokerServer:
                 except RuntimeError:
                     pass
 
-        threading.Thread(target=worker, daemon=True).start()
-        result = await asyncio.wait_for(future, self.config.jev.api_timeout)
-        if result is None or result.degraded or result.source != "jev":
-            raise ValueError("unavailable")
-        return result
+        try:
+            threading.Thread(target=worker, daemon=True).start()
+        except RuntimeError:
+            self.worker_lock.release()
+            raise
+        return await asyncio.wait_for(future, self.config.jev.api_timeout)
 
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         self.clients += 1
         request_id = ""
         response: dict[str, Any] = {}
         evaluating = False
+        api_requests: int | None = 0
         started = time.monotonic()
         try:
             if self.clients > 16:
@@ -384,8 +409,11 @@ class BrokerServer:
             elif request.get("operation", "evaluate") == "health":
                 response = {"status": "ok", "jev_configured": self.configured, "pid": os.getpid()}
             elif request.get("operation") == "stop":
-                response = {"status": "ok"}
-                self.stop_event.set()
+                if writer.get_extra_info("ssl_object") is not None:
+                    response = {"error_code": "FORBIDDEN"}
+                else:
+                    response = {"status": "ok"}
+                    self.stop_event.set()
             elif request.get("operation", "evaluate") == "evaluate":
                 from .evaluator import JUDGMENT_NAMES, _redacted_context
 
@@ -395,7 +423,12 @@ class BrokerServer:
                 context = _redacted_context(context)
                 api_started = time.monotonic()
                 evaluating = True
-                semantic = await self.evaluate(context)
+                api_requests = None
+                outcome = await self.evaluate(context)
+                api_requests = outcome.api_requests
+                semantic = outcome.signals
+                if semantic is None or semantic.degraded or semantic.source != "jev":
+                    raise ValueError("unavailable")
                 # Whitelist primitive outputs; never forward SDK prose, warnings or errors.
                 signals = {name: semantic.probabilities[name] for name in JUDGMENT_NAMES}
                 latency_ms = (time.monotonic() - api_started) * 1000
@@ -406,7 +439,7 @@ class BrokerServer:
                     "degraded": False,
                     "source": "live_jev",
                     "jev_latency_ms": latency_ms,
-                    "usage": getattr(self.evaluator, "last_usage", None),
+                    "usage": outcome.usage,
                 }
 
                 # Track JEV latency
@@ -429,6 +462,7 @@ class BrokerServer:
             )
         except BlockingIOError:
             response = {"error_code": "BUSY"}
+            api_requests = 0
             log_structured(
                 level="WARNING",
                 event="broker_busy",
@@ -449,11 +483,7 @@ class BrokerServer:
                 fields={"request_id": request_id, "evaluating": evaluating},
             )
         finally:
-            response["api_requests"] = (
-                getattr(getattr(self.evaluator, "gateway", self.evaluator), "last_api_requests", 1)
-                if evaluating and response.get("error_code") != "BUSY"
-                else 0
-            )
+            response["api_requests"] = api_requests
             if "error_code" in response:
                 response.update(status="error", degraded=True)
             response.update(protocol_version=1, request_id=request_id, server_time=time.time())
@@ -471,59 +501,43 @@ class BrokerServer:
     ) -> None:
         """Handle HTTP requests to /metrics endpoint."""
         try:
-            request_line = await reader.readline()
-            if not request_line:
+            body = b""
+            try:
+                headers = await asyncio.wait_for(
+                    reader.readuntil(b"\r\n\r\n"), METRICS_HEADER_TIMEOUT
+                )
+            except TimeoutError:
+                status = "408 Request Timeout"
+            except asyncio.LimitOverrunError:
+                status = "431 Request Header Fields Too Large"
+            except asyncio.IncompleteReadError:
                 return
-
-            request = request_line.decode().strip()
-            if not request.startswith("GET "):
-                writer.write(b"HTTP/1.1 405 Method Not Allowed\r\n\r\n")
-                await writer.drain()
-                writer.close()
-                return
-
-            # Parse the request path
-            parts = request.split()
-            if len(parts) < 2:
-                writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
-                await writer.drain()
-                writer.close()
-                return
-
-            path = parts[1]
-
-            # Only serve /metrics endpoint
-            if path != "/metrics":
-                writer.write(b"HTTP/1.1 404 Not Found\r\n\r\n")
-                await writer.drain()
-                writer.close()
-                return
-
-            # Read and discard headers
-            while True:
-                header_line = await reader.readline()
-                if not header_line or header_line == b"\r\n":
-                    break
-
-            # Render metrics
-            metrics_data = get_registry().render()
-
-            # Send HTTP response
+            else:
+                parts = headers.partition(b"\r\n")[0].split()
+                if len(headers) > MAX_METRICS_HEADER_BYTES:
+                    status = "431 Request Header Fields Too Large"
+                elif len(parts) != 3 or parts[2] not in (b"HTTP/1.0", b"HTTP/1.1"):
+                    status = "400 Bad Request"
+                elif parts[0] != b"GET":
+                    status = "405 Method Not Allowed"
+                elif parts[1] != b"/metrics":
+                    status = "404 Not Found"
+                else:
+                    status = "200 OK"
+                    body = get_registry().render().encode()
+            allow = "Allow: GET\r\n" if status == "405 Method Not Allowed" else ""
             response = (
-                f"HTTP/1.1 200 OK\r\n"
-                f"Content-Type: text/plain; version=0.0.4\r\n"
-                f"Content-Length: {len(metrics_data)}\r\n"
-                f"\r\n"
-                f"{metrics_data}"
-            ).encode()
-
-            writer.write(response)
-            await writer.drain()
-            writer.close()
-
-        except Exception:
-            writer.write(b"HTTP/1.1 500 Internal Server Error\r\n\r\n")
-            await writer.drain()
+                f"HTTP/1.1 {status}\r\n"
+                "Content-Type: text/plain; version=0.0.4\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                f"{allow}"
+                "Connection: close\r\n\r\n"
+            )
+            writer.write(response.encode() + body)
+            await asyncio.wait_for(writer.drain(), 1)
+        except (OSError, TimeoutError):
+            pass
+        finally:
             writer.close()
 
     async def run(self) -> None:
@@ -554,70 +568,54 @@ class BrokerServer:
                         path.unlink()
                     else:
                         raise ValueError("socket already active")
-            old_mask = os.umask(0o077)
-            try:
-                server = await asyncio.start_unix_server(
-                    self.handle, path=str(path), limit=MAX_BYTES
-                )
-                bound = True
-            finally:
-                os.umask(old_mask)
-            os.chmod(path, 0o600)
-            verify_socket(path)
-            print(
-                "Status: running\nJEV: "
-                + ("configured" if self.configured else "not configured")
-                + f"\nPID: {os.getpid()}",
-                flush=True,
-            )
             loop = asyncio.get_running_loop()
+            async with AsyncExitStack() as stack:
+                for signum in (signal.SIGTERM, signal.SIGINT):
+                    loop.add_signal_handler(signum, self.stop_event.set)
+                    stack.callback(loop.remove_signal_handler, signum)
+                old_mask = os.umask(0o077)
+                try:
+                    server = await asyncio.start_unix_server(
+                        self.handle, path=str(path), limit=MAX_BYTES, start_serving=False
+                    )
+                    bound = True
+                finally:
+                    os.umask(old_mask)
+                await stack.enter_async_context(server)
+                os.chmod(path, 0o600)
+                verify_socket(path)
+                metrics_server = await asyncio.start_server(
+                    self.handle_metrics,
+                    host=self.metrics_host,
+                    port=self.metrics_port,
+                    limit=MAX_METRICS_HEADER_BYTES,
+                )
+                await stack.enter_async_context(metrics_server)
+                if self.config.jev.transport == "broker-tls":
+                    await stack.enter_async_context(await self._start_tls_server())
 
-            # Start uptime tracking
-            self.metrics.start_uptime_tracking(loop)
-
-            # Start HTTP metrics server
-            metrics_server = await asyncio.start_server(
-                self.handle_metrics,
-                host=self.metrics_host,
-                port=self.metrics_port,
-            )
-
-            log_structured(
-                level="INFO",
-                event="metrics_server_started",
-                fields={
-                    "host": self.metrics_host,
-                    "port": self.metrics_port,
-                },
-            )
-
-            # Start TLS server if configured
-            tls_server = None
-            if self.config.jev.transport == "broker-tls" and self.config.jev.broker_tls:
-                tls_server = await self._start_tls_server()
-
-            for signum in (signal.SIGTERM, signal.SIGINT):
-                loop.add_signal_handler(signum, self.stop_event.set)
-
-            # Run servers
-            async with server, metrics_server:
-                if tls_server:
-                    # Start TLS server as a task
-                    tls_task = asyncio.create_task(tls_server.serve_forever())
-                    try:
-                        await self.stop_event.wait()
-                    finally:
-                        tls_task.cancel()
-                        try:
-                            await tls_task
-                        except asyncio.CancelledError:
-                            pass
-                else:
-                    await self.stop_event.wait()
+                self.metrics.start_uptime_tracking(loop)
+                stack.callback(self.metrics.stop_uptime_tracking)
+                # Local probes succeed only after the other listeners are available.
+                await server.start_serving()
+                log_structured(
+                    level="INFO",
+                    event="metrics_server_started",
+                    fields={"host": self.metrics_host, "port": self.metrics_port},
+                )
+                print(
+                    "Status: running\nJEV: "
+                    + ("configured" if self.configured else "not configured")
+                    + f"\nPID: {os.getpid()}",
+                    flush=True,
+                )
+                await self.stop_event.wait()
         finally:
-            if bound:
-                path.unlink(missing_ok=True)
-            os.close(lock_fd)
+            try:
+                if bound:
+                    path.unlink(missing_ok=True)
+            finally:
+                os.close(lock_fd)
 
     async def _start_tls_server(self) -> asyncio.Server:
         """Start TLS server with mutual authentication."""

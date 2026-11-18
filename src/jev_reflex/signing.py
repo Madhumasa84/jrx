@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import math
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Protocol
 
@@ -97,27 +101,104 @@ class Ed25519Signer:
 
 
 class CosignSigner:
-    """Cosign signer that shells out to the cosign CLI tool."""
+    """Local, detached key signatures using Cosign without public log uploads.
 
-    def __init__(self, private_key_path: Path | None = None) -> None:
-        """Initialize the signer with a private key.
+    Signatures are raw bytes, like Ed25519Signer. Cosign's base64 file format
+    is converted at the CLI boundary. Keyless signing and bundles are separate
+    protocols and are not used for private policy or audit data.
+    """
 
-        Args:
-            private_key_path: Path to the private key file (for cosign key reference).
-        """
-        self.private_key_path = private_key_path
+    def __init__(
+        self,
+        private_key_path: Path | None = None,
+        *,
+        binary: str = "cosign",
+        timeout: float = 30,
+    ) -> None:
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("Cosign timeout must be positive and finite")
+        self.private_key_path = (
+            private_key_path.expanduser().resolve() if private_key_path else None
+        )
+        self.binary = binary
+        self.timeout = timeout
+
+    def _run(self, arguments: list[str]) -> subprocess.CompletedProcess[bytes]:
+        from .context import sanitized_child_env
+
+        try:
+            return subprocess.run(  # nosec B603: fixed subcommands, argument list, no shell
+                [self.binary, *arguments],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                env=sanitized_child_env(),
+                timeout=self.timeout,
+                check=False,
+                shell=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise RuntimeError("Cosign is unavailable or exceeded its time limit") from None
 
     def sign(self, data: bytes) -> bytes:
         """Sign the given data using cosign."""
-        raise NotImplementedError(
-            "CosignSigner.sign is not yet implemented. Please use Ed25519Signer for now."
-        )
+        if self.private_key_path is None:
+            raise ValueError("Cosign signing requires a local private key")
+        if not self.private_key_path.is_file():
+            raise FileNotFoundError("Cosign private key file not found")
+        with tempfile.TemporaryDirectory(prefix="jrx-cosign-") as directory:
+            blob = Path(directory) / "blob"
+            blob.write_bytes(data)
+            result = self._run(
+                [
+                    "sign-blob",
+                    "--key",
+                    str(self.private_key_path),
+                    "--yes",
+                    "--tlog-upload=false",
+                    "--use-signing-config=false",
+                    "--new-bundle-format=false",
+                    str(blob),
+                ]
+            )
+            if result.returncode != 0:
+                raise RuntimeError("Cosign signing failed")
+            try:
+                signature = base64.b64decode(result.stdout.strip(), validate=True)
+            except ValueError:
+                raise RuntimeError("Cosign returned an invalid signature") from None
+            if not signature:
+                raise RuntimeError("Cosign returned an empty signature")
+            return signature
 
     def verify(self, data: bytes, signature: bytes, public_key: bytes) -> bool:
-        """Verify the signature using cosign."""
-        raise NotImplementedError(
-            "CosignSigner.verify is not yet implemented. Please use Ed25519Signer for now."
-        )
+        """Verify a detached signature against a pinned key, entirely offline."""
+        if not signature or not public_key:
+            return False
+        # load_public_key normalizes Ed25519 PEM keys to their 32 raw bytes.
+        if len(public_key) == 32:
+            public_key = ed25519.Ed25519PublicKey.from_public_bytes(public_key).public_bytes(
+                Encoding.PEM, PublicFormat.SubjectPublicKeyInfo
+            )
+        with tempfile.TemporaryDirectory(prefix="jrx-cosign-") as directory:
+            root = Path(directory)
+            (root / "blob").write_bytes(data)
+            (root / "signature").write_bytes(base64.b64encode(signature))
+            (root / "key.pem").write_bytes(public_key)
+            return (
+                self._run(
+                    [
+                        "verify-blob",
+                        "--key",
+                        str(root / "key.pem"),
+                        "--signature",
+                        str(root / "signature"),
+                        "--offline",
+                        "--insecure-ignore-tlog",
+                        str(root / "blob"),
+                    ]
+                ).returncode
+                == 0
+            )
 
 
 def load_public_key(public_key_path: Path) -> bytes:
