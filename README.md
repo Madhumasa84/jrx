@@ -84,6 +84,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 # Install with development dependencies
+python -m pip install --upgrade pip
 pip install -e ".[dev]"
 ```
 
@@ -613,11 +614,23 @@ Deploy the broker into Kubernetes clusters using the included Helm chart:
 # Validate chart
 helm lint ./helm/jrx-broker
 
-# Install using a pre-provisioned Secret with a typesafe-api-key entry
+# Install with an image built from this revision and a pre-provisioned API-key Secret
 helm install jrx-broker ./helm/jrx-broker \
+  --set image.repository=registry.example.com/jrx-broker \
+  --set image.tag=your-build-tag \
   --set secrets.typesafeApiKey.existingSecret=jrx-typesafe \
   --set service.metricsPort=9090
 ```
+
+The Helm chart requires an image with `jrx broker status --local`. The published
+`0.1.0` image predates that command. The chart keeps its local health socket at
+`/tmp/jrx/reflex.sock` in each pod.
+For remote evaluation, choose `config.jev.transport=broker-tls` and mount the server
+certificate, key, and client CA with `volumes.tls.enabled=true` and
+`secrets.tls.existingSecret`. Set the three `secrets.tls.*Key` values if the Secret
+uses custom key names. The chart's default pod group has read access to those files.
+Optional autoscaling uses the Kubernetes resource metrics API. For persistent
+storage with multiple replicas, use a StatefulSet with a claim per pod.
 
 ---
 

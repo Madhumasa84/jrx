@@ -27,6 +27,13 @@ def configuration(config: Path | None, socket: Path | None) -> ReflexConfig:
     return loaded
 
 
+def local_client(config: ReflexConfig) -> BrokerClient:
+    config = config.model_copy(
+        update={"jev": config.jev.model_copy(update={"transport": "broker"})}
+    )
+    return BrokerClient(config)
+
+
 def display(value: dict, json_output: bool = False) -> None:
     if json_output:
         typer.echo(json.dumps(value, sort_keys=True))
@@ -49,8 +56,10 @@ def status(
     config: Path | None = None,
     socket: Path | None = None,
     json_output: bool = typer.Option(False, "--json"),
+    local: bool = typer.Option(False, "--local", help="Check the local Unix socket"),
 ) -> None:
-    health = BrokerClient(configuration(config, socket)).health()
+    loaded = configuration(config, socket)
+    health = (local_client(loaded) if local else BrokerClient(loaded)).health()
     display(health, json_output)
     if not health["running"]:
         raise typer.Exit(1)
@@ -61,9 +70,11 @@ def run(
     config: Path | None = None,
     socket: Path | None = None,
     metrics_host: str = typer.Option(
-        "127.0.0.1", "--metrics-host", help="Metrics HTTP server host"
+        "127.0.0.1", "--metrics-host", envvar="JRX_METRICS_HOST", help="Metrics HTTP server host"
     ),
-    metrics_port: int = typer.Option(9090, "--metrics-port", help="Metrics HTTP server port"),
+    metrics_port: int = typer.Option(
+        9090, "--metrics-port", envvar="JRX_METRICS_PORT", help="Metrics HTTP server port"
+    ),
 ) -> None:
     """Stay in the foreground; inherit credentials only from this host shell."""
     try:
@@ -90,13 +101,15 @@ def start(
     config: Path | None = None,
     socket: Path | None = None,
     metrics_host: str = typer.Option(
-        "127.0.0.1", "--metrics-host", help="Metrics HTTP server host"
+        "127.0.0.1", "--metrics-host", envvar="JRX_METRICS_HOST", help="Metrics HTTP server host"
     ),
-    metrics_port: int = typer.Option(9090, "--metrics-port", help="Metrics HTTP server port"),
+    metrics_port: int = typer.Option(
+        9090, "--metrics-port", envvar="JRX_METRICS_PORT", help="Metrics HTTP server port"
+    ),
 ) -> None:
     """Start a detached host process; use run for foreground diagnostic logs."""
     loaded = configuration(config, socket)
-    client = BrokerClient(loaded)
+    client = local_client(loaded)
     health = client.health()
     if health["running"]:
         display(health)
@@ -145,8 +158,16 @@ def start(
 
 
 @app.command()
-def stop(config: Path | None = None, socket: Path | None = None) -> None:
-    client = BrokerClient(configuration(config, socket))
+def stop(
+    config: Path | None = None,
+    socket: Path | None = None,
+    local: bool = typer.Option(False, "--local", help="Stop through the local Unix socket"),
+) -> None:
+    loaded = configuration(config, socket)
+    if loaded.jev.transport == "broker-tls" and not local:
+        typer.echo("Stop a TLS broker on its host with broker stop --local.", err=True)
+        raise typer.Exit(2)
+    client = local_client(loaded)
     if not client.health()["running"]:
         typer.echo("Broker is not running.")
         return

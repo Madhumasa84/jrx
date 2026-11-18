@@ -12,10 +12,10 @@ Reference: https://prometheus.io/docs/instrumenting/exposition_formats/
 from __future__ import annotations
 
 import time
+from asyncio import AbstractEventLoop, TimerHandle
 from collections import defaultdict
-from collections.abc import Callable
 from threading import Lock
-from typing import Any, TypedDict
+from typing import TypedDict
 
 
 class _HistogramData(TypedDict):
@@ -315,18 +315,20 @@ class BrokerMetrics:
 
     def __init__(self) -> None:
         self._start_time = time.monotonic()
-        self._update_task: Callable[[], None] | None = None
+        self._update_timer: TimerHandle | None = None
 
-    def start_uptime_tracking(self, loop: Any) -> None:
+    def start_uptime_tracking(self, loop: AbstractEventLoop) -> None:
         """Start tracking broker uptime in the background."""
+        self.stop_uptime_tracking()
 
         def update_uptime() -> None:
             broker_uptime_seconds.set(time.monotonic() - self._start_time)
-            loop.call_later(1.0, update_uptime)
+            self._update_timer = loop.call_later(1.0, update_uptime)
 
-        self._update_task = update_uptime
         update_uptime()
 
     def stop_uptime_tracking(self) -> None:
         """Stop tracking broker uptime."""
-        self._update_task = None
+        if self._update_timer is not None:
+            self._update_timer.cancel()
+            self._update_timer = None

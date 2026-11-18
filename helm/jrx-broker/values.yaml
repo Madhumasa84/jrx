@@ -144,7 +144,7 @@ config:
     samples: 1
     aggregation: median
     transport: direct  # direct, broker, broker-tls
-    socket: /home/jrx/.jev-reflex/reflex.sock
+    socket: /tmp/jrx/reflex.sock  # Broker creates a private directory in the pod's tmp volume
     connectTimeout: 1.0
     requestTimeout: 25.0
     apiTimeout: 20.0
@@ -182,7 +182,7 @@ volumes:
     enabled: false
     existingClaim: ""
     mountPath: /etc/jrx/tls
-  # Persistent storage for audit logs and socket
+  # Persistent storage for audit logs
   data:
     enabled: false
     existingClaim: ""

@@ -75,7 +75,7 @@ def atomic_write(path: Path, data: bytes, *, mode: int = 0o600) -> None:
     temporary = Path(temporary_name)
     try:
         os.fchmod(descriptor, mode)
-        with os.fdopen(descriptor, "wb") as handle:
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
@@ -86,15 +86,10 @@ def atomic_write(path: Path, data: bytes, *, mode: int = 0o600) -> None:
         finally:
             os.close(directory_fd)
     except BaseException:
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+        temporary.unlink(missing_ok=True)
         raise
+    finally:
+        os.close(descriptor)
 
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -130,22 +125,25 @@ class WorkspaceLock(AbstractContextManager["WorkspaceLock"]):
         handle = os.fdopen(descriptor, "r+b", buffering=0)
         operation = fcntl.LOCK_EX | (0 if self.blocking else fcntl.LOCK_NB)
         try:
-            fcntl.flock(handle.fileno(), operation)
-        except BlockingIOError:
+            try:
+                fcntl.flock(handle.fileno(), operation)
+            except BlockingIOError:
+                raise WorkspaceError(
+                    "another JRX-managed agent is already writing in this workspace"
+                ) from None
+            owner = {
+                "pid": os.getpid(),
+                "workspace": str(self.workspace),
+                "started_at": datetime.now(UTC).isoformat(),
+                "nonce": secrets.token_hex(16),
+            }
+            handle.seek(0)
+            handle.truncate()
+            handle.write((json.dumps(owner, sort_keys=True) + "\n").encode("utf-8"))
+            os.fsync(handle.fileno())
+        except BaseException:
             handle.close()
-            raise WorkspaceError(
-                "another JRX-managed agent is already writing in this workspace"
-            ) from None
-        owner = {
-            "pid": os.getpid(),
-            "workspace": str(self.workspace),
-            "started_at": datetime.now(UTC).isoformat(),
-            "nonce": secrets.token_hex(16),
-        }
-        handle.seek(0)
-        handle.truncate()
-        handle.write((json.dumps(owner, sort_keys=True) + "\n").encode("utf-8"))
-        os.fsync(handle.fileno())
+            raise
         self.handle = handle
         return self
 

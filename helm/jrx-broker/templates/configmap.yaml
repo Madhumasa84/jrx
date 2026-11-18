@@ -9,21 +9,15 @@ data:
     mode: {{ .Values.config.mode }}
     
     policy:
-      allowHoldOverride: {{ .Values.config.policy.allowHoldOverride }}
+      allow_hold_override: {{ .Values.config.policy.allowHoldOverride }}
     
     thresholds:
       review: {{ .Values.config.thresholds.review }}
       hold: {{ .Values.config.thresholds.hold }}
     
-    hold_on:
-      {{- range .Values.config.holdOn }}
-      - {{ . }}
-      {{- end }}
+    hold_on: {{ .Values.config.holdOn | toJson }}
     
-    review_on:
-      {{- range .Values.config.reviewOn }}
-      - {{ . }}
-      {{- end }}
+    review_on: {{ .Values.config.reviewOn | toJson }}
     
     context:
       include_git_diff: {{ .Values.config.context.includeGitDiff }}
@@ -70,16 +64,16 @@ data:
       samples: {{ .Values.config.jev.samples }}
       aggregation: {{ .Values.config.jev.aggregation }}
       transport: {{ .Values.config.jev.transport }}
-      socket: {{ .Values.config.jev.socket }}
+      socket: {{ .Values.config.jev.socket | quote }}
       connect_timeout: {{ .Values.config.jev.connectTimeout }}
       request_timeout: {{ .Values.config.jev.requestTimeout }}
       api_timeout: {{ .Values.config.jev.apiTimeout }}
-      {{- if .Values.config.jev.brokerTls.enabled }}
+      {{- if or (eq .Values.config.jev.transport "broker-tls") .Values.config.jev.brokerTls.enabled }}
       broker_tls:
-        listen_addr: {{ .Values.config.jev.brokerTls.listenAddr }}
-        cert_path: {{ .Values.config.jev.brokerTls.certPath }}
-        key_path: {{ .Values.config.jev.brokerTls.keyPath }}
-        client_ca_path: {{ .Values.config.jev.brokerTls.clientCaPath }}
+        listen_addr: {{ .Values.config.jev.brokerTls.listenAddr | quote }}
+        cert_path: {{ .Values.config.jev.brokerTls.certPath | quote }}
+        key_path: {{ .Values.config.jev.brokerTls.keyPath | quote }}
+        client_ca_path: {{ .Values.config.jev.brokerTls.clientCaPath | quote }}
       {{- end }}
     
     stability:

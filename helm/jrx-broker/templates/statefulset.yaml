@@ -39,7 +39,7 @@ spec:
               protocol: TCP
             {{- if eq .Values.config.jev.transport "broker-tls" }}
             - name: broker
-              containerPort: {{ .Values.service.brokerPort }}
+              containerPort: {{ last (splitList ":" .Values.config.jev.brokerTls.listenAddr) | int }}
               protocol: TCP
             {{- end }}
           env:
@@ -58,10 +58,6 @@ spec:
               value: {{ .Values.env.JRX_METRICS_HOST | quote }}
             - name: JRX_METRICS_PORT
               value: {{ .Values.env.JRX_METRICS_PORT | quote }}
-            {{- if eq .Values.config.jev.transport "broker-tls" }}
-            - name: JRX_BROKER_TLS_LISTEN_ADDR
-              value: {{ .Values.config.jev.brokerTls.listenAddr | quote }}
-            {{- end }}
           volumeMounts:
             - name: config
               mountPath: /home/jrx/reflex.yaml
@@ -82,6 +78,7 @@ spec:
                 - jrx
                 - broker
                 - status
+                - --local
                 - --json
             initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
@@ -96,6 +93,7 @@ spec:
                 - jrx
                 - broker
                 - status
+                - --local
                 - --json
             initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
@@ -113,14 +111,7 @@ spec:
           emptyDir: {}
         {{- if .Values.volumes.tls.enabled }}
         - name: tls
-          {{- if .Values.volumes.tls.existingClaim }}
-          persistentVolumeClaim:
-            claimName: {{ .Values.volumes.tls.existingClaim }}
-          {{- else }}
-          secret:
-            secretName: {{ .Values.secrets.tls.existingSecret }}
-            defaultMode: 0400
-          {{- end }}
+          {{- include "jrx-broker.tlsVolume" . | nindent 10 }}
         {{- end }}
         {{- if and .Values.volumes.data.enabled .Values.volumes.data.existingClaim }}
         - name: data

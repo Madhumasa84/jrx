@@ -3,7 +3,7 @@ import json
 import pytest
 
 from jev_reflex.config import ReflexConfig
-from jev_reflex.evaluator import compact_state, evaluate_context
+from jev_reflex.evaluator import JEVSemanticEvaluator, compact_state, evaluate_context
 from jev_reflex.models import EvaluationContext, ProposedAction
 from jev_reflex.policy import decide, execution_allowed
 from jev_reflex.policy_source import PolicyMerger
@@ -31,6 +31,20 @@ def test_redaction_failure_blocks_execution_with_semantics_disabled(monkeypatch)
     result = evaluate_context(context, config=ReflexConfig(mode="enforce"), use_jev=False)
     assert result.degraded
     assert not execution_allowed(result.decision, mode="enforce", degraded=result.degraded)
+
+
+def test_semantic_redaction_failure_has_no_api_request(monkeypatch) -> None:
+    context = EvaluationContext(proposed_action=ProposedAction(command="echo hello"))
+    monkeypatch.setattr(
+        "jev_reflex.evaluator._redacted_context_with_gitleaks", lambda _: (context, True)
+    )
+
+    class Gateway:
+        last_api_requests = 1
+
+    evaluator = JEVSemanticEvaluator(gateway=Gateway())
+    assert evaluator.evaluate(context).degraded
+    assert evaluator.last_api_requests == 0
 
 
 def test_local_enforce_cannot_allow_central_review_action() -> None:

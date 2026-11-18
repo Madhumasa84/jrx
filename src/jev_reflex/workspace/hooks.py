@@ -193,7 +193,7 @@ def _write_config(path: Path, payload: bytes, mode: int) -> None:
     temporary = Path(temp_name)
     try:
         os.fchmod(descriptor, mode)
-        with os.fdopen(descriptor, "wb") as handle:
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
@@ -204,15 +204,10 @@ def _write_config(path: Path, payload: bytes, mode: int) -> None:
         finally:
             os.close(directory_fd)
     except BaseException:
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+        temporary.unlink(missing_ok=True)
         raise
+    finally:
+        os.close(descriptor)
 
 
 def preview_hook_change(

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=84.1.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -19,6 +19,7 @@ dependencies = [
     "requests>=2.31",
     "jsonschema>=4.21",
     "referencing>=0.31",
+    "certifi>=2026.10.18",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +27,8 @@ harness = [
     "deepagents==0.7.19",
     "langgraph-checkpoint-sqlite==3.1.1",
     "agent-client-protocol==0.12.1",
+    "langgraph-sdk>=0.4.6",
+    "pyasn1>=0.6.5",
 ]
 dev = [
     "pytest>=8.0",
@@ -35,6 +38,8 @@ dev = [
     "pip-audit>=2.8",
     "types-PyYAML>=6.0",
     "types-jsonschema>=4.21",
+    "filelock>=4.2.1",
+    "msgpack>=1.2.3",
 ]
 
 [project.scripts]

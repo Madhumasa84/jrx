@@ -859,6 +859,51 @@ def test_workspace_lock_recovers_when_managed_process_exits(tmp_path: Path) -> N
         pass
 
 
+def test_workspace_lock_releases_descriptor_when_record_sync_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock = state.WorkspaceLock(tmp_path)
+
+    def fail_sync(_fd: int) -> None:
+        raise OSError("sync failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "fsync", fail_sync)
+        with pytest.raises(OSError, match="sync failed") as failure:
+            lock.acquire()
+    # The retained traceback keeps acquire's locals alive during the retry.
+    assert failure.value.__traceback__ is not None
+    with state.WorkspaceLock(tmp_path):
+        pass
+
+
+@pytest.mark.parametrize("write", [state.atomic_write, hooks._write_config])
+def test_failed_atomic_replace_leaves_other_open_file_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, write
+) -> None:
+    tmp_path.chmod(0o700)
+    target = tmp_path / "settings"
+    target.write_bytes(b"original")
+    unrelated = tmp_path / "unrelated"
+    unrelated.write_bytes(b"still readable")
+    opened = []
+
+    def fail_replace(_source: Path, _target: Path) -> None:
+        opened.append(unrelated.open("rb"))
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    try:
+        with pytest.raises(OSError, match="replace failed"):
+            write(target, b"updated", mode=0o600)
+        assert opened[0].read() == b"still readable"
+        assert target.read_bytes() == b"original"
+        assert set(tmp_path.iterdir()) == {target, unrelated}
+    finally:
+        for handle in opened:
+            handle.close()
+
+
 def test_corrupt_and_oversized_task_records_are_skipped(tmp_path: Path) -> None:
     root = _repository(tmp_path / "repo")
     task_dir = state.private_state_directory() / "tasks"

@@ -38,6 +38,10 @@ automatically. Use `run` with `JRX_DEBUG=1` for safe diagnostic logs.
 `stop` addresses the socket, not an untrusted PID file. A user-only lock file
 remains after shutdown; the socket is removed. Startup recovers a stale socket
 only after obtaining the lifecycle lock and checking that no listener exists.
+For TLS deployments, run `jrx broker status --local --json` and
+`jrx broker stop --local` on the broker host. Local health checks use the private
+Unix socket and become ready once the configured listeners are up. Remote TLS
+clients can check health and request evaluations.
 
 Use a trusted configuration file for the hook:
 
@@ -61,9 +65,8 @@ env -u TYPESAFE_API_KEY jrx check --transport broker --command 'python migrate.p
 jrx check --transport direct --command 'python migrate.py'
 ```
 
-Custom endpoints use `broker run --socket /absolute/private-directory/reflex.sock`
-and the same `jev.socket` in client configuration. Only Unix sockets are supported;
-the `BrokerClient` semantic interface is the extension point for future transports.
+Custom Unix endpoints use `broker run --socket /absolute/private-directory/reflex.sock`
+and the same `jev.socket` in client configuration.
 
 ## TLS transport configuration
 
@@ -242,20 +245,20 @@ existing deterministic policy. A successful broker-backed result is identified
 as `semantic_source: "broker/live"`; human output says `LIVE JEV VIA BROKER`.
 
 Errors contain only fixed codes, protocol version, validated request ID, request
-count and `degraded: true`. Codes include `INVALID_REQUEST`, `REQUEST_TOO_LARGE`,
-`UNSUPPORTED_PROTOCOL`, `TIMEOUT`, `BUSY`, and `JEV_UNAVAILABLE`. An invalid ID is
+count and `degraded: true`. The count is null if the broker cannot determine it
+before responding. Codes include `INVALID_REQUEST`, `REQUEST_TOO_LARGE`,
+`UNSUPPORTED_PROTOCOL`, `TIMEOUT`, `BUSY`, `FORBIDDEN`, and `JEV_UNAVAILABLE`. An invalid ID is
 never reflected. `health` reports PID and whether a credential is configured;
 it makes no paid API call and does not prove API connectivity. `stop` requests
-service shutdown. Future versions can add authentication without changing the
-semantic evaluator interface.
+service shutdown and requires access to the private Unix socket.
 
 ## Boundaries and failure behavior
 
 The parent directory must be current-user-owned, non-symlinked and mode 0700.
 The socket is created under a restrictive umask and set to 0600; both peers check
-ownership and permissions. Existing unsafe directories/sockets are rejected,
-not silently repaired. No TCP port is opened. Filesystem permissions authenticate
-the current OS user, not individual processes belonging to that user.
+ownership and permissions. Filesystem permissions authenticate the current OS
+user. The metrics listener binds to loopback by default. The evaluation TCP
+listener opens only in TLS mode.
 
 Only the trusted host broker's direct evaluator needs the credential. The client
 does not read it, transmit it, load `.env`, or fall back to a credential-dependent
