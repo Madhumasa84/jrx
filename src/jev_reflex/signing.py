@@ -127,7 +127,8 @@ class CosignSigner:
         from .context import sanitized_child_env
 
         try:
-            return subprocess.run(  # nosec B603: fixed subcommands, argument list, no shell
+            # Callers supply fixed Cosign subcommands as an argument list.
+            return subprocess.run(  # nosec B603
                 [self.binary, *arguments],
                 stdin=subprocess.DEVNULL,
                 capture_output=True,

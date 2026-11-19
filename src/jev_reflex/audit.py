@@ -6,10 +6,11 @@ import fcntl
 import hashlib
 import io
 import json
+import os
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from .config import ReflexConfig
 from .models import DeterministicFinding, HookAuditCorrelation
@@ -143,7 +144,6 @@ class AuditLog:
 
     def __init__(self, config: ReflexConfig) -> None:
         self.config = config
-        self._ensure_log_directory()
         self._signer: Signer | None = None
 
         # Initialize signer if signing is configured
@@ -156,9 +156,11 @@ class AuditLog:
             else:
                 raise ValueError("unsupported audit signer type")
 
-    def _ensure_log_directory(self) -> None:
-        """Create the log directory if it doesn't exist."""
-        Path(self.config.audit.path).expanduser().parent.mkdir(parents=True, exist_ok=True)
+    def _open_for_append(self) -> TextIO:
+        path = self._get_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+        return os.fdopen(fd, "a+", encoding="utf-8")
 
     def _sign_entry_hash(self, entry: AuditEntry) -> str | None:
         """Sign the entry hash if a signer is configured.
@@ -303,12 +305,7 @@ class AuditLog:
         hook_correlation: dict[str, Any] | None,
     ) -> None:
         """Atomically read last entry, compute next sequence, and write with file locking."""
-        log_path = self._get_log_path()
-        # Create file with 0600 permissions if it doesn't exist
-        if not log_path.exists():
-            log_path.touch(mode=0o600)
-
-        with log_path.open("a+", encoding="utf-8") as f:
+        with self._open_for_append() as f:
             # Acquire exclusive lock
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
@@ -356,11 +353,7 @@ class AuditLog:
         timestamp = datetime.now(UTC).isoformat()
         policy_version_hash = self._compute_policy_version_hash(self.config)
 
-        log_path = self._get_log_path()
-        if not log_path.exists():
-            log_path.touch(mode=0o600)
-
-        with log_path.open("a+", encoding="utf-8") as f:
+        with self._open_for_append() as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
                 f.seek(0)

@@ -1922,6 +1922,9 @@ def mcp_serve(
     server: str = typer.Option(..., "--server", help="Trusted upstream server identifier."),
     config: Path | None = typer.Option(None, "--config"),
     session_id: str | None = typer.Option(None, "--session-id"),
+    approval_id: str | None = typer.Option(
+        None, "--approval-id", help="Host-provided approval ID for a tool call retry."
+    ),
 ) -> None:
     """Proxy an MCP stdio server, enforcing policy before tools/call."""
     from .mcp_gateway import MCPGateway
@@ -1931,7 +1934,9 @@ def mcp_serve(
         loaded = _load(config, None)
         if loaded.mode == "advisory":
             raise ValueError("MCP gateway requires review or enforce mode")
-        gateway = MCPGateway(loaded, server, command, session_id=session_id)
+        gateway = MCPGateway(
+            loaded, server, command, session_id=session_id, approval_id=approval_id
+        )
         raise typer.Exit(code=gateway.run())
     except typer.Exit:
         raise

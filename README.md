@@ -189,7 +189,7 @@ jrx exec --config reflex.yaml --cwd /srv/my-project \
   --environment production --approval-id APPROVAL_ID -- python migrate.py
 ```
 
-Agent hooks use `JRX_ENVIRONMENT` and `JRX_APPROVAL_ID` from the trusted host. For a shell hook, request approval with `--hook-command` to bind the raw shell command. Enterprise execution refuses demo mode, disabled semantic evaluation, and CLI mode overrides. Hooks fail closed if identity or approval checks fail. Approval requests currently cover shell commands; other tool actions with a REVIEW or HOLD result remain blocked in enterprise mode.
+Agent hooks use `JRX_ENVIRONMENT` and `JRX_APPROVAL_ID` from the trusted host. For a shell hook, request approval with `--hook-command` to bind the raw shell command. Enterprise execution refuses demo mode, disabled semantic evaluation, and CLI mode overrides. Hooks fail closed if identity or approval checks fail. The stdio MCP gateway also supports [opt-in approvals for write tools](docs/mcp-argument-policy.md#human-approval-for-write-tools) after a live semantic ALLOW.
 
 ---
 

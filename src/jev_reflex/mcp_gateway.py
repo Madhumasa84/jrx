@@ -7,11 +7,13 @@ import json
 import math
 import os
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -21,9 +23,17 @@ from referencing.exceptions import NoSuchResource
 
 from .config import MCPToolRule, ReflexConfig
 from .context import RepositoryContextProvider, sanitized_child_env
-from .enterprise import authorize, verified_identity
+from .enterprise import (
+    AccessDenied,
+    ApprovalStore,
+    Identity,
+    authorize,
+    mcp_action_binding,
+    verified_identity,
+)
 from .evaluator import evaluate_context
 from .models import ProposedAction
+from .redaction import looks_secret_key, redact_text
 from .session_limits import SessionStore
 
 
@@ -42,8 +52,47 @@ def _no_remote_schema(uri: str) -> None:
     raise NoSuchResource(uri)
 
 
-def _load_message(raw: bytes) -> Any:
-    return json.loads(raw, parse_float=_finite_number, parse_constant=_reject_constant)
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON member")
+        result[key] = value
+    return result
+
+
+@dataclass(frozen=True)
+class _JSONNumber:
+    # Retain the number as sent. Float rounding can make different arguments look identical.
+    literal: str
+
+
+def _load_message(raw: bytes, *, exact_numbers: bool = False) -> Any:
+    return json.loads(
+        raw,
+        parse_float=_JSONNumber if exact_numbers else _finite_number,
+        parse_int=_JSONNumber if exact_numbers else int,
+        parse_constant=_reject_constant,
+        object_pairs_hook=_unique_object,
+    )
+
+
+def _review_json(value: Any) -> str:
+    if isinstance(value, _JSONNumber):
+        return value.literal
+    if isinstance(value, dict):
+        if any(looks_secret_key(key) for key in value):
+            raise AccessDenied("MCP tool call cannot be reviewed safely")
+        return (
+            "{"
+            + ",".join(f"{_review_json(key)}:{_review_json(value[key])}" for key in sorted(value))
+            + "}"
+        )
+    if isinstance(value, list):
+        return "[" + ",".join(map(_review_json, value)) + "]"
+    if isinstance(value, str) and redact_text(value) != value:
+        raise AccessDenied("MCP tool call cannot be reviewed safely")
+    return json.dumps(value, ensure_ascii=True, allow_nan=False)
 
 
 def _tool_error(request_id: object, message: str) -> dict[str, Any]:
@@ -58,6 +107,29 @@ def _rpc_error(request_id: object, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
+@dataclass(frozen=True)
+class _ToolReview:
+    identity: Identity
+    repository: str
+    summary: str
+
+
+@dataclass(frozen=True)
+class _PendingTool:
+    request_id: object
+    timer: threading.Timer
+    approved: bool = False
+
+    def error(self, message: str) -> dict[str, Any]:
+        if not self.approved:
+            return _tool_error(self.request_id, message)
+        response = _tool_error(
+            self.request_id, f"{message}. MCP approved write outcome is unknown. Approval spent."
+        )
+        response["result"]["structuredContent"] = {"status": "outcome_unknown"}
+        return response
+
+
 class MCPGateway:
     """Forward stdio MCP traffic while deciding every tools/call locally."""
 
@@ -68,6 +140,7 @@ class MCPGateway:
         command: list[str],
         *,
         session_id: str | None = None,
+        approval_id: str | None = None,
         source: BinaryIO | None = None,
         sink: BinaryIO | None = None,
     ) -> None:
@@ -79,13 +152,15 @@ class MCPGateway:
         self.source = source or sys.stdin.buffer
         self.sink = sink or sys.stdout.buffer
         self.session_id = session_id or os.environ.get("JRX_SESSION_ID", "")
+        self.approval_id = approval_id
         if config.session.enabled:
             SessionStore._id(self.session_id)
         self._upstream_group: int | None = None
         self._output_lock = threading.Lock()
         self._pending_lock = threading.Lock()
         self._catalog_lock = threading.Lock()
-        self._pending: dict[str, tuple[object, threading.Timer]] = {}
+        self._pending: dict[str, _PendingTool] = {}
+        self._upstream_closed = False
         self._expired_ids: set[str] = set()
         names = [(rule.server, rule.name) for rule in config.mcp.tools]
         if len(names) != len(set(names)):
@@ -268,7 +343,7 @@ class MCPGateway:
             if pending is not None:
                 self._expired_ids.add(key)
         if pending is not None:
-            self._send(_tool_error(pending[0], "MCP tool execution time limit reached"))
+            self._send(pending.error("MCP tool execution time limit reached"))
             self._stop_upstream(process)
 
     def _read_upstream(self, process: subprocess.Popen[bytes]) -> None:
@@ -298,7 +373,7 @@ class MCPGateway:
                         expired = key in self._expired_ids
                         self._expired_ids.discard(key)
                     if pending is not None:
-                        pending[1].cancel()
+                        pending.timer.cancel()
                     elif expired:
                         # The request timed out and already received an error.
                         continue
@@ -311,24 +386,27 @@ class MCPGateway:
                     self._send(message)
         finally:
             with self._pending_lock:
+                self._upstream_closed = True
                 outstanding = list(self._pending.values())
                 self._pending.clear()
-            for request_id, timer in outstanding:
-                timer.cancel()
-                self._send(_tool_error(request_id, "upstream MCP server stopped"))
+            for pending in outstanding:
+                pending.timer.cancel()
+                self._send(pending.error("upstream MCP server stopped"))
 
-    def _authorize_tool(self, name: str, arguments: dict[str, Any]) -> tuple[bool, str]:
+    def _authorize_tool(
+        self, name: str, arguments: dict[str, Any], request_id: object, raw: bytes
+    ) -> tuple[str | None, _ToolReview | None]:
         rule = self._rules.get((self.server_name, name))
         if rule is None:
-            return False, "MCP tool is not permitted by policy"
+            return "MCP tool is not permitted by policy", None
         if rule.effect == "destructive":
-            return False, "MCP destructive tool is blocked by policy"
+            return "MCP destructive tool is blocked by policy", None
         if rule.effect == "write" and not self.config.mcp.use_jev:
-            return False, "MCP write tool requires semantic evaluation"
+            return "MCP write tool requires semantic evaluation", None
         if not self._schema_is_verified(name):
-            return False, "MCP tool schema has not been verified against policy"
+            return "MCP tool schema has not been verified against policy", None
         if not self._arguments_match_policy(rule, arguments):
-            return False, "MCP tool arguments do not match policy"
+            return "MCP tool arguments do not match policy", None
         provider = RepositoryContextProvider(cwd=Path.cwd())
         context = provider.build(
             user_task=f"MCP {self.server_name}.{name}",
@@ -338,15 +416,22 @@ class MCPGateway:
                 description=f"{rule.effect} MCP tool call",
             ),
         )
-        if self.config.access is not None:
-            identity = verified_identity(self.config.access)
-            authorize(
-                identity,
-                self.config.access,
-                "execute",
-                context.repository_root,
-                self.config.access.environment,
-            )
+        access = self.config.access
+        approval_scope = None
+        if access is not None:
+            identity = verified_identity(access)
+            repository = context.repository_root
+            if rule.require_approval:
+                repository = str(provider.repository_root() or provider.working_directory)
+            authorize(identity, access, "execute", repository, access.environment)
+            if rule.require_approval:
+                try:
+                    summary = self._review_tool_call(request_id, raw)
+                except AccessDenied as exc:
+                    return str(exc), None
+                approval_scope = _ToolReview(identity, repository, summary)
+        elif rule.require_approval:
+            return "MCP approval requires enterprise access", None
         result = evaluate_context(
             context,
             config=self.config,
@@ -358,10 +443,56 @@ class MCPGateway:
         if self.config.session.enabled:
             SessionStore(self.config.session).reserve(self.session_id, semantic=0, tool_calls=0)
         if result.degraded or result.decision != "ALLOW":
-            return False, f"MCP tool blocked: {result.decision}"
+            return f"MCP tool blocked: {result.decision}", None
         if rule.effect == "write" and result.semantic_source not in {"jev", "broker/live"}:
-            return False, "MCP write tool requires a live semantic decision"
-        return True, ""
+            return "MCP write tool requires a live semantic decision", None
+        return None, approval_scope
+
+    def _review_tool_call(self, request_id: object, raw: bytes) -> str:
+        message = _load_message(raw, exact_numbers=True)
+        params = message["params"]
+        if (
+            message.get("jsonrpc") != "2.0"
+            or type(request_id) not in (str, int)
+            or set(message) - {"jsonrpc", "id", "method", "params"}
+            or set(params) - {"name", "arguments"}
+        ):
+            raise AccessDenied("MCP approval only supports plain tools/call requests")
+        review: dict[str, Any] = {"server": self.server_name, "tool": params["name"]}
+        if "arguments" in params:
+            review["arguments"] = params["arguments"]
+        return _review_json(review)
+
+    def _dispatch_tool(
+        self,
+        process: subprocess.Popen[bytes],
+        request_id: object,
+        key: str,
+        raw: bytes,
+        *,
+        approved: bool,
+    ) -> None:
+        timeout = self.config.mcp.timeout_seconds
+        if self.config.session.enabled:
+            timeout = min(timeout, self.config.session.max_execution_seconds)
+        timer = threading.Timer(timeout, self._expired, args=(process, key))
+        with self._pending_lock:
+            if self._upstream_closed:
+                message = "upstream MCP server is unavailable"
+                if approved:
+                    message += ". Approval spent."
+                self._send(_tool_error(request_id, message))
+                return
+            self._pending[key] = _PendingTool(request_id, timer, approved)
+        timer.start()
+        try:
+            self._forward_upstream(process, raw)
+        except (OSError, ValueError):
+            with self._pending_lock:
+                pending = self._pending.pop(key, None)
+            if pending is not None:
+                pending.timer.cancel()
+                self._send(pending.error("upstream MCP server is unavailable"))
 
     def _handle(self, process: subprocess.Popen[bytes], raw: bytes) -> None:
         if len(raw) > self.config.mcp.max_message_bytes:
@@ -379,20 +510,19 @@ class MCPGateway:
             if message.get("method") == "tools/list" and message.get("id") is not None:
                 params = message.get("params")
                 key = json.dumps(message["id"], sort_keys=True)
-                with self._pending_lock:
+                with self._catalog_lock, self._pending_lock:
                     if key in self._catalog_requests or key in self._pending:
                         self._send(_rpc_error(message["id"], -32600, "Duplicate request ID"))
                         return
-                    with self._catalog_lock:
-                        cursor = params.get("cursor") if isinstance(params, dict) else None
-                        generation: int | None
-                        if cursor is None:
-                            self._invalidate_catalog_locked()
-                            generation = self._catalog_generation
-                        elif isinstance(cursor, str):
-                            generation = self._catalog_cursors.get(cursor)
-                        else:
-                            generation = None
+                    cursor = params.get("cursor") if isinstance(params, dict) else None
+                    generation: int | None
+                    if cursor is None:
+                        self._invalidate_catalog_locked()
+                        generation = self._catalog_generation
+                    elif isinstance(cursor, str):
+                        generation = self._catalog_cursors.get(cursor)
+                    else:
+                        generation = None
                     self._catalog_requests[key] = generation
             self._forward_upstream(process, raw)
             return
@@ -416,9 +546,11 @@ class MCPGateway:
         try:
             if self.config.session.enabled:
                 SessionStore(self.config.session).reserve(self.session_id, semantic=0, tool_calls=1)
-            allowed, reason = self._authorize_tool(params["name"], params.get("arguments", {}))
+            reason, approval_scope = self._authorize_tool(
+                params["name"], params.get("arguments", {}), request_id, raw
+            )
             if (
-                not allowed
+                reason is not None
                 and self.config.session.enabled
                 and not reason.startswith("MCP tool blocked:")
             ):
@@ -430,43 +562,67 @@ class MCPGateway:
                     ),
                 )
         except Exception:
-            allowed, reason = False, "MCP policy or session check failed"
-        if not allowed:
+            self._send(_tool_error(request_id, "MCP policy or session check failed"))
+            return
+        if reason is not None:
             self._send(_tool_error(request_id, reason))
             return
-        timeout = self.config.mcp.timeout_seconds
-        if self.config.session.enabled:
-            timeout = min(timeout, self.config.session.max_execution_seconds)
-        timer = threading.Timer(timeout, self._expired, args=(process, key))
-        with self._pending_lock:
-            if key in self._pending:
-                self._send(_rpc_error(request_id, -32600, "Duplicate request ID"))
+        schema_error = "MCP tool schema has not been verified against policy"
+        if approval_scope is not None and not self._schema_is_verified(params["name"]):
+            self._send(_tool_error(request_id, schema_error))
+            return
+        if not self._check_approval(request_id, approval_scope):
+            return
+        # A catalog notification may arrive while evaluation or approval checks are running.
+        with self._catalog_lock:
+            expected = self._pinned_schemas.get(params["name"])
+            if expected is not None and self._validated_schemas.get(params["name"]) != expected:
+                if approval_scope is not None:
+                    schema_error += ". Approval spent."
+                self._send(_tool_error(request_id, schema_error))
                 return
-            self._pending[key] = (request_id, timer)
-        timer.start()
+            self._dispatch_tool(process, request_id, key, raw, approved=approval_scope is not None)
+
+    def _check_approval(self, request_id: object, scope: _ToolReview | None) -> bool:
+        if scope is None:
+            if self.approval_id is None:
+                return True
+            self._send(_tool_error(request_id, "Approval does not match this tool's policy"))
+            return False
+
+        access = self.config.access
+        assert access is not None
         try:
-            # A catalog notification may arrive while semantic evaluation is running.
-            with self._catalog_lock:
-                expected = self._pinned_schemas.get(params["name"])
-                revoked = (
-                    expected is not None and self._validated_schemas.get(params["name"]) != expected
-                )
-                if not revoked:
-                    self._forward_upstream(process, raw)
-            if revoked:
-                with self._pending_lock:
-                    pending = self._pending.pop(key, None)
-                if pending is not None:
-                    pending[1].cancel()
-                self._send(
-                    _tool_error(request_id, "MCP tool schema has not been verified against policy")
-                )
-        except (OSError, ValueError):
-            with self._pending_lock:
-                pending = self._pending.pop(key, None)
-            if pending is not None:
-                pending[1].cancel()
-            self._send(_tool_error(request_id, "upstream MCP server is unavailable"))
+            environment = access.environment
+            binding = mcp_action_binding(self.config, scope.repository, environment, scope.summary)
+            store = ApprovalStore(access)
+            if self.approval_id is not None:
+                store.consume(self.approval_id, scope.identity, binding)
+                if self.config.session.enabled:
+                    SessionStore(self.config.session).reserve(
+                        self.session_id, semantic=0, tool_calls=0
+                    )
+                return True
+            approval_id = store.request(
+                scope.identity,
+                scope.repository,
+                environment,
+                binding,
+                scope.summary,
+                kind="MCP tool call",
+            )
+        except AccessDenied as exc:
+            self._send(_tool_error(request_id, str(exc)))
+        except (OSError, ValueError, sqlite3.Error, RecursionError):
+            self._send(_tool_error(request_id, "MCP approval or session check failed"))
+        else:
+            response = _tool_error(request_id, f"MCP tool call pending approval: {approval_id}")
+            response["result"]["structuredContent"] = {
+                "status": "pending_approval",
+                "approval_id": approval_id,
+            }
+            self._send(response)
+        return False
 
     def run(self) -> int:
         child_env = sanitized_child_env()
@@ -474,15 +630,14 @@ class MCPGateway:
             self.command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=sys.stderr,
             env=child_env,
             shell=False,
             start_new_session=os.name == "posix",
         ) as process:
             if os.name == "posix":
                 self._upstream_group = process.pid
+            reader = threading.Thread(target=self._read_upstream, args=(process,), daemon=True)
             try:
-                reader = threading.Thread(target=self._read_upstream, args=(process,), daemon=True)
                 reader.start()
                 if self.config.session.enabled:
 
@@ -513,4 +668,6 @@ class MCPGateway:
                 try:
                     self._stop_upstream(process)
                 finally:
+                    if reader.ident is not None:
+                        reader.join(timeout=1)
                     self._upstream_group = None

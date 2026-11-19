@@ -385,7 +385,7 @@ def test_mcp_timeout_kills_upstream_that_ignores_termination() -> None:
     import io
     import threading
 
-    from jev_reflex.mcp_gateway import MCPGateway
+    from jev_reflex.mcp_gateway import MCPGateway, _PendingTool
 
     gateway = MCPGateway(ReflexConfig(), "test", [sys.executable], sink=io.BytesIO())
     with subprocess.Popen(
@@ -399,7 +399,7 @@ def test_mcp_timeout_kills_upstream_that_ignores_termination() -> None:
     ) as process:
         try:
             assert process.stdout.readline() == b"ready\n"
-            gateway._pending["1"] = (1, threading.Timer(30, lambda: None))
+            gateway._pending["1"] = _PendingTool(1, threading.Timer(30, lambda: None))
             gateway._expired(process, "1")
             assert process.wait(timeout=0.5) < 0
         finally:
@@ -414,7 +414,7 @@ def test_mcp_timeout_kills_upstream_descendant(tmp_path):
     import signal
     import threading
 
-    from jev_reflex.mcp_gateway import MCPGateway
+    from jev_reflex.mcp_gateway import MCPGateway, _PendingTool
 
     marker = tmp_path / "descendant-survived"
     child = (
@@ -434,7 +434,7 @@ def test_mcp_timeout_kills_upstream_descendant(tmp_path):
     ) as process:
         try:
             assert process.stdout.readline() == b"ready\n"
-            gateway._pending["1"] = (1, threading.Timer(30, lambda: None))
+            gateway._pending["1"] = _PendingTool(1, threading.Timer(30, lambda: None))
             gateway._expired(process, "1")
             time.sleep(2.2)
             assert not marker.exists()
