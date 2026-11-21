@@ -19,7 +19,7 @@ from pydantic import (
     model_validator,
 )
 
-from .serialization import safe_yaml_load
+from .serialization import read_config_bytes, safe_yaml_load
 
 Mode = Literal["advisory", "review", "enforce"]
 
@@ -536,7 +536,7 @@ def load_config(
     bootstrap = load_bootstrap_config()
     raw = b""
     try:
-        raw = config_path.read_bytes()
+        raw = read_config_bytes(config_path)
     except FileNotFoundError:
         if path is not None and not default_if_missing:
             raise FileNotFoundError(f"Configuration file not found: {config_path}") from None
@@ -644,8 +644,7 @@ def load_bootstrap_config(path: Path | None = None) -> BootstrapConfig:
         return BootstrapConfig()
 
     try:
-        with path.open("r", encoding="utf-8") as handle:
-            loaded = safe_yaml_load(handle.read(1_048_577))
+        loaded = safe_yaml_load(read_config_bytes(path).decode("utf-8"))
     except (
         yaml.YAMLError,
         ValueError,
