@@ -57,12 +57,68 @@ Rules without these fields retain the existing allow-by-tool-name behavior. A to
 still needs an explicit `(server, name)` rule, and the existing `effect` checks,
 deterministic checks, semantic evaluation, and session limits continue to apply.
 
+## Human approval for write tools
+
+With [enterprise access configured](../README.md#verified-identity-and-reviewed-execution),
+set `require_approval: true` on the specific write rule.
+
+```yaml
+mcp:
+  use_jev: true
+  tools:
+    - server: github-demo
+      name: publish_release
+      effect: write
+      require_approval: true
+      argument_constraints:
+        /repository: [example/widgets]
+```
+
+Send a plain MCP `tools/call` with the tool name and arguments. Once all policy checks
+pass, including a live semantic ALLOW, JRX returns
+`structuredContent: {"status":"pending_approval","approval_id":"..."}`. At this point
+JRX has sent zero calls to the server. Reviewers use their own host-provided OIDC
+tokens to inspect the request and grant approval.
+
+```bash
+jrx approval pending --config reflex.yaml
+jrx approval grant APPROVAL_ID --config reflex.yaml
+```
+
+The queue shows the requester, authorized local repository, environment, and a JSON
+summary with the server, tool, and complete arguments. Approval uses the existing
+expiry and review quorum, including two distinct reviewers in production. The
+complete serialized summary must fit in the existing 1,000-character review limit
+and pass secret redaction checks. JRX rejects secret-looking argument keys at any
+depth before semantic evaluation, including keys that hold lists, objects, or numbers.
+
+The trusted host starts a retry gateway with the original requester's OIDC identity
+and passes `--approval-id APPROVAL_ID` before the upstream command separator.
+Retry the same call on that gateway with a fresh string or integer request ID. JRX checks the
+effective policy loaded at startup, reruns evaluation and authorization, and
+consumes the matching approval before dispatch. JSON object member order is
+irrelevant. Keep values, types, array order, and the spelling of numbers unchanged.
+The reference is a gateway option. Approval-enabled calls accept `name` and optional
+`arguments` as the MCP tool parameters.
+
+For a changed request, start a gateway without the old reference to request fresh
+approval. If a dispatched write has no upstream reply, JRX reports
+`outcome_unknown` and the existing reference stays spent. Check the upstream state
+before requesting approval for another attempt.
+
+Run the offline release demo to see the policy, request, reviewer commands, and
+recorded stdio call. The demo substitutes local identity and semantic stubs.
+
+```bash
+python examples/mcp_release_approval.py
+```
+
 The gateway tests exercise an allowed development database call, reject extra
 arguments and a production database target, verify that schema changes block calls,
 and check that the upstream server only receives allowed calls:
 
 ```bash
-.venv/bin/python -m pytest tests/test_mcp_argument_policy.py tests/test_mcp_schema_pin.py tests/test_mcp_session.py
+.venv/bin/python -m pytest tests/test_enterprise_approval.py tests/test_mcp_argument_policy.py tests/test_mcp_schema_pin.py tests/test_mcp_session.py
 ```
 
 On POSIX, the gateway starts the upstream server in its own process group. Gateway

@@ -370,6 +370,7 @@ def collect_workspace_state(workspace: Path) -> dict[str, Any]:
 def policy_identity(config: ReflexConfig) -> dict[str, str]:
     serialized = json.dumps(config.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return {
+        # Persisted in sessions. A packaging-only release keeps the policy identity.
         "version": "jev-reflex-0.1.0",
         "sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
         "mode": config.mode,

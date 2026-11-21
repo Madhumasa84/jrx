@@ -143,7 +143,7 @@ def test_catalog_revocation_during_evaluation_blocks_forwarding(monkeypatch):
     def authorize(*args):
         with instance._catalog_lock:
             instance._invalidate_catalog_locked()
-        return True, ""
+        return None, None
 
     monkeypatch.setattr(instance, "_authorize_tool", authorize)
     downstream = BytesIO()
@@ -151,7 +151,9 @@ def test_catalog_revocation_during_evaluation_blocks_forwarding(monkeypatch):
     instance._handle(
         process, b'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read"}}\n'
     )
-    assert json.loads(instance.sink.getvalue())["result"]["isError"]
+    result = json.loads(instance.sink.getvalue())["result"]
+    assert result["isError"]
+    assert "schema has not been verified" in result["content"][0]["text"]
     assert not downstream.getvalue()
     assert not instance._pending
 

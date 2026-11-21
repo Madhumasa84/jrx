@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.hashes import SHA256
 
 from .config import AccessConfig, ReflexConfig
 from .git_inspection import inspect_git, status_paths
+from .policy_rollout import policy_hash
 from .redaction import redact_text
 
 
@@ -182,6 +183,18 @@ def action_binding(
     return str(root), hashlib.sha256(canonical).hexdigest()
 
 
+def mcp_action_binding(config: ReflexConfig, repository: str, environment: str, review: str) -> str:
+    """Bind the exact reviewable MCP request to its local authorization scope."""
+    payload = {
+        "mcp_tool_call": review,
+        "repository": repository,
+        "environment": environment,
+        "policy": policy_hash(config),
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+
 class ApprovalStore:
     def __init__(self, config: AccessConfig) -> None:
         self.config = config
@@ -222,10 +235,17 @@ class ApprovalStore:
         return connection
 
     def request(
-        self, identity: Identity, repository: str, environment: str, binding: str, summary: str
+        self,
+        identity: Identity,
+        repository: str,
+        environment: str,
+        binding: str,
+        summary: str,
+        *,
+        kind: str = "command",
     ) -> str:
         if len(summary) > 1000 or redact_text(summary) != summary:
-            raise AccessDenied("Approval command cannot be reviewed safely")
+            raise AccessDenied(f"Approval {kind} cannot be reviewed safely")
         approval_id = uuid.uuid4().hex
         required = 2 if environment in self.config.production_environments else 1
         with closing(self._connect()) as connection, connection:

@@ -8,11 +8,17 @@ from pathlib import Path
 
 import yaml
 
+from jev_reflex import __version__
+
 
 def test_release_builds_validated_python_artifacts_before_publishing():
-    workflow = yaml.safe_load(
-        (Path(__file__).parents[1] / ".github/workflows/release.yml").read_text()
-    )
+    root = Path(__file__).parents[1]
+    chart = yaml.safe_load((root / "helm/jrx-broker/Chart.yaml").read_text())
+    assert chart["appVersion"] == __version__
+    workflow = yaml.safe_load((root / ".github/workflows/release.yml").read_text())
+    assert workflow["jobs"]["verify"]["uses"] == "./.github/workflows/ci.yml"
+    assert workflow["jobs"]["verify"]["with"]["release_tag"] == "${{ github.ref_name }}"
+    assert workflow["jobs"]["release"]["needs"] == "verify"
     steps = workflow["jobs"]["release"]["steps"]
     build_index = next(
         i
@@ -28,6 +34,23 @@ def test_release_builds_validated_python_artifacts_before_publishing():
         if step.get("uses", "").startswith("softprops/action-gh-release@")
     )
     assert {"sbom.spdx.json", "dist/*.whl", "dist/*.tar.gz"} <= set(assets.splitlines())
+
+
+def test_release_tag_must_match_installed_package(tmp_path):
+    workflow = yaml.safe_load((Path(__file__).parents[1] / ".github/workflows/ci.yml").read_text())
+    step = next(
+        step
+        for step in workflow["jobs"]["package"]["steps"]
+        if step.get("name") == "Verify release tag matches installed package"
+    )
+    (tmp_path / "jev-reflex-clean").symlink_to(sys.prefix, target_is_directory=True)
+    for tag, expected in [(f"v{__version__}", 0), ("v999.0.0", 1)]:
+        result = subprocess.run(
+            ["/bin/bash", "-ec", step["run"]],
+            cwd=tmp_path,
+            env={**os.environ, "RELEASE_TAG": tag, "RUNNER_TEMP": str(tmp_path)},
+        )
+        assert result.returncode == expected
 
 
 def test_release_signs_and_attests_the_built_digest(tmp_path):

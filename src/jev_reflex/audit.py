@@ -146,7 +146,6 @@ class AuditLog:
 
     def __init__(self, config: ReflexConfig) -> None:
         self.config = config
-        self._ensure_log_directory()
         self._signer: Signer | None = None
 
         # Initialize signer if signing is configured
@@ -158,10 +157,6 @@ class AuditLog:
                 self._signer = CosignSigner(private_key_path=key_path)
             else:
                 raise ValueError("unsupported audit signer type")
-
-    def _ensure_log_directory(self) -> None:
-        """Create the log directory if it doesn't exist."""
-        Path(self.config.audit.path).expanduser().parent.mkdir(parents=True, exist_ok=True)
 
     def _sign_entry_hash(self, entry: AuditEntry) -> str | None:
         """Sign the entry hash if a signer is configured.
@@ -187,9 +182,9 @@ class AuditLog:
 
     @contextmanager
     def _open_append(self):
-        descriptor = os.open(
-            self._get_log_path(), os.O_CREAT | os.O_APPEND | os.O_RDWR | os.O_NOFOLLOW, 0o600
-        )
+        path = self._get_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(path, os.O_CREAT | os.O_APPEND | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             details = os.fstat(descriptor)
             if (

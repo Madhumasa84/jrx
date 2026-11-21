@@ -1,6 +1,6 @@
 """JEV Reflex: probabilistic judgment with deterministic enforcement."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .checks import DeterministicCheck, DeterministicChecks, run_deterministic_checks
 from .config import ReflexConfig, load_config

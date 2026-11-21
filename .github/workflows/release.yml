@@ -6,12 +6,20 @@ on:
       - 'v*.*.*'
 
 permissions:
-  contents: write
-  id-token: write
-  packages: write
+  contents: read
 
 jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+
   release:
+    needs: verify
+    permissions:
+      contents: write
+      id-token: write
+      packages: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

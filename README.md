@@ -203,7 +203,7 @@ jrx exec --config reflex.yaml --cwd /srv/my-project \
   --environment production --approval-id APPROVAL_ID -- python migrate.py
 ```
 
-Agent hooks use `JRX_ENVIRONMENT` and `JRX_APPROVAL_ID` from the trusted host. For a shell hook, request approval with `--hook-command` to bind the raw shell command. Enterprise execution refuses demo mode, disabled semantic evaluation, and CLI mode overrides. Hooks fail closed if identity or approval checks fail. Approval requests currently cover shell commands; other tool actions with a REVIEW or HOLD result remain blocked in enterprise mode.
+Agent hooks use `JRX_ENVIRONMENT` and `JRX_APPROVAL_ID` from the trusted host. For a shell hook, request approval with `--hook-command` to bind the raw shell command. Enterprise execution refuses demo mode, disabled semantic evaluation, and CLI mode overrides. Hooks fail closed if identity or approval checks fail. The stdio MCP gateway also supports [opt-in approvals for write tools](docs/mcp-argument-policy.md#human-approval-for-write-tools) after a live semantic ALLOW.
 
 ---
 
@@ -636,8 +636,9 @@ helm install jrx-broker ./helm/jrx-broker \
   --set service.metricsPort=9090
 ```
 
-The Helm chart requires an image with `jrx broker status --local`. The published
-`0.1.0` image predates that command. The chart keeps its local health socket at
+The chart defaults to broker image `0.2.0`. Until that tag is published, use
+an image built from this revision as shown above. Both probes run
+`jrx broker status --local` against the local health socket at
 `/tmp/jrx/reflex.sock` in each pod.
 For remote evaluation, choose `config.jev.transport=broker-tls` and mount the server
 certificate, key, and client CA with `volumes.tls.enabled=true` and

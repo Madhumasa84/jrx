@@ -115,7 +115,7 @@ def redact_text(value: str | None) -> str:
     return redacted
 
 
-def _looks_secret_key(key: str) -> bool:
+def looks_secret_key(key: str) -> bool:
     normalized = key.upper().replace("-", "_")
     return any(
         marker in normalized
@@ -138,7 +138,7 @@ def redact_obj(value: Any, *, key: str | None = None) -> Any:
     """Recursively redact strings and values under secret-looking object keys."""
 
     if isinstance(value, str):
-        if key and _looks_secret_key(key) and value and not value.startswith("$"):
+        if key and looks_secret_key(key) and value and not value.startswith("$"):
             return REDACTED_SECRET
         return redact_text(value)
     if isinstance(value, Mapping):

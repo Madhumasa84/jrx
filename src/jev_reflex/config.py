@@ -10,7 +10,14 @@ from typing import Any, Literal
 
 import yaml
 from jsonschema import Draft202012Validator
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from .serialization import safe_yaml_load
 
@@ -278,6 +285,7 @@ class MCPToolRule(BaseModel):
     server: str
     name: str
     effect: Literal["read", "write", "destructive"]
+    require_approval: bool = False
     argument_schema: dict[str, Any] | None = None
     expected_input_schema_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     argument_constraints: dict[str, list[str | int | float | bool | None]] = Field(
@@ -286,6 +294,8 @@ class MCPToolRule(BaseModel):
 
     @model_validator(mode="after")
     def _validate_argument_policy(self) -> MCPToolRule:
+        if self.require_approval and self.effect != "write":
+            raise ValueError("MCP require_approval is only supported for write tools")
         if self.argument_schema is not None:
 
             def validate_refs(schema: object) -> None:
@@ -311,6 +321,14 @@ class MCPToolRule(BaseModel):
             if re.search(r"~(?![01])", pointer):
                 raise ValueError("MCP argument constraint has an invalid JSON Pointer escape")
         return self
+
+    @model_serializer(mode="wrap")
+    def _serialize_rule(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        rule = handler(self)
+        # Keep policy hashes and existing shell approval bindings stable for unchanged rules.
+        if not self.require_approval:
+            rule.pop("require_approval", None)
+        return rule
 
 
 class MCPGatewayConfig(BaseModel):
@@ -498,6 +516,8 @@ class ReflexConfig(BaseModel):
 
     @model_validator(mode="after")
     def _normalize_rule_names(self) -> ReflexConfig:
+        if self.access is None and any(rule.require_approval for rule in self.mcp.tools):
+            raise ValueError("MCP require_approval needs enterprise access configuration")
         self.hold_on = [str(name) for name in self.hold_on]
         self.review_on = [str(name) for name in self.review_on]
         return self

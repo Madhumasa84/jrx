@@ -12,8 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy source code
-COPY . .
+# Copy the distribution inputs used by setuptools.
+COPY pyproject.toml README.md LICENSE ./
+COPY src/jev_reflex/ src/jev_reflex/
+COPY benchmarks/stability/ benchmarks/stability/
 
 # Install the package with runtime dependencies only
 RUN python -m pip install --no-cache-dir --upgrade pip==26.2.1 setuptools==84.1.0

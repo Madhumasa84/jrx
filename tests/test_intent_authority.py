@@ -479,8 +479,8 @@ def test_authority_multiple_mcp_calls_use_distinct_request_nonces(controls, monk
         gateway._handle(process, second)
         assert upstream.getvalue() == first + second
     finally:
-        for _, timer in gateway._pending.values():
-            timer.cancel()
+        for pending in gateway._pending.values():
+            pending.timer.cancel()
 
 
 def test_valid_authority_and_intent_through_cli(controls, monkeypatch):

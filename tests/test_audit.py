@@ -339,9 +339,10 @@ def test_hash_chaining(
 def test_write_when_disabled(
     sample_policy_decision: PolicyDecision,
     sample_findings: list[DeterministicFinding],
-    temp_audit_path: Path,
+    tmp_path: Path,
 ) -> None:
     """Test that no entries are written when audit is disabled."""
+    temp_audit_path = tmp_path / "unused" / "audit.log"
     config = ReflexConfig(
         audit={"enabled": False, "path": str(temp_audit_path), "rotate_mb": 100},
         privacy={"store_requests": False, "redact_secrets": True},
@@ -355,8 +356,7 @@ def test_write_when_disabled(
         policy_decision=sample_policy_decision,
     )
 
-    # File should not exist
-    assert not temp_audit_path.exists()
+    assert not temp_audit_path.parent.exists()
 
 
 @pytest.mark.parametrize("suffix", ["{", "\n", "null\n", "[]\n"])
