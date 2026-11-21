@@ -43,11 +43,15 @@ def simulate(audit_path: Path, baseline: ReflexConfig, candidate: ReflexConfig) 
     if unsupported:
         raise ValueError("cannot replay configuration changes: " + ", ".join(unsupported))
     snapshot = audit_path.read_text(encoding="utf-8")
-    valid, reason = AuditLog(
-        baseline.model_copy(
-            update={"audit": baseline.audit.model_copy(update={"path": str(audit_path)})}
-        )
-    ).verify(snapshot=snapshot)
+    # Verification only needs the log. Keep the original signing settings in
+    # the baseline hash without loading the producer's private key.
+    verification_config = baseline.model_copy(
+        update={
+            "audit": baseline.audit.model_copy(update={"path": str(audit_path)}),
+            "signing": baseline.signing.model_copy(update={"private_key_path": None}),
+        }
+    )
+    valid, reason = AuditLog(verification_config).verify(snapshot=snapshot)
     if not valid:
         raise ValueError(f"audit chain verification failed: {reason}")
     report: dict[str, Any] = {
@@ -68,7 +72,6 @@ def simulate(audit_path: Path, baseline: ReflexConfig, candidate: ReflexConfig) 
         },
         "examples": [],
     }
-    baseline_version = AuditLog(baseline)._compute_policy_version_hash(baseline)
     with io.StringIO(snapshot) as handle:
         for line in handle:
             entry = json.loads(line)
@@ -81,7 +84,7 @@ def simulate(audit_path: Path, baseline: ReflexConfig, candidate: ReflexConfig) 
             if not all(key in entry for key in ("risk_choice", "degraded", "forced_review")):
                 report["skipped_legacy"] += 1
                 continue
-            if entry.get("policy_version_hash") != baseline_version:
+            if entry.get("policy_version_hash") != report["baseline_hash"]:
                 report["skipped_policy_mismatch"] += 1
                 continue
             findings = [

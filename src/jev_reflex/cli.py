@@ -1872,6 +1872,40 @@ def policy_simulate(
         raise typer.Exit(code=2) from None
 
 
+@policy_app.command("impact")
+def policy_impact(
+    audit: Path = typer.Option(..., "--audit"),
+    baseline: Path = typer.Option(..., "--baseline"),
+    candidate: Path = typer.Option(..., "--candidate"),
+    max_new_allows: int | None = typer.Option(None, "--max-new-allows", min=0),
+    github_output: Path | None = typer.Option(None, "--github-output"),
+) -> None:
+    """Preview a candidate policy using aggregate audit replay counts."""
+    from .policy_impact import impact_report
+
+    try:
+        report = impact_report(audit, baseline, candidate)
+    except Exception:
+        # Policy values and private audit data can appear in diagnostics.
+        typer.echo("Unassessed. Check policy syntax, replay support and audit integrity.")
+        raise typer.Exit(2) from None
+
+    typer.echo(report.markdown())
+    if not report.replayed:
+        typer.echo("\nUnassessed. No matching decisions could be replayed.")
+        raise typer.Exit(2)
+    if github_output is not None:
+        try:
+            with github_output.open("a", encoding="utf-8") as stream:
+                stream.write(f"counts={report.summary()}\n")
+        except OSError:
+            typer.echo("Could not write the GitHub output file.", err=True)
+            raise typer.Exit(2) from None
+    if max_new_allows is not None and report.new_allows > max_new_allows:
+        typer.echo(f"\nNew ALLOW decisions exceed the limit of {max_new_allows}.")
+        raise typer.Exit(1)
+
+
 def _rollout_store(bootstrap: Path):
     from .config import load_bootstrap_config
     from .policy_rollout import RolloutStore

@@ -335,6 +335,8 @@ The linter accepts files up to 1 MiB and bounds YAML nesting and alias expansion
 
 Policy simulation replays the deterministic findings, semantic signals, risk classification, and degraded state stored in new audit entries. It verifies the audit hash chain first, checks that each entry was evaluated under the baseline policy, and reports every `ALLOW`/`REVIEW`/`HOLD` transition. Older entries lacking replay inputs are counted as skipped. Simulation does not rerun the semantic model or reconstruct a command from its audit summary. Enable `audit.enabled: true` in the policy before collecting rollout evidence.
 
+Use `jrx policy impact` to share aggregate decision changes and replay coverage. The optional GitHub workflow posts those counts on policy pull requests. [Set up the policy impact check](docs/policy-impact.md).
+
 ```bash
 jrx policy simulate --audit /var/log/jrx/audit.jsonl \
   --baseline reflex.yaml --candidate proposed.yaml
