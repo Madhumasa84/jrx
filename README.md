@@ -622,8 +622,9 @@ helm install jrx-broker ./helm/jrx-broker \
   --set service.metricsPort=9090
 ```
 
-The Helm chart requires an image with `jrx broker status --local`. The published
-`0.1.0` image predates that command. The chart keeps its local health socket at
+The chart defaults to broker image `0.2.0`. Until that tag is published, use
+an image built from this revision as shown above. Both probes run
+`jrx broker status --local` against the local health socket at
 `/tmp/jrx/reflex.sock` in each pod.
 For remote evaluation, choose `config.jev.transport=broker-tls` and mount the server
 certificate, key, and client CA with `volumes.tls.enabled=true` and

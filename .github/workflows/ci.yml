@@ -2,7 +2,16 @@ name: CI
 
 on:
   push:
+    branches: ['**']
+    tags-ignore: ['v*.*.*']
   pull_request:
+  workflow_call:
+    inputs:
+      release_tag:
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -24,6 +33,12 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev,harness]"
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v3.0.5'
+      - name: Cache image for the sandbox integration tests
+        if: runner.os == 'Linux'
+        run: docker pull python:3.11-slim
       - run: python -m pytest
       - run: python -m ruff check .
       - run: python -m ruff format --check .
@@ -52,3 +67,32 @@ jobs:
           "$RUNNER_TEMP/jev-reflex-clean/bin/jrx" policy test --config "$GITHUB_WORKSPACE/reflex.example.yaml" --json
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m jev_reflex check --demo --command "pytest tests/" --json
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m jev_reflex benchmark stability --runs 1 --json
+      - name: Verify release tag matches installed package
+        if: inputs.release_tag != ''
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          version=$("$RUNNER_TEMP/jev-reflex-clean/bin/python" -c 'from jev_reflex import __version__; print(__version__)')
+          if [[ "$RELEASE_TAG" != "v$version" ]]; then
+            echo "Release tag must match the packaged version v$version" >&2
+            exit 1
+          fi
+
+  broker-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t jrx-ci .
+      - name: Check broker startup with the Helm configuration and packaged health probe
+        shell: bash
+        run: |
+          helm lint helm/jrx-broker
+          config="$RUNNER_TEMP/reflex.yaml"
+          helm template ci helm/jrx-broker --show-only templates/configmap.yaml | yq -r '.data."reflex.yaml"' > "$config"
+          uid=$(helm show values helm/jrx-broker | yq '.podSecurityContext.runAsUser')
+          container=$(docker run --detach --network none --user "$uid" --read-only --cap-drop ALL \
+            --tmpfs /tmp:mode=1777 --mount "type=bind,src=$config,dst=/home/jrx/reflex.yaml,readonly" \
+            --health-interval=2s jrx-ci)
+          trap 'docker logs "$container"; docker rm -f "$container"' EXIT
+          timeout 90 bash -c 'until [ "$(docker inspect -f "{{.State.Health.Status}}" "$1")" = healthy ]; do sleep 2; done' _ "$container"
+          docker exec "$container" python -m pip check
