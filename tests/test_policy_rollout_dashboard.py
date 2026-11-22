@@ -22,6 +22,7 @@ from jev_reflex.dashboard import DashboardConfig, make_handler, snapshot
 from jev_reflex.enterprise import AccessDenied, Identity
 from jev_reflex.policy import decide
 from jev_reflex.policy_rollout import RolloutStore, policy_hash, simulate
+from jev_reflex.serialization import MAX_CONFIG_BYTES
 from jev_reflex.signing import Ed25519Signer, sign_file
 
 
@@ -255,6 +256,47 @@ def test_dashboard_scopes_approvals_and_rejects_bad_audit(tmp_path: Path) -> Non
     result = snapshot(config, Identity("operator", frozenset({"ops"})))
     assert result["teams"][0]["audit_integrity"]["valid"] is False
     assert "decisions" not in result["teams"][0]
+
+
+@pytest.mark.parametrize("extra_bytes", [0, 1])
+def test_dashboard_policy_size_matches_runtime(tmp_path: Path, extra_bytes: int) -> None:
+    policy = tmp_path / "policy.yaml"
+    prefix = b"mode: enforce\n# "
+    size = MAX_CONFIG_BYTES + extra_bytes
+    raw = (prefix + "é".encode() * ((size - len(prefix)) // 2)).ljust(size, b" ")
+    policy.write_bytes(raw)
+    config = DashboardConfig.model_validate(
+        {
+            "access": {
+                "issuer": "https://idp.example",
+                "audience": "jrx",
+                "jwks_uri": "https://idp.example/jwks",
+                "environment": "dashboard",
+                "rules": [
+                    {
+                        "role": "ops",
+                        "actions": ["view"],
+                        "repositories": ["repo-a"],
+                        "environments": ["dashboard"],
+                    }
+                ],
+            },
+            "sources": [
+                {
+                    "team": "a",
+                    "repository": "repo-a",
+                    "policy_path": str(policy),
+                    "audit_path": str(tmp_path / "audit.jsonl"),
+                }
+            ],
+        }
+    )
+    (team,) = snapshot(config, Identity("operator", frozenset({"ops"})))["teams"]
+    if extra_bytes:
+        assert team["error"] == "ValueError"
+        assert "active_policy_hash" not in team
+    else:
+        assert team["active_policy_hash"] == policy_hash(ReflexConfig(mode="enforce"))
 
 
 def test_dashboard_http_requires_bearer_token(
