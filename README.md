@@ -93,9 +93,11 @@ See [identity and approvals](#verified-identity-and-reviewed-execution),
 
 ### 1. Installation
 
-Once 0.2.0 is published on PyPI, install it with pipx or run it directly with uv.
+Once 0.2.0 is published on PyPI, install the CLI with uv or pipx (Python 3.11 or newer).
 
 ```bash
+uv tool install jev-reflex
+# Or install with pipx
 pipx install jev-reflex
 # Or run without a persistent CLI install
 uvx --from jev-reflex jrx --help
