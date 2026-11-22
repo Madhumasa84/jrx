@@ -227,6 +227,7 @@ def test_evidence_step_reads_only_pinned_regular_blob(tmp_path, shape, valid):
     git("add", ".")
     git("commit", "-m", "pinned")
     pin = git("rev-parse", "HEAD")
+    assert git("ls-tree", pin, "--", "audit.jsonl").split()[0] == ("100644" if valid else "120000")
     log.unlink()
     log.write_text("newer\n")
     git("add", ".")

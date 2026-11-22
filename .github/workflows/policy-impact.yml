@@ -107,16 +107,16 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          [[ "$SNAPSHOT" =~ ^[0-9a-f]{40}$ && "$REPOSITORY" =~ ^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$ ]]
-          [[ -n "$JRX_EVIDENCE_TOKEN" ]]
+          [[ "$SNAPSHOT" =~ ^[0-9a-f]{40}$ && "$REPOSITORY" =~ ^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$ ]] || exit 2
+          [[ -n "$JRX_EVIDENCE_TOKEN" ]] || exit 2
           git init --quiet "$RUNNER_TEMP/evidence"
           cd "$RUNNER_TEMP/evidence"
           git -c credential.helper= \
             -c 'credential.helper=!f() { if [ "$1" = get ]; then printf "username=x-access-token\npassword=%s\n" "$JRX_EVIDENCE_TOKEN"; fi; }; f' \
             -c http.followRedirects=false fetch --quiet --no-tags --depth=1 \
             "$GITHUB_SERVER_URL/$REPOSITORY.git" "$SNAPSHOT" 2>/dev/null
-          [[ "$(git rev-parse 'FETCH_HEAD^{commit}')" == "$SNAPSHOT" ]]
-          [[ "$(git ls-tree "$SNAPSHOT" -- audit.jsonl | cut -d' ' -f1)" == 100644 ]]
+          [[ "$(git rev-parse 'FETCH_HEAD^{commit}')" == "$SNAPSHOT" ]] || exit 2
+          [[ "$(git ls-tree "$SNAPSHOT" -- audit.jsonl | cut -d' ' -f1)" == 100644 ]] || exit 2
           git cat-file blob "$SNAPSHOT:audit.jsonl" > audit.jsonl
 
       - name: Replay and publish aggregate counts
