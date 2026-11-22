@@ -9,12 +9,15 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=flat-square)](LICENSE)
 [![Python Version](https://img.shields.io/badge/python-3.11+-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg?style=flat-square)](https://github.com/astral-sh/ruff)
+[![PyPI version](https://img.shields.io/pypi/v/jev-reflex)](https://pypi.org/project/jev-reflex/)
+[![CI](https://github.com/Madhumasa84/jrx/actions/workflows/ci.yml/badge.svg)](https://github.com/Madhumasa84/jrx/actions/workflows/ci.yml)
 [![Architecture: Defense-in-Depth](https://img.shields.io/badge/architecture-defense--in--depth-success.svg?style=flat-square)](docs/architecture.md)
 [![Audit Log: Cryptographic](https://img.shields.io/badge/audit%20trail-SHA--256%20hash%20chain-purple.svg?style=flat-square)](docs/security.md)
 
 <p align="center">
   <a href="#quickstart">Quickstart</a> •
   <a href="#policy-impact-on-pull-requests">Policy impact</a> •
+  <a href="#architecture">Architecture</a> •
   <a href="#agent-integrations">Supported Agents</a> •
   <a href="#cli-command-reference">CLI Reference</a> •
   <a href="#configuration-reference-reflexyaml">Configuration</a> •
@@ -42,67 +45,63 @@ Use it as a CLI wrapper, an agent hook, or a Model Context Protocol (MCP) gatewa
 | Audit and operations | Optional tamper-evident audit logs, Prometheus metrics, and an OIDC-protected operations dashboard. |
 | Credential separation | A host broker evaluates requests without exposing the semantic API key to the agent environment. |
 
-## Policy Impact on Pull Requests
+## Quickstart
 
-`jrx policy impact` replays historical decisions against a proposed policy. The optional GitHub check posts aggregate counts on the PR head. For example,
-
-```text
-500/540 replayed, 2 new ALLOW, 4 HOLD->REVIEW, 3 new HOLD
-```
-
-The denominator includes skipped policy decisions. The workflow summary shows all six decision transitions and why records were skipped. Review that coverage before setting a merge gate.
-
-Run the same check locally against a captured audit and the baseline that produced it:
+With uv installed, try an offline policy check without installing the CLI or configuring an API key. `check` evaluates the proposed command without executing it. Demo mode uses fixture signals.
 
 ```bash
-jrx policy impact --audit audit.jsonl --baseline baseline.yaml \
-  --candidate proposed.yaml --max-relaxations 0
+uvx --from jev-reflex jrx check --demo --command "rm -rf ./cache"
 ```
 
-- **Gate policy relaxations.** `--max-new-allows` limits transitions from REVIEW or HOLD to ALLOW. `--max-relaxations` also counts HOLD → REVIEW. An assessed replay exits with code 1 when it exceeds either configured limit.
-- **Replay signed evidence with a public key.** The check verifies the audit hash chain and can verify decision signatures with a trusted public key. Use `--public-key` when the verifier keeps that key separately. The producer's private key stays on the collector. Replay reuses recorded findings and scores without calling the semantic backend.
-- **Keep audit evidence private in CI.** Unchanged policies and fork PRs skip replay. For eligible same-repository changes, the separate replay job reads the pinned private audit and posts aggregate counts. [Set up the PR check](docs/policy-impact.md)
+```text
+JEV Reflex
 
-v0.2.0 also adds a separate audit verification key option to `jrx policy rollout stage` and enforces the same 1 MiB policy byte limit in the runtime and operations dashboard. [v0.2.0 release notes](docs/releases/v0.2.0.md)
+Action:
+  rm -rf ./cache
 
-## Architecture
+HARD RULES
 
-### Optional session authority controls
+  secret_pattern     clear
+  known_destructive  TRIGGERED (RECURSIVE_DELETE)
+  repo_boundary      clear
+  git_risk           clear
+  filesystem         clear
+  safe_command       clear
 
-The [intent guard](docs/intent-lineage.md) binds an execution session to an immutable
-task, repository, policy revision, path scopes and capability classes. Authenticated
-lineage records expose cumulative drift and deterministic scope violations.
-[Authority leases](docs/authority-delegation.md) delegate a subset of parent session
-authority with expiry, ancestor revocation and single-use action nonces. Both controls
-are implemented and disabled by default; deployment in autonomous agent hosts remains
-experimental. They require protected host keys, state, identity and session assertions.
-They do not trace runtime accesses or replace sandboxing, OIDC or human approval.
+JEV SIGNALS
+  destructive                0.98  ████████████████████
+  secret_exposure            0.02  ·
+  scope_creep                0.02  ·
+  security_sensitive         0.02  ·
+  irreversible               0.76  ███████████████
+  needs_tests                0.02  ·
+  prompt_injection           0.02  ·
+  dependency_risk            0.02  ·
+  wrong_repo                 0.02  ·
+  human_review               0.94  ███████████████████
+  concurrency_sensitive      0.02  ·
+  persistence_sensitive      0.84  █████████████████
+  backwards_compatibility    0.02  ·
+  untrusted_input_path       0.02  ·
+  fail_open                  0.02  ·
+  wrong_repo_semantic        0.02  ·
+  suspicious_intent          0.02  ·
+  external_side_effect_risk  0.02  ·
 
-See [Production Audit V2](docs/audits/PRODUCTION_AUDIT_V2.md) for reproduced defects, verification
-results and remaining deployment gaps.
+Source: demo
+Samples: 1
+Estimated JEV requests: 0
 
-```mermaid
-flowchart TD
-    Agent["Agent action: command, patch, or tool call"] --> Context["Bound context and redact secrets"]
-    Context --> Checks["Local security checks"]
-    Context --> Semantic["Semantic evaluation: direct API or host broker"]
-    Checks --> Policy["Deterministic policy: ALLOW / REVIEW / HOLD"]
-    Semantic --> Policy
-    Policy --> Audit["Optional hash-chained audit log"]
-    Policy --> Gate["Apply execution mode, access rules, and session limits"]
-    Gate --> Execute["Permit execution or forwarding"]
-    Gate --> Review["Require approval"]
-    Gate --> Block["Block action"]
-    Execute --> Sandbox["Optional Docker isolation for jrx exec"]
+POLICY
+  known_destructive:RECURSIVE_DELETE
+  human_review >= 0.90
+
+FINAL
+  Risk: HIGH
+  HOLD
+
+Decision ID: 6095e696ba2e433cbe61e27f0be0f6db
 ```
-
-See [identity and approvals](#verified-identity-and-reviewed-execution),
-[policy rollout](#policy-rollout-and-operations-dashboard), and
-[MCP and session controls](#mcp-gateway-and-session-limits) for configuration.
-
----
-
-## Quickstart
 
 ### 1. Installation
 
@@ -112,8 +111,6 @@ Install the `jrx` CLI with uv or pipx. JRX requires Python 3.11 or newer. [PyPI 
 uv tool install jev-reflex
 # Or install with pipx
 pipx install jev-reflex
-# Or run without a persistent CLI install
-uvx --from jev-reflex jrx --help
 ```
 
 The installed environment includes a starting policy at `share/jev-reflex/reflex.example.yaml`. Copy it to your working directory to customize or lint it.
@@ -146,15 +143,7 @@ export TYPESAFE_API_KEY="YOUR_TYPESAFE_API_KEY"
 
 `.env.example` documents environment settings. JRX does not automatically load a `.env` file. When using the host broker, supply the API key to the broker process.
 
-### 3. Try an offline evaluation
-
-```bash
-jrx check --demo --command "rm -rf ./cache"
-```
-
-`check` evaluates the proposed action without executing it. Demo mode uses fixture signals and requires no API key; it does not validate live semantic evaluation.
-
-### 4. Choose an execution mode
+### 3. Choose an execution mode
 
 ```bash
 jrx exec --mode enforce -- python -m pytest
@@ -166,7 +155,75 @@ This evaluates the command and runs it when policy permits. Docker isolation is 
 
 Run bare `jrx` in a terminal to open the interactive workspace for installed Codex, Claude Code and Antigravity CLIs. It uses each provider’s native authentication. [Unified workspace guide](docs/unified-agent-workspace.md)
 
-For managed sessions with planning, durable checkpoints and approvals, install the `harness` extra (`pip install -e ".[harness]"` from source) and run `jrx harness --help`. [Managed harness guide](docs/agent-harness.md)
+For managed sessions with planning, durable checkpoints and approvals, install the `harness` extra using one of these commands.
+
+```bash
+uv tool install "jev-reflex[harness]"
+# Or with pip in a virtual environment
+pip install "jev-reflex[harness]"
+# Or from a source checkout
+pip install -e ".[harness]"
+```
+
+Run `jrx harness --help` to see the available commands. [Managed harness guide](docs/agent-harness.md)
+
+## Policy Impact on Pull Requests
+
+`jrx policy impact` replays historical decisions against a proposed policy. The optional GitHub check posts aggregate counts on the PR head. For example,
+
+```text
+500/540 replayed, 2 new ALLOW, 4 HOLD->REVIEW, 3 new HOLD
+```
+
+The denominator includes skipped policy decisions. The workflow summary shows all six decision transitions and why records were skipped. Review that coverage before setting a merge gate.
+
+Run the same check locally against a captured audit and the baseline that produced it:
+
+```bash
+jrx policy impact --audit audit.jsonl --baseline baseline.yaml \
+  --candidate proposed.yaml --max-relaxations 0
+```
+
+- **Gate policy relaxations.** `--max-new-allows` limits transitions from REVIEW or HOLD to ALLOW. `--max-relaxations` also counts HOLD → REVIEW. An assessed replay exits with code 1 when it exceeds either configured limit.
+- **Replay signed evidence with a public key.** The check verifies the audit hash chain and can verify decision signatures with a trusted public key. Use `--public-key` when the verifier keeps that key separately. The producer's private key stays on the collector. Replay reuses recorded findings and scores without calling the semantic backend.
+- **Keep audit evidence private in CI.** Unchanged policies and fork PRs skip replay. For eligible same-repository changes, the separate replay job reads the pinned private audit and posts aggregate counts. [Set up the PR check](docs/policy-impact.md)
+
+v0.2.0 also adds a separate audit verification key option to `jrx policy rollout stage` and enforces the same 1 MiB policy byte limit in the runtime and operations dashboard. [v0.2.0 release notes](docs/releases/v0.2.0.md)
+
+## Architecture
+
+```mermaid
+flowchart TD
+    Agent["Agent action: command, patch, or tool call"] --> Context["Bound context and redact secrets"]
+    Context --> Checks["Local security checks"]
+    Context --> Semantic["Semantic evaluation: direct API or host broker"]
+    Checks --> Policy["Deterministic policy: ALLOW / REVIEW / HOLD"]
+    Semantic --> Policy
+    Policy --> Audit["Optional hash-chained audit log"]
+    Policy --> Gate["Apply execution mode, access rules, and session limits"]
+    Gate --> Execute["Permit execution or forwarding"]
+    Gate --> Review["Require approval"]
+    Gate --> Block["Block action"]
+    Execute --> Sandbox["Optional Docker isolation for jrx exec"]
+```
+
+See [identity and approvals](#verified-identity-and-reviewed-execution),
+[policy rollout](#policy-rollout-and-operations-dashboard), and
+[MCP and session controls](#mcp-gateway-and-session-limits) for configuration.
+
+### Optional session authority controls
+
+The [intent guard](docs/intent-lineage.md) binds an execution session to an immutable
+task, repository, policy revision, path scopes and capability classes. Authenticated
+lineage records expose cumulative drift and deterministic scope violations.
+[Authority leases](docs/authority-delegation.md) delegate a subset of parent session
+authority with expiry, ancestor revocation and single-use action nonces. Both controls
+are implemented and disabled by default; deployment in autonomous agent hosts remains
+experimental. They require protected host keys, state, identity and session assertions.
+They do not trace runtime accesses or replace sandboxing, OIDC or human approval.
+
+See [Production Audit V2](docs/audits/PRODUCTION_AUDIT_V2.md) for reproduced defects, verification
+results and remaining deployment gaps.
 
 ## Policy decisions and modes
 
