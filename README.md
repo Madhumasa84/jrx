@@ -421,9 +421,9 @@ sources:
 jrx dashboard serve --config dashboard.yaml --port 8080
 ```
 
-![JEV Reflex operations dashboard with sample team data](docs/assets/dashboard.png)
+![JEV Reflex operations dashboard showing a policy rollout, decision totals, a pending approval, and audit integrity](docs/assets/dashboard.png)
 
-*Operations dashboard shown with sample data.*
+*Operations dashboard with synthetic team data, a 25% policy rollout, and a verified audit hash chain.*
 
 This dashboard aggregates sources on the host where it runs. To view multiple hosts, mount their read-only data or run a dashboard per host. Metrics are read from loopback, and the dashboard does not label metrics with repository or user identifiers.
 
