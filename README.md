@@ -340,9 +340,9 @@ YAML keys, built-in signal names, conflicting threshold aliases, duplicate MCP
 rules, and inactive controls. Errors return exit code 1; `--strict` also fails on
 warnings. JSON diagnostics omit configuration values. This checks authoring
 mistakes; signature verification and golden policy tests remain separate steps.
-The linter accepts files up to 1 MiB and bounds YAML nesting and alias expansion.
+Local policy and bootstrap files are capped at 1 MiB of encoded UTF-8 bytes. Remove large comments from older policies close to the former character limit. The linter also bounds YAML nesting and alias expansion.
 
-Policy simulation replays the deterministic findings, semantic signals, risk classification, and degraded state stored in new audit entries. It verifies the audit hash chain first, checks that each entry was evaluated under the baseline policy, and reports every `ALLOW`/`REVIEW`/`HOLD` transition. Older entries lacking replay inputs are counted as skipped. Simulation does not rerun the semantic model or reconstruct a command from its audit summary. Enable `audit.enabled: true` in the policy before collecting rollout evidence.
+Policy simulation replays the deterministic findings, semantic signals, risk classification, and degraded state stored in new audit entries. It verifies the audit hash chain first, checks that each entry was evaluated under the baseline policy, and reports every `ALLOW`/`REVIEW`/`HOLD` transition. Older entries lacking replay inputs are counted as skipped. Simulation does not rerun the semantic model or reconstruct a command from its audit summary. Enable `audit.enabled: true` in the policy before collecting rollout evidence. When the baseline requires audit signatures and the verification key is stored separately, add `--public-key /trusted/audit.pub` to the command. Keep the baseline file identical to the policy used to collect the audit.
 
 ```bash
 jrx policy simulate --audit /var/log/jrx/audit.jsonl \

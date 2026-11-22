@@ -35,8 +35,10 @@ def test_hold_relaxations(
     assert (
         output.read_text() == f"counts=1/1 replayed, {allows} new ALLOW{transition}, 0 new HOLD\n"
     )
-    assert run("--max-new-allows", "0").exit_code == allows
-    assert run("--max-relaxations", "0").exit_code == 1
+    for flag, expected in [("--max-new-allows", allows), ("--max-relaxations", 1)]:
+        gate_output = tmp_path / flag.removeprefix("--")
+        assert run(flag, "0", "--github-output", str(gate_output)).exit_code == expected
+        assert gate_output.read_text() == output.read_text()
 
 
 def test_review_to_allow_counts_toward_relaxations(impact_case):
@@ -112,7 +114,12 @@ def test_signed_audit_verified_without_signer(
     github_output.write_text("prior=value\n")
     if command == "impact":
         args.extend(["--github-output", str(github_output)])
-    for invalid_signature in (base64.b64encode(wrong_signature).decode(), None):
+    malformed_signature = "!" + record["decision_signature"]
+    for invalid_signature in (
+        base64.b64encode(wrong_signature).decode(),
+        malformed_signature,
+        None,
+    ):
         record["decision_signature"] = invalid_signature
         audit.write_text(json.dumps(record) + "\n")
         rejected = CliRunner().invoke(app, args)
@@ -121,7 +128,9 @@ def test_signed_audit_verified_without_signer(
         assert github_output.read_text() == "prior=value\n"
 
 
-def test_required_audit_signature_needs_public_key(impact_case, write_impact_entry):
+def test_required_audit_signature_needs_public_key_before_reading_log(
+    impact_case, write_impact_entry, monkeypatch
+):
     audit, baseline, candidate, run = impact_case
     for path in (baseline, candidate):
         data = json.loads(path.read_text())
@@ -129,7 +138,19 @@ def test_required_audit_signature_needs_public_key(impact_case, write_impact_ent
         path.write_text(json.dumps(data))
     audit.unlink()
     write_impact_entry(json.loads(baseline.read_text()))
-    assert run().exit_code == 2
+    original_open = type(audit).open
+    reads = []
+
+    def open_file(path, *args, **kwargs):
+        if path == audit:
+            reads.append(path)
+        return original_open(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(type(audit), "open", open_file)
+        result = run()
+    assert result.exit_code == 2
+    assert reads == []
 
 
 def test_sparse_report_treats_missing_hold_to_review_as_zero():

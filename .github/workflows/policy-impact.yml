@@ -115,13 +115,18 @@ jobs:
           [[ -n "$JRX_EVIDENCE_TOKEN" ]] || exit 2
           git init --quiet "$RUNNER_TEMP/evidence"
           cd "$RUNNER_TEMP/evidence"
-          git -c credential.helper= \
-            -c 'credential.helper=!f() { if [ "$1" = get ]; then printf "username=x-access-token\npassword=%s\n" "$JRX_EVIDENCE_TOKEN"; fi; }; f' \
-            -c http.followRedirects=false fetch --quiet --no-tags --depth=1 \
-            "$GITHUB_SERVER_URL/$REPOSITORY.git" "$SNAPSHOT" 2>/dev/null
+          git remote add origin "$GITHUB_SERVER_URL/$REPOSITORY.git"
+          git config remote.origin.promisor true
+          git config remote.origin.partialCloneFilter blob:none
+          evidence_git() {
+            git -c credential.helper= \
+              -c 'credential.helper=!f() { if [ "$1" = get ]; then printf "username=x-access-token\npassword=%s\n" "$JRX_EVIDENCE_TOKEN"; fi; }; f' \
+              -c http.followRedirects=false "$@"
+          }
+          evidence_git fetch --quiet --no-tags --depth=1 --filter=blob:none origin "$SNAPSHOT" 2>/dev/null
           [[ "$(git rev-parse 'FETCH_HEAD^{commit}')" == "$SNAPSHOT" ]] || exit 2
           [[ "$(git ls-tree "$SNAPSHOT" -- audit.jsonl | cut -d' ' -f1)" == 100644 ]] || exit 2
-          git cat-file blob "$SNAPSHOT:audit.jsonl" > audit.jsonl
+          evidence_git cat-file blob "$SNAPSHOT:audit.jsonl" > audit.jsonl 2>/dev/null
 
       - name: Replay and publish aggregate counts
         id: replay

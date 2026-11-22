@@ -15,7 +15,9 @@ def test_preview_and_optional_gate(impact_case, tmp_path):
     assert result.exit_code == 0
     assert "| REVIEW → ALLOW | 1 |" in result.output
     assert outputs.read_text() == "counts=1/1 replayed, 1 new ALLOW, 0 new HOLD\n"
-    assert run("--max-new-allows", "0", "--github-output", str(outputs)).exit_code == 1
+    rejected_outputs = tmp_path / "rejected-outputs"
+    assert run("--max-new-allows", "0", "--github-output", str(rejected_outputs)).exit_code == 1
+    assert rejected_outputs.read_text() == outputs.read_text()
     assert run("--max-new-allows", "1").exit_code == 0
 
 

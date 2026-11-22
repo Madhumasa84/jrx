@@ -240,10 +240,13 @@ def test_evidence_step_reads_only_pinned_regular_blob(tmp_path, shape, valid):
         ).stdout.strip()
 
     git("init", "--bare", str(remote))
+    git("-C", str(remote), "config", "uploadpack.allowFilter", "true")
+    git("-C", str(remote), "config", "uploadpack.allowAnySHA1InWant", "true")
     git("init", "-b", "main")
     git("config", "user.name", "Fixture")
     git("config", "user.email", "fixture@example.test")
     git("config", "commit.gpgsign", "false")
+    (workspace / "unrelated.jsonl").write_text("Unrelated synthetic data\n")
     log = workspace / "audit.jsonl"
     if shape == "regular":
         log.write_bytes(b"PRIVATE-CANARY\n")
@@ -252,6 +255,7 @@ def test_evidence_step_reads_only_pinned_regular_blob(tmp_path, shape, valid):
     git("add", ".")
     git("commit", "-m", "pinned")
     pin = git("rev-parse", "HEAD")
+    unrelated = git("rev-parse", f"{pin}:unrelated.jsonl")
     assert git("ls-tree", pin, "--", "audit.jsonl").split()[0] == ("100644" if valid else "120000")
     log.unlink()
     log.write_text("newer\n")
@@ -274,3 +278,11 @@ def test_evidence_step_reads_only_pinned_regular_blob(tmp_path, shape, valid):
     else:
         assert not audit.exists()
     assert log.read_bytes() == b"newer\n"
+    stored = git(
+        "-C",
+        str(audit.parent),
+        "cat-file",
+        "--batch-all-objects",
+        "--batch-check=%(objectname)",
+    ).splitlines()
+    assert unrelated not in stored

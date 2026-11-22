@@ -643,8 +643,9 @@ def load_bootstrap_config(path: Path | None = None) -> BootstrapConfig:
     if not path.exists():
         return BootstrapConfig()
 
+    raw = read_config_bytes(path)
     try:
-        loaded = safe_yaml_load(read_config_bytes(path).decode("utf-8"))
+        loaded = safe_yaml_load(raw.decode("utf-8"))
     except (
         yaml.YAMLError,
         ValueError,
