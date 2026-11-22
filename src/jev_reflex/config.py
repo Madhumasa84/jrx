@@ -8,8 +8,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
-import yaml
-from jsonschema import Draft202012Validator
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -298,6 +296,7 @@ class MCPToolRule(BaseModel):
         if self.require_approval and self.effect != "write":
             raise ValueError("MCP require_approval is only supported for write tools")
         if self.argument_schema is not None:
+            from jsonschema import Draft202012Validator
 
             def validate_refs(schema: object) -> None:
                 if isinstance(schema, Mapping):
@@ -565,6 +564,29 @@ class ReflexConfig(BaseModel):
         return self
 
 
+def _load_policy_yaml(raw: bytes, *, kind: str) -> Any:
+    if not raw:
+        return {}
+
+    import yaml
+
+    try:
+        loaded = safe_yaml_load(raw.decode("utf-8"))
+    except (
+        yaml.YAMLError,
+        ValueError,
+        TypeError,
+        LookupError,
+        AttributeError,
+        OverflowError,
+        RecursionError,
+    ):
+        raise ValueError(f"{kind} YAML is invalid") from None
+    if loaded is None:
+        loaded = {}
+    return loaded
+
+
 def load_config(
     path: Path | None = None,
     *,
@@ -584,20 +606,7 @@ def load_config(
             raise FileNotFoundError(f"Configuration file not found: {config_path}") from None
     if bootstrap.require_signature:
         _verify_config_signature(config_path, bootstrap, data=raw)
-    try:
-        loaded = safe_yaml_load(raw.decode("utf-8"))
-    except (
-        yaml.YAMLError,
-        ValueError,
-        TypeError,
-        LookupError,
-        AttributeError,
-        OverflowError,
-        RecursionError,
-    ):
-        raise ValueError("configuration YAML is invalid") from None
-    if loaded is None:
-        loaded = {}
+    loaded = _load_policy_yaml(raw, kind="configuration")
     if not isinstance(loaded, dict):
         raise ValueError("configuration root must be a YAML mapping")
     config = ReflexConfig.model_validate(loaded)
@@ -687,21 +696,7 @@ def load_bootstrap_config(path: Path | None = None) -> BootstrapConfig:
         return BootstrapConfig()
 
     raw = read_config_bytes(path)
-    try:
-        loaded = safe_yaml_load(raw.decode("utf-8"))
-    except (
-        yaml.YAMLError,
-        ValueError,
-        TypeError,
-        LookupError,
-        AttributeError,
-        OverflowError,
-        RecursionError,
-    ):
-        raise ValueError("bootstrap configuration YAML is invalid") from None
-
-    if loaded is None:
-        loaded = {}
+    loaded = _load_policy_yaml(raw, kind="bootstrap configuration")
     if not isinstance(loaded, dict):
         raise ValueError("bootstrap configuration root must be a YAML mapping")
 

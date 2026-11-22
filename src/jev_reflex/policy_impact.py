@@ -1,6 +1,7 @@
 """Aggregate policy replay results for sharing with reviewers."""
 
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
 
 from .config import ReflexConfig
@@ -69,6 +70,10 @@ def _read_policy(path: Path) -> ReflexConfig:
 def impact_report(
     audit: Path, baseline: Path, candidate: Path, *, public_key: Path | None = None
 ) -> PolicyImpactReport:
+    # Load parser dependencies before reading either policy. Replay can then
+    # validate schemas without opening package files under the input boundary.
+    import_module("._yaml_loader", __package__)
+    import_module("jsonschema")
     report = simulate(audit, _read_policy(baseline), _read_policy(candidate), public_key=public_key)
     return PolicyImpactReport(
         total=report["total"],

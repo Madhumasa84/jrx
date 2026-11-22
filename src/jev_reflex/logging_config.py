@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
 import socket
 import sys
@@ -19,8 +20,6 @@ import time
 import urllib.parse
 from datetime import UTC, datetime
 from typing import Any
-
-import requests
 
 from .redaction import redact_obj
 
@@ -109,6 +108,8 @@ class WebhookSink:
 
     def _deliver_with_retry(self, entry: dict[str, Any]) -> None:
         """Deliver log entry with exponential backoff retry."""
+        import requests
+
         for attempt in range(self.max_retries + 1):
             try:
                 response = requests.post(
@@ -297,6 +298,12 @@ def setup_logging(
 def get_logger(name: str) -> logging.Logger:
     """Get a logger with the specified name."""
     return logging.getLogger(name)
+
+
+def debug(**fields: Any) -> None:
+    # Callers supply only fixed labels, numeric metrics and validated IDs.
+    if os.environ.get("JRX_DEBUG") == "1":
+        print(json.dumps(fields, separators=(",", ":")), file=sys.stderr, flush=True)
 
 
 def log_structured(

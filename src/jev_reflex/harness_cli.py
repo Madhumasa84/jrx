@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-import termios
 from pathlib import Path
 from typing import Any
 
@@ -13,18 +11,20 @@ import typer
 
 from .config import load_config
 from .redaction import redact_text
-from .workspace.state import WorkspaceError, validate_workspace
-from .workspace.streaming import sanitize_terminal_text
 
 app = typer.Typer(help="Plan, delegate, checkpoint and review work with open-source harnesses.")
 
 
 def _display(value: Any) -> str:
+    from .workspace.streaming import sanitize_terminal_text
+
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
     return sanitize_terminal_text(redact_text(text), 32_000)
 
 
 def _model(name: str, timeout: float) -> Any:
+    from .workspace.state import WorkspaceError
+
     try:
         from langchain.chat_models import init_chat_model
     except ImportError as exc:
@@ -75,6 +75,7 @@ def run(
     """Start a persistent Deep Agents task; pause before edits, commands and memory writes."""
     try:
         from .workspace.deep_harness import HarnessSession
+        from .workspace.state import validate_workspace
 
         root = validate_workspace(workspace)
         loaded = load_config(config, scope=str(root))
@@ -113,6 +114,7 @@ def resume(
     """Resume the same checkpoint, model, policy and workspace; approvals apply once."""
     try:
         from .workspace.deep_harness import HarnessSession, load_session
+        from .workspace.state import validate_workspace
 
         root = validate_workspace(workspace)
         record = load_session(root, session_id)
@@ -154,6 +156,9 @@ def status(session_id: str, workspace: Path = typer.Option(Path.cwd(), "--worksp
 
 async def _confirm_acp_once() -> bool:
     """Read a canonical terminal line without leaving a blocked input thread."""
+    import asyncio
+    import termios
+
     stream = typer.get_text_stream("stdin")
     try:
         fd = stream.fileno()
@@ -189,6 +194,8 @@ async def _confirm_acp_once() -> bool:
 async def _acp_permission(
     request: dict[str, Any], root: Path, task: str, loaded: Any
 ) -> str | None:
+    import asyncio
+
     from .adapters.harness import evaluate_harness_hook
 
     call = request["tool_call"]
@@ -238,9 +245,12 @@ def acp_run(
     timeout: float = typer.Option(600, min=1, max=86400),
 ) -> None:
     """Run an installed ACP agent: jrx harness acp --task TEXT -- agent-executable args."""
+    import asyncio
+
     try:
         from .workspace.acp_harness import run_acp
         from .workspace.providers import child_environment
+        from .workspace.state import WorkspaceError, validate_workspace
 
         root = validate_workspace(workspace)
         loaded = load_config(config, scope=str(root))

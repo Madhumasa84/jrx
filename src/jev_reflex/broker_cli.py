@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 
-from .broker import BrokerClient, BrokerServer, secure_directory, socket_path
 from .config import ReflexConfig, load_config
+
+if TYPE_CHECKING:
+    from .broker import BrokerClient
 
 app = typer.Typer(help="Run the trusted host-side semantic broker.")
 
@@ -28,6 +30,8 @@ def configuration(config: Path | None, socket: Path | None) -> ReflexConfig:
 
 
 def local_client(config: ReflexConfig) -> BrokerClient:
+    from .broker import BrokerClient
+
     config = config.model_copy(
         update={"jev": config.jev.model_copy(update={"transport": "broker"})}
     )
@@ -58,6 +62,8 @@ def status(
     json_output: bool = typer.Option(False, "--json"),
     local: bool = typer.Option(False, "--local", help="Check the local Unix socket"),
 ) -> None:
+    from .broker import BrokerClient
+
     loaded = configuration(config, socket)
     health = (local_client(loaded) if local else BrokerClient(loaded)).health()
     display(health, json_output)
@@ -77,6 +83,10 @@ def run(
     ),
 ) -> None:
     """Stay in the foreground; inherit credentials only from this host shell."""
+    import asyncio
+
+    from .broker import BrokerServer, socket_path
+
     try:
         loaded = configuration(config, socket)
         if loaded.jev.transport == "broker-tls":
@@ -108,6 +118,8 @@ def start(
     ),
 ) -> None:
     """Start a detached host process; use run for foreground diagnostic logs."""
+    from .broker import secure_directory, socket_path
+
     loaded = configuration(config, socket)
     client = local_client(loaded)
     health = client.health()

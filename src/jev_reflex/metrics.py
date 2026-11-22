@@ -12,10 +12,12 @@ Reference: https://prometheus.io/docs/instrumenting/exposition_formats/
 from __future__ import annotations
 
 import time
-from asyncio import AbstractEventLoop, TimerHandle
 from collections import defaultdict
 from threading import Lock
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
+
+if TYPE_CHECKING:
+    from asyncio import AbstractEventLoop, TimerHandle
 
 
 class _HistogramData(TypedDict):

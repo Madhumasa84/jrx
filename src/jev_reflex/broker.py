@@ -10,7 +10,6 @@ import re
 import socket
 import ssl
 import stat
-import sys
 import threading
 import time
 import uuid
@@ -20,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ReflexConfig
+from .logging_config import debug as debug
 from .logging_config import log_structured, setup_logging
 from .metrics import BrokerMetrics, get_registry, jev_signal_latency_seconds
 from .models import EvaluationContext, RiskInfo, SemanticSignals
@@ -70,12 +70,6 @@ def encode(value: dict[str, Any]) -> bytes:
     if len(data) > MAX_BYTES:
         raise ValueError("message exceeds size limit")
     return data
-
-
-def debug(**fields: Any) -> None:
-    # Callers supply only fixed labels, numeric metrics and validated IDs.
-    if os.environ.get("JRX_DEBUG") == "1":
-        print(json.dumps(fields, separators=(",", ":")), file=sys.stderr, flush=True)
 
 
 def _validate_response(result: Any, request_id: str) -> dict[str, Any]:

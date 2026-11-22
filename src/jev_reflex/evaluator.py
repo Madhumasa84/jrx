@@ -25,7 +25,7 @@ from .integrations.typesafe import (
 from .integrations.typesafe import (
     parse_response as parse_typesafe_response,
 )
-from .logging_config import log_structured
+from .logging_config import debug, log_structured
 from .metrics import (
     decisions_total,
     degraded_evaluations_total,
@@ -48,7 +48,6 @@ from .redaction import (
     redact_text,
     redact_text_with_gitleaks,
 )
-from .session_security import private_action, security_findings
 
 JUDGMENT_NAMES = (
     "destructive",
@@ -458,8 +457,12 @@ def evaluate_context(
             session_id, semantic=samples if use_jev else 0, tool_calls=session_tool_calls
         )
     findings = run_deterministic_checks(context, config=config)
-    findings.extend(security_findings(context, config, session_id))
-    private = private_action(findings)
+    private = False
+    if session_id and (config.session.track_secret_taint or config.session.pin_protected_files):
+        from .session_security import private_action, security_findings
+
+        findings.extend(security_findings(context, config, session_id))
+        private = private_action(findings)
     guarded = any(
         finding.triggered and finding.blocking and finding.check in GUARD_CHECKS
         for finding in findings
@@ -616,8 +619,6 @@ def evaluate_context(
             )
         warnings.append("Audit logging failed; the decision was not recorded.")
         log_structured(level="ERROR", event="audit_write_failed", fields={})
-
-    from .broker import debug
 
     debug(
         policy_decision=policy.decision,

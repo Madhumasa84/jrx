@@ -15,16 +15,20 @@ import uuid
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-
-import requests
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from cryptography.hazmat.primitives.hashes import SHA256
+from types import ModuleType
 
 from .config import AccessConfig, ReflexConfig
 from .git_inspection import inspect_git, status_paths
-from .policy_rollout import policy_hash
 from .redaction import redact_text
+
+
+def __getattr__(name: str) -> ModuleType:
+    # Keep the transport accessible to API callers and test overrides.
+    if name == "requests":
+        import requests
+
+        return requests
+    raise AttributeError(name)
 
 
 class AccessDenied(ValueError):
@@ -46,6 +50,12 @@ def verified_identity(config: AccessConfig, token: str | None = None) -> Identit
     token = token if token is not None else os.environ.get("JRX_ID_TOKEN", "")
     if not token or len(token) > 16384:
         raise AccessDenied("A valid JRX_ID_TOKEN is required")
+
+    import requests
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+    from cryptography.hazmat.primitives.hashes import SHA256
+
     try:
         encoded_header, encoded_claims, encoded_signature = token.split(".")
         header = json.loads(_decode(encoded_header))
@@ -185,6 +195,8 @@ def action_binding(
 
 def mcp_action_binding(config: ReflexConfig, repository: str, environment: str, review: str) -> str:
     """Bind the exact reviewable MCP request to its local authorization scope."""
+    from .policy_rollout import policy_hash
+
     payload = {
         "mcp_tool_call": review,
         "repository": repository,

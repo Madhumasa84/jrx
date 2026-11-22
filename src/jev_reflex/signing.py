@@ -7,16 +7,10 @@ import math
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric import ed25519
-from cryptography.hazmat.primitives.serialization import (
-    Encoding,
-    NoEncryption,
-    PrivateFormat,
-    PublicFormat,
-)
+if TYPE_CHECKING:
+    from cryptography.hazmat.primitives.asymmetric import ed25519
 
 
 class Signer(Protocol):
@@ -40,6 +34,8 @@ class Ed25519Signer:
         Args:
             private_key_path: Path to the private key file. If None, generates a new keypair.
         """
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+
         if private_key_path is None:
             # Generate a new keypair
             self.private_key = ed25519.Ed25519PrivateKey.generate()
@@ -51,6 +47,8 @@ class Ed25519Signer:
 
     def _load_private_key(self, path: Path) -> ed25519.Ed25519PrivateKey:
         """Load a private key from a file."""
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+
         if not path.exists():
             raise FileNotFoundError(f"Private key file not found: {path}")
 
@@ -77,6 +75,9 @@ class Ed25519Signer:
     @staticmethod
     def verify(data: bytes, signature: bytes, public_key: bytes) -> bool:
         """Verify the signature using only the supplied Ed25519 public key."""
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+
         try:
             public_key_obj = ed25519.Ed25519PublicKey.from_public_bytes(public_key)
             public_key_obj.verify(signature, data)
@@ -86,16 +87,26 @@ class Ed25519Signer:
 
     def get_public_key_bytes(self) -> bytes:
         """Get the public key in raw format."""
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
         return self.public_key.public_bytes(encoding=Encoding.Raw, format=PublicFormat.Raw)
 
     def get_public_key_pem(self) -> str:
         """Get the public key in PEM format."""
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
         return self.public_key.public_bytes(
             encoding=Encoding.PEM, format=PublicFormat.SubjectPublicKeyInfo
         ).decode()
 
     def get_private_key_pem(self) -> str:
         """Get the private key in PEM format."""
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding,
+            NoEncryption,
+            PrivateFormat,
+        )
+
         return self.private_key.private_bytes(
             encoding=Encoding.PEM, format=PrivateFormat.PKCS8, encryption_algorithm=NoEncryption()
         ).decode()
@@ -178,6 +189,9 @@ class CosignSigner:
             return False
         # load_public_key normalizes Ed25519 PEM keys to their 32 raw bytes.
         if len(public_key) == 32:
+            from cryptography.hazmat.primitives.asymmetric import ed25519
+            from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
             public_key = ed25519.Ed25519PublicKey.from_public_bytes(public_key).public_bytes(
                 Encoding.PEM, PublicFormat.SubjectPublicKeyInfo
             )
@@ -220,7 +234,12 @@ def load_public_key(public_key_path: Path) -> bytes:
 
     # Try to load as PEM first
     try:
-        from cryptography.hazmat.primitives.serialization import load_pem_public_key
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding,
+            PublicFormat,
+            load_pem_public_key,
+        )
 
         public_key = load_pem_public_key(key_data)
         if isinstance(public_key, ed25519.Ed25519PublicKey):

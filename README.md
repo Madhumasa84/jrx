@@ -36,11 +36,11 @@ Use it as a CLI wrapper, an agent hook, or a Model Context Protocol (MCP) gatewa
 
 | Capability | Implementation |
 | :--- | :--- |
-| Runtime policy enforcement | Local destructive-command, secret, and repository-boundary checks combined with semantic evaluation. |
+| Runtime policy enforcement | Hardened shell, Git, and supply-chain checks alongside destructive-command, secret, and repository-boundary checks, combined with semantic evaluation. |
 | Policy as code | YAML thresholds and rules, Ed25519 signatures, policy impact checks on PRs, staged rollout, and rollback. |
 | Identity and approvals | OIDC verification, roles scoped to repositories and environments, and single-use approvals bound to an action. Production requires two independent reviewers. |
 | MCP tool authorization | Explicit server/tool allowlists, JSON Schema argument validation, JSON Pointer constraints, and optional upstream schema pins. |
-| Session controls | Persistent call and evaluation budgets, reserved spend estimates, time limits, and stop controls. |
+| Session controls | Persistent call and evaluation budgets, reserved spend estimates, time limits, and stop controls. Opt-in protected-file drift checks and salted SHA-256 `PostToolUse` secret taint tracking. |
 | Execution isolation | Opt-in Docker containers with resource limits and either no network or controlled outbound access. |
 | Audit and operations | Optional tamper-evident audit logs, Prometheus metrics, and an OIDC-protected operations dashboard. |
 | Credential separation | A host broker evaluates requests without exposing the semantic API key to the agent environment. |
@@ -52,6 +52,8 @@ With uv installed, try an offline policy check without installing the CLI or con
 ```bash
 uvx --from jev-reflex jrx check --demo --command "rm -rf ./cache"
 ```
+
+Example output
 
 ```text
 JEV Reflex
@@ -762,6 +764,10 @@ boundary tests cover this check. Secret redaction is heuristic; when Gitleaks is
 unavailable, local checks use a regex fallback.
 Deployment security also depends on protecting host configuration, credentials, and
 state, and ensuring agents cannot bypass the execution gateway.
+
+- **Offline Tier-0 (`--no-jev`) deterministic rules only.** The suite covers 300 frozen cases, with 150 in the blind eval holdout. CI verifies the dataset SHA-256 checksums.
+- On the holdout, benign friction fell fivefold from **25.00% to 5.00%**. Step 3 measured **3.33% Hard FPR** and **63.33% obfuscation recall**. For `git status`, p50 and p95 were **0.829 / 1.616 ms** warm and **516.624 / 858.701 ms** cold.
+- Indirect prompt injection (OWASP ASI01) requires the semantic evaluation layer. [Offline benchmark results](benchmarks/RESULTS.md)
 
 ## Contributing
 

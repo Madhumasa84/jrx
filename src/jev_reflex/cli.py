@@ -18,24 +18,6 @@ from typing import Any, Literal, cast
 
 import typer
 
-from .adapters.antigravity import antigravity_hook_error, evaluate_antigravity_hook
-from .adapters.claude_code import (
-    _hook_error as claude_hook_error,
-)
-from .adapters.claude_code import (
-    evaluate_claude_code_hook,
-)
-from .adapters.codex import _hook_error as codex_hook_error
-from .adapters.codex import evaluate_codex_hook
-from .adapters.deepseek import deepseek_hook_error, evaluate_deepseek_hook
-from .adapters.generic import (
-    context_from_hook_payload,
-    ingest_post_tool_use,
-    is_post_tool_use,
-    read_hook_payload,
-)
-from .adapters.openrouter import evaluate_openrouter_hook, openrouter_hook_error
-from .adapters.pi import evaluate_pi_hook, pi_hook_error
 from .agent_cli import authority_app, intent_app
 from .audit import AuditLog
 from .broker_cli import app as broker_app
@@ -60,6 +42,41 @@ from .serialization import read_config_bytes, safe_yaml_load
 from .session_limits import MAX_SESSION_OFFSET, SessionLimitError
 from .signing import CosignSigner, Ed25519Signer, Signer, load_public_key, sign_file, verify_file
 from .stability import StabilityRunner
+
+_HOOK_MODULES = {
+    "antigravity": "antigravity",
+    "claude": "claude_code",
+    "codex": "codex",
+    "deepseek": "deepseek",
+    "openrouter": "openrouter",
+    "pi": "pi",
+}
+_HOOK_HELPERS = {
+    "context_from_hook_payload",
+    "ingest_post_tool_use",
+    "is_post_tool_use",
+    "read_hook_payload",
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Keep the existing adapter exports without loading them for other commands."""
+    from importlib import import_module
+
+    if name in _HOOK_HELPERS:
+        module, attribute = "generic", name
+    else:
+        for kind, module in _HOOK_MODULES.items():
+            if name == f"evaluate_{module}_hook":
+                attribute = name
+                break
+            if name == f"{kind}_hook_error":
+                attribute = "_hook_error" if kind in {"claude", "codex"} else name
+                break
+        else:
+            raise AttributeError(name)
+    return getattr(import_module(f".adapters.{module}", __package__), attribute)
+
 
 app = typer.Typer(
     name="jev-reflex",
@@ -1168,10 +1185,11 @@ def _antigravity_hook_workspace(payload: dict[str, Any]) -> Path:
 
 
 def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool) -> None:
+    hooks = sys.modules[__name__]
     post = False
     try:
-        payload = read_hook_payload()
-        post = is_post_tool_use(payload)
+        payload = hooks.read_hook_payload()
+        post = hooks.is_post_tool_use(payload)
         hook_cwd = payload.get("cwd")
         selected_config = config_path
         if kind == "antigravity":
@@ -1189,7 +1207,7 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
             Path(hook_cwd) if isinstance(hook_cwd, str) and hook_cwd else None,
         )
         if post:
-            ingest_post_tool_use(payload, loaded)
+            hooks.ingest_post_tool_use(payload, loaded)
             typer.echo("{}")
             return
         if loaded.access is not None:
@@ -1199,20 +1217,10 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
             if not environment:
                 raise AccessDenied("JRX_ENVIRONMENT is required")
             identity = verified_identity(loaded.access)
-            hook_context = context_from_hook_payload(payload, config=loaded)
+            hook_context = hooks.context_from_hook_payload(payload, config=loaded)
             authorize(identity, loaded.access, "execute", hook_context.repository_root, environment)
-        if kind == "codex":
-            _result, output = evaluate_codex_hook(payload, config=loaded, demo=demo)
-        elif kind == "claude":
-            _result, output = evaluate_claude_code_hook(payload, config=loaded, demo=demo)
-        elif kind == "antigravity":
-            _result, output = evaluate_antigravity_hook(payload, config=loaded, demo=demo)
-        elif kind == "openrouter":
-            _result, output = evaluate_openrouter_hook(payload, config=loaded, demo=demo)
-        elif kind == "pi":
-            _result, output = evaluate_pi_hook(payload, config=loaded, demo=demo)
-        else:
-            _result, output = evaluate_deepseek_hook(payload, config=loaded, demo=demo)
+        evaluate = getattr(hooks, f"evaluate_{_HOOK_MODULES[kind]}_hook")
+        _result, output = evaluate(payload, config=loaded, demo=demo)
         if any(rule.startswith("agent_control:") for rule in _result.triggered_rules):
             raise AccessDenied("Host agent control denied this action")
         if host_guard_denied(_result):
@@ -1250,14 +1258,7 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
             raise typer.Exit(code=2) from None
         # Hook hosts differ in how they treat non-zero hook exits. A valid deny response
         # is the most portable fail-safe for malformed input/configuration.
-        output = {
-            "codex": codex_hook_error,
-            "claude": claude_hook_error,
-            "antigravity": antigravity_hook_error,
-            "openrouter": openrouter_hook_error,
-            "pi": pi_hook_error,
-            "deepseek": deepseek_hook_error,
-        }[kind]()
+        output = getattr(hooks, f"{kind}_hook_error")()
     typer.echo(json.dumps(output, separators=(",", ":")))
 
 
@@ -1266,9 +1267,10 @@ def post_tool_use(
     config: Path | None = typer.Option(None, "--config", help="Path to reflex.yaml."),
 ) -> None:
     """Read a PostToolUse JSON event from stdin and record session credential evidence."""
+    hooks = sys.modules[__name__]
     try:
-        payload = read_hook_payload()
-        ingest_post_tool_use(payload, _load(config, None))
+        payload = hooks.read_hook_payload()
+        hooks.ingest_post_tool_use(payload, _load(config, None))
     except (OSError, ValueError, RuntimeError, sqlite3.Error):
         typer.echo("PostToolUse evidence could not be recorded.", err=True)
         raise typer.Exit(code=2) from None

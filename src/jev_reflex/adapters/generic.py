@@ -14,7 +14,6 @@ from typing import Any, Literal, Protocol, TextIO
 from ..config import ReflexConfig
 from ..context import ContextProvider, RepositoryContextProvider
 from ..models import EvaluationContext, EvaluationResult, HookAuditCorrelation, ProposedAction
-from ..session_security import record_post_tool_use
 
 MAX_HOOK_CHARS = 1_048_576
 _SAFE_HOOK_TOOL = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
@@ -104,6 +103,8 @@ def ingest_post_tool_use(payload: Mapping[str, Any], config: ReflexConfig) -> No
     session_id = os.environ.get("JRX_SESSION_ID", "")
     if not session_id or not config.session.track_secret_taint:
         return
+    from ..session_security import record_post_tool_use
+
     tool_name, arguments = _tool_call(payload)
     if not tool_name:
         raise ValueError("PostToolUse requires a tool name")

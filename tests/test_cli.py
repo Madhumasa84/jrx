@@ -25,6 +25,45 @@ def test_safe_demo_command_is_allow() -> None:
     assert "destructive" in body["signals"]
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["check", "--no-jev", "--command", "git status"],
+        ["codex-hook", "--demo"],
+    ],
+)
+def test_stateless_cli_defers_optional_dependencies(tmp_path: Path, args: list[str]) -> None:
+    code = """
+import sys
+from jev_reflex.cli import app
+
+assert app(sys.argv[1:], standalone_mode=False) in (None, 0)
+optional = {
+    "yaml", "jsonschema", "requests", "cryptography", "jev_reflex.broker",
+    "jev_reflex.workspace", "jev_reflex.session_security",
+}
+assert not optional.intersection(sys.modules), optional.intersection(sys.modules)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-B", "-c", code, *args],
+        cwd=tmp_path,
+        env={"HOME": str(tmp_path), "PATH": str(tmp_path), "PYTHONUTF8": "1"},
+        input=json.dumps(
+            {
+                "cwd": str(tmp_path),
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": "git status"},
+            }
+        ),
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_policy_keygen_sign_verify_and_detect_tampering(tmp_path: Path) -> None:
     keys = tmp_path / "keys"
     policy = tmp_path / "reflex.yaml"

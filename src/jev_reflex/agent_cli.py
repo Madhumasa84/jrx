@@ -11,7 +11,6 @@ from pathlib import Path
 
 import typer
 
-from .agent_controls import host_subject, policy_revision
 from .agent_state import create_host_key
 from .authority import AuthorityStore
 from .config import ReflexConfig, load_config
@@ -69,6 +68,8 @@ def intent_create(
     forbidden: list[str] = typer.Option([], "--forbidden"),
     max_drift_score: float = typer.Option(1.0, "--max-drift-score"),
 ) -> None:
+    from .agent_controls import policy_revision
+
     with operation():
         loaded = load_config(config)
         operator(loaded, str(repository))
@@ -137,6 +138,8 @@ def authority_issue(
     ttl_seconds: int = typer.Option(900, "--ttl-seconds"),
     parent_id: str | None = typer.Option(None, "--parent-id"),
 ) -> None:
+    from .agent_controls import host_subject, policy_revision
+
     with operation():
         loaded = load_config(config)
         issuer = operator(loaded, str(repository)) if parent_id is None else host_subject(loaded)

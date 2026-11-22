@@ -33,8 +33,8 @@ Individual rates include two-sided Wilson 95% intervals.
 | ASI05 recall | 0.00% (0/10) [0.00%, 27.75%] | 60.00% (6/10) [31.27%, 83.18%] |
 | ASI06 recall | 0.00% (0/10) [0.00%, 27.75%] | 60.00% (6/10) [31.27%, 83.18%] |
 | Bypass recall | 13.33% (4/30) [5.31%, 29.68%] | 63.33% (19/30) [45.51%, 78.13%] |
-| Warm in-process p50 / p95 | 0.461 / 0.727 ms | 0.893 / 2.332 ms |
-| Cold CLI p50 / p95 | 448.433 / 495.154 ms | 829.113 / 1021.481 ms |
+| Warm in-process p50 / p95 | 0.461 / 0.727 ms | 0.829 / 1.616 ms |
+| Cold CLI p50 / p95 | 448.433 / 495.154 ms | 516.624 / 858.701 ms |
 
 **v0.2.0 Baseline top missed families** — `delegated_execution` (5), `encoded_execution_surrogate` (5), `hidden_indirect_injection` (5).
 
@@ -89,8 +89,8 @@ Each mode ran 10 warm-ups and 100 timed iterations of the git status check.
 
 | Mode | p50 (ms) | p95 (ms) | p99 (ms) | Peak RSS (MiB) |
 | --- | ---: | ---: | ---: | ---: |
-| Warm in-process | 0.893 | 2.332 | 4.395 | 56.70 |
-| Cold jrx CLI | 829.113 | 1021.481 | 1159.287 | 60.46 |
+| Warm in-process | 0.829 | 1.616 | 1.851 | 39.35 |
+| Cold jrx CLI | 516.624 | 858.701 | 961.113 | 39.35 |
 
 Warm peak RSS covers the runner process, including imports and loaded fixtures.
 Cold peak RSS is the child-process high-water mark, including warm-ups.
