@@ -10,7 +10,7 @@ from pydantic import BaseModel, ValidationError
 
 from .config import ReflexConfig
 from .evaluator import JUDGMENT_NAMES, PUBLIC_SIGNAL_ALIASES
-from .serialization import MAX_CONFIG_BYTES
+from .serialization import MAX_CONFIG_BYTES, read_config_bytes
 
 
 class _DuplicateKey(ValueError):
@@ -117,11 +117,7 @@ def lint_policy(path: Path | bytes) -> dict[str, Any]:
     issues: list[dict[str, str]] = []
     config = None
     try:
-        if isinstance(path, bytes):
-            raw = path
-        else:
-            with path.open("rb") as stream:
-                raw = stream.read(MAX_CONFIG_BYTES + 1)
+        raw = path if isinstance(path, bytes) else read_config_bytes(path)
         if len(raw) > MAX_CONFIG_BYTES:
             raise ValueError("Policy file exceeds the 1 MiB linting limit.")
         loader = _PolicyLoader(raw.decode("utf-8"))

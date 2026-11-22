@@ -79,3 +79,13 @@ def test_invalid_typed_yaml_is_reported_without_values(tmp_path: Path, loader, t
     with pytest.raises(ValueError, match="configuration YAML is invalid") as error:
         loader(path)
     assert "private-fixture" not in str(error.value)
+
+
+def test_bootstrap_reports_oversized_file_before_yaml_parsing(tmp_path):
+    from jev_reflex.config import load_bootstrap_config
+    from jev_reflex.serialization import MAX_CONFIG_BYTES
+
+    path = tmp_path / "bootstrap.yaml"
+    path.write_bytes(b"#" + b"a" * MAX_CONFIG_BYTES)
+    with pytest.raises(ValueError, match="1 MiB size limit"):
+        load_bootstrap_config(path)

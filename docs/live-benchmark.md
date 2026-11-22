@@ -10,10 +10,10 @@ are developer-defined policy expectations, not objective universal truth.
 For example, the temp cleanup fixture expects HOLD because the current hard
 recursive-delete rule applies even to a purportedly disposable directory.
 
-Start with five API requests:
+The repository includes a [five-request sample](../benchmarks/benchmark-smoke.json). To collect a fresh sample in a new output file, run
 
 ```sh
-jrx benchmark live --runs 5 --case dependency-upgrade --output benchmark-smoke.json
+jrx benchmark live --runs 5 --case dependency-upgrade --output benchmark-results-smoke.json
 ```
 
 After inspecting that result, run the full fixture set:

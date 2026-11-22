@@ -6,7 +6,7 @@ from pathlib import Path
 from .config import ReflexConfig
 from .policy_lint import lint_policy
 from .policy_rollout import simulate
-from .serialization import MAX_CONFIG_BYTES, safe_yaml_load
+from .serialization import read_config_bytes, safe_yaml_load
 
 
 @dataclass(frozen=True)
@@ -20,11 +20,24 @@ class PolicyImpactReport:
     skipped_decision_mismatch: int
     changes: dict[str, int]
 
+    @property
+    def relaxations(self) -> int:
+        return self.new_allows + self.changes.get("HOLD_to_REVIEW", 0)
+
     def summary(self) -> str:
-        return (
-            f"{self.replayed}/{self.total} replayed, "
-            f"{self.new_allows} new ALLOW, {self.new_holds} new HOLD"
-        )
+        # At most 15 characters per count keeps even the prefixed failure
+        # status under 140 characters. The Markdown report has exact counts.
+        def count(value: int) -> str:
+            return str(value) if value < 10**15 else "1e15+"
+
+        parts = [
+            f"{count(self.replayed)}/{count(self.total)} replayed",
+            f"{count(self.new_allows)} new ALLOW",
+        ]
+        if hold_review := self.changes.get("HOLD_to_REVIEW", 0):
+            parts.append(f"{count(hold_review)} HOLD->REVIEW")
+        parts.append(f"{count(self.new_holds)} new HOLD")
+        return ", ".join(parts)
 
     def markdown(self) -> str:
         lines = [
@@ -46,16 +59,17 @@ class PolicyImpactReport:
 
 
 def _read_policy(path: Path) -> ReflexConfig:
-    with path.open("rb") as stream:
-        raw = stream.read(MAX_CONFIG_BYTES + 1)
+    raw = read_config_bytes(path)
     data = safe_yaml_load(raw)
     if lint_policy(raw)["errors"]:
         raise ValueError("Invalid policy")
     return ReflexConfig.model_validate(data)
 
 
-def impact_report(audit: Path, baseline: Path, candidate: Path) -> PolicyImpactReport:
-    report = simulate(audit, _read_policy(baseline), _read_policy(candidate))
+def impact_report(
+    audit: Path, baseline: Path, candidate: Path, *, public_key: Path | None = None
+) -> PolicyImpactReport:
+    report = simulate(audit, _read_policy(baseline), _read_policy(candidate), public_key=public_key)
     return PolicyImpactReport(
         total=report["total"],
         replayed=report["replayed"],

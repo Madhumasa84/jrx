@@ -53,7 +53,7 @@ events.jsonl
 *.log
 reflex.yaml
 
-# Benchmark generated results (keep fixtures and benchmark-smoke.json)
+# Benchmark generated results (keep fixtures and benchmarks/benchmark-smoke.json)
 benchmark-results*.json
 
 # IDE and Editor files

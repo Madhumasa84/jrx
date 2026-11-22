@@ -74,8 +74,9 @@ class Ed25519Signer:
         signature = self.private_key.sign(data)
         return signature
 
-    def verify(self, data: bytes, signature: bytes, public_key: bytes) -> bool:
-        """Verify the signature using Ed25519."""
+    @staticmethod
+    def verify(data: bytes, signature: bytes, public_key: bytes) -> bool:
+        """Verify the signature using only the supplied Ed25519 public key."""
         try:
             public_key_obj = ed25519.Ed25519PublicKey.from_public_bytes(public_key)
             public_key_obj.verify(signature, data)

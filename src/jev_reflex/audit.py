@@ -440,6 +440,32 @@ class AuditLog:
         except OSError:
             return []
 
+    @staticmethod
+    def verification_key(config: ReflexConfig, public_key_path: Path | None = None) -> Path | None:
+        """Resolve the trusted key path before reading an audit snapshot."""
+        if public_key_path is None and config.signing.public_key_path:
+            public_key_path = Path(config.signing.public_key_path)
+        if config.signing.require_signature and public_key_path is None:
+            raise ValueError("Audit signature verification requires a public key.")
+        return public_key_path.expanduser() if public_key_path is not None else None
+
+    @classmethod
+    def verify_snapshot(
+        cls, config: ReflexConfig, snapshot: str, *, public_key_path: Path | None = None
+    ) -> bool:
+        """Verify a snapshot with trusted reader settings without initializing a writer."""
+        public_key_path = cls.verification_key(config, public_key_path)
+        reader_config = config.model_copy(
+            update={"signing": config.signing.model_copy(update={"private_key_path": None})}
+        )
+        valid, _ = cls(reader_config).verify(
+            public_key_path=public_key_path,
+            snapshot=snapshot,
+        )
+        if not valid:
+            raise ValueError("audit chain or signature verification failed")
+        return public_key_path is not None
+
     def verify(
         self, public_key_path: Path | None = None, *, snapshot: str | None = None
     ) -> tuple[bool, str]:
@@ -452,21 +478,21 @@ class AuditLog:
         Returns:
             (is_valid, message) where message describes the result or first broken link.
         """
-        log_path = self._get_log_path()
-        if snapshot is None and not log_path.exists():
+        log_path = self._get_log_path() if snapshot is None else None
+        if log_path is not None and not log_path.exists():
             return True, "chain intact, 0 entries"
 
         # Load public key if provided
-        signer: Signer | None = None
+        verify_signature = None
         if public_key_path is not None:
             try:
                 from .signing import Ed25519Signer, load_public_key
 
                 public_key = load_public_key(public_key_path)
                 if self.config.signing.signer_type == "ed25519":
-                    signer = Ed25519Signer()
+                    verify_signature = Ed25519Signer.verify
                 elif self.config.signing.signer_type == "cosign":
-                    signer = CosignSigner()
+                    verify_signature = CosignSigner().verify
                 else:
                     return False, "unsupported audit signer type"
             except Exception:
@@ -476,9 +502,9 @@ class AuditLog:
             prev_hash = GENESIS_HASH
             count = 0
             with (
-                io.StringIO(snapshot)
-                if snapshot is not None
-                else log_path.open("r", encoding="utf-8")
+                log_path.open("r", encoding="utf-8")
+                if log_path is not None
+                else io.StringIO(snapshot)
             ) as f:
                 for i, line in enumerate(f):
                     if not line.endswith("\n") or not line.strip():
@@ -502,22 +528,24 @@ class AuditLog:
                     expected_hash = hashlib.sha256((prev_hash + canonical).encode()).hexdigest()
                     if entry_data.get("entry_hash") != expected_hash:
                         return False, f"chain broken at index {i}: invalid entry_hash"
-                    if signer is not None:
+                    if verify_signature is not None:
                         signature = entry_data.get("decision_signature")
                         if signature is None:
                             return False, f"missing decision signature at index {i}"
                         import base64
 
                         try:
-                            signature_bytes = base64.b64decode(signature)
+                            signature_bytes = base64.b64decode(signature, validate=True)
                         except (ValueError, TypeError):
                             return False, f"invalid base64 signature at index {i}"
-                        if not signer.verify(expected_hash.encode(), signature_bytes, public_key):
+                        if not verify_signature(
+                            expected_hash.encode(), signature_bytes, public_key
+                        ):
                             return False, f"invalid decision signature at index {i}"
                     prev_hash = expected_hash
                     count += 1
 
-            signature_status = " (signatures verified)" if signer else ""
+            signature_status = " (signatures verified)" if verify_signature else ""
             return True, f"chain intact, {count} entries{signature_status}"
 
         except RuntimeError:

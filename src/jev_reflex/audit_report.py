@@ -43,12 +43,7 @@ def build_audit_report(
     end = parse_report_time(until) if until is not None else None
     if start is not None and end is not None and start > end:
         raise ValueError("Report start must not be after its end.")
-    if public_key is None and config.signing.public_key_path:
-        public_key = Path(config.signing.public_key_path).expanduser()
-    if public_key is not None:
-        public_key = public_key.expanduser()
-    if config.signing.require_signature and public_key is None:
-        raise ValueError("Audit signature verification requires a public key.")
+    public_key = AuditLog.verification_key(config, public_key)
     # Match the writer's locking protocol so a concurrently appended record is
     # either fully present or absent from this immutable report snapshot.
     with path.expanduser().open("rb") as stream:
@@ -60,16 +55,7 @@ def build_audit_report(
     if len(raw) > MAX_REPORT_BYTES:
         raise ValueError("Audit report input exceeds 128 MiB; use a retained log segment.")
     snapshot = raw.decode("utf-8")
-    # Reporting never needs a private signing key and must not initialize one.
-    reader_config = config.model_copy(
-        update={
-            "audit": config.audit.model_copy(update={"path": str(path.expanduser())}),
-            "signing": config.signing.model_copy(update={"private_key_path": None}),
-        }
-    )
-    valid, _ = AuditLog(reader_config).verify(public_key_path=public_key, snapshot=snapshot)
-    if not valid:
-        raise ValueError("Audit verification failed; no report was generated.")
+    signatures_verified = AuditLog.verify_snapshot(config, snapshot, public_key_path=public_key)
 
     decisions = {"ALLOW": 0, "REVIEW": 0, "HOLD": 0}
     original_decisions = {"ALLOW": 0, "REVIEW": 0, "HOLD": 0}
@@ -142,7 +128,7 @@ def build_audit_report(
     return {
         "verification": {
             "chain_verified": True,
-            "signatures_verified": public_key is not None,
+            "signatures_verified": signatures_verified,
             "snapshot_sha256": hashlib.sha256(raw).hexdigest(),
             "chain_tip": tip,
             "records_verified": total,

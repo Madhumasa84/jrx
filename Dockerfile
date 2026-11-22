@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the distribution inputs used by setuptools.
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml README.md LICENSE reflex.example.yaml ./
 COPY src/jev_reflex/ src/jev_reflex/
 COPY benchmarks/stability/ benchmarks/stability/
 

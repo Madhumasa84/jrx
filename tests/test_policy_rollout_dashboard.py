@@ -105,21 +105,50 @@ def test_runtime_selects_promoted_revision(tmp_path: Path, monkeypatch: pytest.M
     assert load_config(policy_path, scope="repo-a").thresholds.review == 0.5
 
 
-def test_signed_policy_stage_gate_and_cli(tmp_path: Path) -> None:
+@pytest.mark.parametrize("fixture", ["unsigned_baseline", "signed_evidence", "baseline_swap"])
+def test_signed_policy_stage_gate_and_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fixture: str
+) -> None:
     baseline = _policy(tmp_path)
     candidate = _policy(tmp_path, review=0.7)
+    signer = Ed25519Signer()
+    public_key = tmp_path / "trusted.pub"
+    public_key.write_text(signer.get_public_key_pem())
+    if fixture == "signed_evidence":
+        private_key = tmp_path / "producer.key"
+        private_key.write_text(signer.get_private_key_pem())
+        private_key.chmod(0o600)
+        signing = baseline.signing.model_copy(
+            update={"private_key_path": str(private_key), "require_signature": True}
+        )
+        baseline = baseline.model_copy(update={"signing": signing})
+        candidate = candidate.model_copy(update={"signing": signing})
     _decision(baseline)
+    if fixture == "signed_evidence":
+        private_key.unlink()
     baseline_path = tmp_path / "baseline.yaml"
     candidate_path = tmp_path / "candidate.yaml"
     baseline_path.write_text(yaml.safe_dump(baseline.model_dump(mode="json")))
     candidate_path.write_text(yaml.safe_dump(candidate.model_dump(mode="json")))
-    signer = Ed25519Signer()
     sign_file(candidate_path, signer)
+    if fixture == "baseline_swap":
+        from jev_reflex.config import _verify_config_signature
+
+        sign_file(baseline_path, signer)
+        before = baseline_path.read_bytes()
+
+        def verify_then_replace(path, settings, **kwargs):
+            _verify_config_signature(path, settings, **kwargs)
+            path.write_text("mode: advisory\n")
+
+        monkeypatch.setattr("jev_reflex.config._verify_config_signature", verify_then_replace)
     bootstrap = tmp_path / "bootstrap.yaml"
     bootstrap.write_text(
         yaml.safe_dump(
             {
                 "rollout_state_path": str(tmp_path / "state.json"),
+                "public_key_path": str(public_key),
+                "require_signature": fixture == "baseline_swap",
                 "policy_source": {
                     "type": "local",
                     "uri": str(candidate_path),
@@ -140,11 +169,19 @@ def test_signed_policy_stage_gate_and_cli(tmp_path: Path) -> None:
         "--audit",
         str(tmp_path / "audit.jsonl"),
     ]
+    if fixture == "signed_evidence":
+        without_audit_key = runner.invoke(app, [*command, "--max-new-allows", "1"])
+        assert without_audit_key.exit_code == 2
+        command.extend(["--public-key", str(public_key)])
     blocked = runner.invoke(app, command)
     assert blocked.exit_code == 2
+    if fixture == "baseline_swap":
+        baseline_path.write_bytes(before)
     staged = runner.invoke(app, [*command, "--max-new-allows", "1"])
     assert staged.exit_code == 0, staged.output
-    assert json.loads(staged.output)["status"]["candidate_hash"] == policy_hash(candidate)
+    status = json.loads(staged.output)["status"]
+    assert status["active_hash"] == policy_hash(baseline)
+    assert status["candidate_hash"] == policy_hash(candidate)
     promoted = runner.invoke(
         app, ["policy", "rollout", "promote", "--bootstrap", str(bootstrap), "--percent", "100"]
     )

@@ -1,6 +1,6 @@
 # Threat Model for JEV Reflex (jrx)
 
-This document provides an explicit statement of what JEV Reflex protects against and what it explicitly does NOT protect against. For detailed security architecture and implementation details, see [docs/security.md](security.md) and the [Known Limitations](../README.md#known-limitations) section in the README.
+This document provides an explicit statement of what JEV Reflex protects against and what it explicitly does NOT protect against. For detailed security architecture and implementation details, see [docs/security.md](security.md) and the [Verification and current scope](../README.md#verification-and-current-scope) section in the README.
 
 ## What JEV Reflex Protects Against
 
@@ -19,7 +19,7 @@ JEV Reflex is designed to protect against specific classes of threats in autonom
 ### 3. Unreviewed High-Risk Actions
 - **Threat**: Agents performing security-sensitive, persistence-sensitive, or backwards-compatibility-impacting actions without human oversight.
 - **Protection**: Configurable thresholds and rule sets can require explicit review for actions tagged as `security_sensitive`, `persistence_sensitive`, `backwards_compatibility`, or `human_review`. Execution modes (`review`, `enforce`) can halt execution until approval is obtained.
-- **See**: [README.md](../README.md#key-concepts--policy-decisions)
+- **See**: [README.md](../README.md#policy-decisions-and-modes)
 
 ### 4. Prompt Injection in Retrieved Content
 - **Threat**: Retrieved content (file reads, web fetches) containing prompt injection attempts that could subvert the semantic evaluator.
@@ -66,12 +66,12 @@ JEV Reflex has explicit limitations and does not claim to protect against the fo
   2. Bypass or disable local hard rules (deterministic checks)
   Then they could potentially trick the policy engine into approving malicious actions.
 - **Mitigation**: Local hard rules are designed to be difficult to bypass (they run in the same process as the policy engine). TypeSafe operates independently with its own security controls. The defense-in-depth approach requires compromising both layers simultaneously.
-- **See**: [README.md](../README.md#known-limitations) - "Observation vs Determinism Proof"
+- **See**: [Policy and stability limits](security.md#policy-and-stability-limits)
 
 ### 3. Supply-Chain Compromise Prior to Signing
 - **Limitation**: If the JEV Reflex source code, dependencies, or build artifacts are compromised before the release signing process, the signed artifact will still be malicious.
 - **Mitigation**: The release workflow added in Phase 1 includes Docker image signing with cosign (keyless OIDC via GitHub Actions) and SBOM generation. However, this protects against post-signing tampering, not pre-signing compromise. Use trusted build environments, signed commits, and dependency verification (e.g., pip-audit, sigstore-python).
-- **See**: [README.md](../README.md#known-limitations) - "Supply-chain compromise" (implied)
+- **See**: [Trust boundaries](security.md#trust-boundaries)
 
 ### 4. Novel Secret Patterns
 - **Limitation**: The redaction system uses regex patterns for common credential formats and optional gitleaks integration. Novel or custom secret patterns not covered by these rules may not be detected and redacted.
@@ -81,7 +81,7 @@ JEV Reflex has explicit limitations and does not claim to protect against the fo
 ### 5. Time-of-Check to Time-of-Use (TOCTOU) Race Conditions
 - **Limitation**: User-space pre-execution checks cannot eliminate all concurrent filesystem race conditions. If another process modifies files or symlinks between evaluation and execution, security guarantees may be compromised.
 - **Mitigation**: JEV Reflex canonicalizes working directories and uses bounded context, but cannot eliminate all TOCTOU issues. Use additional safeguards like filesystem permissions, mandatory access controls, and least privilege.
-- **See**: [README.md](../README.md#known-limitations) - "Time-of-Check to Time-of-Use (TOCTOU)"
+- **See**: [Threats and mitigations](security.md#threats-and-mitigations)
 
 ### 6. Hook Bypass
 - **Limitation**: Commands executed outside the configured agent hook or wrapper bypass local inspection entirely.
@@ -91,7 +91,7 @@ JEV Reflex has explicit limitations and does not claim to protect against the fo
 ### 7. Model Non-Determinism
 - **Limitation**: JEV Reflex does not make coding agents or semantic models deterministic. Probabilities are not proofs. Identical JEV requests may produce different semantic signals across runs.
 - **Mitigation**: JEV Reflex wraps probabilistic judgment in deterministic policy. Stability metrics measure observed consistency but do not establish model determinism. Continue to apply normal code review, testing, and monitoring practices.
-- **See**: [README.md](../README.md#known-limitations) - "Observation vs Determinism Proof"
+- **See**: [Policy and stability limits](security.md#policy-and-stability-limits)
 
 ### 8. Bootstrap Configuration Protection
 - **Limitation**: The bootstrap configuration file itself is not cryptographically signed. An attacker with filesystem write access could modify bootstrap settings (e.g., disable signature verification).
@@ -139,6 +139,6 @@ JEV Reflex makes the following security assumptions:
 ## References
 
 - [Security Documentation](security.md) - Detailed security architecture and implementation
-- [README: Known Limitations](../README.md#known-limitations) - General limitations and caveats
+- [README: Verification and current scope](../README.md#verification-and-current-scope) - General limitations and caveats
 - [Architecture Documentation](architecture.md) - System architecture and design principles
 - [Broker Documentation](broker.md) - Host-side broker security considerations

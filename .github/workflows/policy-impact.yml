@@ -9,20 +9,28 @@ permissions:
   statuses: write
 
 concurrency:
-  group: jrx-impact-${{ github.event.pull_request.number }}
+  group: >-
+    jrx-impact-${{ (github.event.action != 'edited' || github.event.changes.base.ref.from)
+    && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: true
 
+env:
+  BASE: ${{ github.event.pull_request.base.sha }}
+  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+  PR: ${{ github.event.pull_request.number }}
+  POLICY: policies/agent.yaml
+
 jobs:
-  preview:
-    if: vars.JRX_POLICY_IMPACT_ENABLED == 'true'
+  detect:
+    if: >-
+      vars.JRX_POLICY_IMPACT_ENABLED == 'true' &&
+      (github.event.action != 'edited' || github.event.changes.base.ref.from)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment: jrx-impact
-    env:
-      BASE: ${{ github.event.pull_request.base.sha }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      PR: ${{ github.event.pull_request.number }}
-      POLICY: policies/agent.yaml
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.inputs.outputs.changed }}
+      ref_status: ${{ steps.inputs.outputs.ref_status }}
+      merge: ${{ steps.inputs.outputs.merge }}
     steps:
       - name: Mark this PR revision pending
         env:
@@ -33,114 +41,136 @@ jobs:
 
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.sha }}
 
-      - name: Read the merged policy as data
+      - name: Inspect the merge parents and policy blobs
         id: inputs
-        shell: bash
-        run: |
-          set -euo pipefail
-          # GitHub can take a few seconds to regenerate its test merge commit.
-          for attempt in 1 2 3 4 5; do
-            if git fetch --quiet --no-tags --depth=2 origin "refs/pull/$PR/merge"; then
-              merge=$(git rev-parse FETCH_HEAD)
-              if [[ "$(git rev-parse "$merge^1")" == "$BASE" &&
-                    "$(git rev-parse "$merge^2")" == "$HEAD_SHA" ]]; then
-                break
-              fi
-            fi
-            if [[ "$attempt" == 5 ]]; then
-              echo 'The GitHub test merge is unavailable or stale. Rerun against the current PR.' >&2
-              exit 2
-            fi
-            sleep 2
-          done
-          for rev in "$BASE" "$merge"; do
-            mode=$(git ls-tree "$rev" -- "$POLICY" | cut -d' ' -f1)
-            if [[ "$mode" != 100644 && "$mode" != 100755 ]]; then
-              echo 'The base and proposed merge must both contain a regular policy file.' >&2
-              exit 2
-            fi
-            if [[ "$(git cat-file -s "$rev:$POLICY")" -gt 1048576 ]]; then
-              echo 'The policy exceeds the 1 MiB replay limit.' >&2
-              exit 2
-            fi
-          done
-          if git diff --quiet --no-ext-diff --no-textconv "$BASE" "$merge" -- "$POLICY"; then
-            echo 'Policy file unchanged.' >> "$GITHUB_STEP_SUMMARY"
-            echo 'changed=false' >> "$GITHUB_OUTPUT"
-          else
-            git cat-file blob "$BASE:$POLICY" > "$RUNNER_TEMP/base.yaml"
-            git cat-file blob "$merge:$POLICY" > "$RUNNER_TEMP/candidate.yaml"
-            echo 'changed=true' >> "$GITHUB_OUTPUT"
-          fi
+        run: bash .github/scripts/policy-impact-inputs.sh
 
-      - name: Validate snapshot pin
-        if: steps.inputs.outputs.changed == 'true'
+      - name: Report when replay cannot run
+        id: status
+        if: >-
+          !cancelled() && (failure() || steps.inputs.outputs.changed != 'true' ||
+          github.event.pull_request.head.repo.full_name != github.repository)
         env:
-          SNAPSHOT: ${{ vars.JRX_EVIDENCE_SHA }}
-        run: '[[ "$SNAPSHOT" =~ ^[0-9a-f]{40}$ ]]'
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ job.status }}
+          REF_STATUS: ${{ steps.inputs.outputs.ref_status }}
+          CHANGED: ${{ steps.inputs.outputs.changed }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          state=error
+          desc='Unassessed. Check policy file presence, mode, size and workflow details.'
+          if [[ "$REF_STATUS" == conflict ]]; then
+            desc='Merge ref missing. Resolve conflicts or update the branch to replay.'
+          elif [[ "$REF_STATUS" == stale ]]; then
+            desc='Stale merge parents. Update the branch and rerun policy impact.'
+          elif [[ "$RESULT" == success && "$CHANGED" == false ]]; then
+            state=success
+            desc='Policy file unchanged.'
+          elif [[ "$RESULT" == success && "$IS_FORK" == true ]]; then
+            desc='Fork policy change. Ask a maintainer to open an upstream branch PR for replay.'
+          fi
+          gh api --silent "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+            -f context='jrx/policy-impact' -f state="$state" -f description="$desc" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
-      - name: Install the trusted base revision
-        if: steps.inputs.outputs.changed == 'true'
+  replay:
+    needs: detect
+    if: >-
+      needs.detect.outputs.changed == 'true' && needs.detect.outputs.ref_status == 'ok' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: jrx-impact
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Extract the previously inspected merge as data
+        id: inputs
+        env:
+          EXPECTED_MERGE: ${{ needs.detect.outputs.merge }}
+        run: test -n "$EXPECTED_MERGE" && bash .github/scripts/policy-impact-inputs.sh
+
+      - name: Install JRX from the trusted workflow revision
+        id: install
         run: |
           python3 -m venv "$RUNNER_TEMP/jrx"
           "$RUNNER_TEMP/jrx/bin/python" -m pip install --quiet .
 
-      - name: Read the private snapshot
-        if: steps.inputs.outputs.changed == 'true'
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          repository: ${{ vars.JRX_EVIDENCE_REPO }}
-          ref: ${{ vars.JRX_EVIDENCE_SHA }}
-          token: ${{ secrets.JRX_EVIDENCE_TOKEN }}
-          path: .jrx-evidence
-          persist-credentials: false
-          sparse-checkout: audit.jsonl
-          sparse-checkout-cone-mode: false
+      - name: Materialize the pinned private audit outside the workspace
+        id: evidence
+        shell: bash
+        env:
+          REPOSITORY: ${{ vars.JRX_EVIDENCE_REPO }}
+          SNAPSHOT: ${{ vars.JRX_EVIDENCE_SHA }}
+          JRX_EVIDENCE_TOKEN: ${{ secrets.JRX_EVIDENCE_TOKEN }}
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$SNAPSHOT" =~ ^[0-9a-f]{40}$ && "$REPOSITORY" =~ ^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$ ]] || exit 2
+          [[ -n "$JRX_EVIDENCE_TOKEN" ]] || exit 2
+          git init --quiet "$RUNNER_TEMP/evidence"
+          cd "$RUNNER_TEMP/evidence"
+          git remote add origin "$GITHUB_SERVER_URL/$REPOSITORY.git"
+          git config remote.origin.promisor true
+          git config remote.origin.partialCloneFilter blob:none
+          evidence_git() {
+            git -c credential.helper= \
+              -c 'credential.helper=!f() { if [ "$1" = get ]; then printf "username=x-access-token\npassword=%s\n" "$JRX_EVIDENCE_TOKEN"; fi; }; f' \
+              -c http.followRedirects=false "$@"
+          }
+          evidence_git fetch --quiet --no-tags --depth=1 --filter=blob:none origin "$SNAPSHOT" 2>/dev/null
+          [[ "$(git rev-parse 'FETCH_HEAD^{commit}')" == "$SNAPSHOT" ]] || exit 2
+          [[ "$(git ls-tree "$SNAPSHOT" -- audit.jsonl | cut -d' ' -f1)" == 100644 ]] || exit 2
+          evidence_git cat-file blob "$SNAPSHOT:audit.jsonl" > audit.jsonl 2>/dev/null
 
       - name: Replay and publish aggregate counts
         id: replay
-        if: steps.inputs.outputs.changed == 'true'
         shell: bash
         env:
           MAX_NEW_ALLOWS: ${{ vars.JRX_MAX_NEW_ALLOWS }}
+          MAX_RELAXATIONS: ${{ vars.JRX_MAX_RELAXATIONS }}
+          AUDIT_PUBLIC_KEY: ${{ vars.JRX_AUDIT_PUBLIC_KEY }}
         run: |
-          snapshot=.jrx-evidence/audit.jsonl
-          test -f "$snapshot" && test ! -L "$snapshot" || exit 2
-          args=(--audit "$snapshot" --baseline "$RUNNER_TEMP/base.yaml"
+          args=(--audit "$RUNNER_TEMP/evidence/audit.jsonl" --baseline "$RUNNER_TEMP/base.yaml"
                 --candidate "$RUNNER_TEMP/candidate.yaml" --github-output "$GITHUB_OUTPUT")
-          if [[ -n "$MAX_NEW_ALLOWS" ]]; then
-            args+=(--max-new-allows "$MAX_NEW_ALLOWS")
+          if [[ -n "$AUDIT_PUBLIC_KEY" ]]; then
+            printf '%s\n' "$AUDIT_PUBLIC_KEY" > "$RUNNER_TEMP/audit-public.pem"
+            args+=(--public-key "$RUNNER_TEMP/audit-public.pem")
           fi
+          if [[ -n "$MAX_NEW_ALLOWS" ]]; then args+=(--max-new-allows "$MAX_NEW_ALLOWS"); fi
+          if [[ -n "$MAX_RELAXATIONS" ]]; then args+=(--max-relaxations "$MAX_RELAXATIONS"); fi
           rc=0
           "$RUNNER_TEMP/jrx/bin/python" -I -m jev_reflex policy impact "${args[@]}" \
             >> "$GITHUB_STEP_SUMMARY" || rc=$?
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           exit "$rc"
 
-      - name: Attach the result to the PR head
+      - name: Attach replay status to the PR head
+        id: status
         if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
           RESULT: ${{ job.status }}
+          REF_STATUS: ${{ steps.inputs.outputs.ref_status }}
           RC: ${{ steps.replay.outputs.rc }}
           COUNTS: ${{ steps.replay.outputs.counts }}
-          CHANGED: ${{ steps.inputs.outputs.changed }}
         run: |
           state=error
           desc='Unassessed. See workflow run.'
-          if [[ "$RESULT" == success ]]; then
+          if [[ "$REF_STATUS" == conflict || "$REF_STATUS" == stale ]]; then
+            desc='Merge changed before replay. Update the branch and rerun policy impact.'
+          elif [[ "$RESULT" == success && "$RC" == 0 && -n "$COUNTS" ]]; then
             state=success
-            if [[ "$CHANGED" == false ]]; then
-              desc='Policy file unchanged.'
-            else
-              desc="$COUNTS"
-            fi
+            desc="$COUNTS"
           elif [[ "$RC" == 1 && -n "$COUNTS" ]]; then
             state=failure
             desc="Limit exceeded. $COUNTS"
           fi
           gh api --silent "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
-            -f context='jrx/policy-impact' -f state="$state" -f description="$desc" \
+            -f context='jrx/policy-impact' -f state="$state" -f description="${desc:0:140}" \
             -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

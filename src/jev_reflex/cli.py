@@ -51,7 +51,7 @@ from .sandbox import (
     remove_sandbox_container,
     remove_sandbox_egress,
 )
-from .serialization import safe_yaml_load
+from .serialization import read_config_bytes, safe_yaml_load
 from .session_limits import MAX_SESSION_OFFSET, SessionLimitError
 from .signing import CosignSigner, Ed25519Signer, Signer, load_public_key, sign_file, verify_file
 from .stability import StabilityRunner
@@ -1825,8 +1825,8 @@ def audit_overrides(
         raise typer.Exit(code=1) from None
 
 
-def _policy_file(path: Path) -> ReflexConfig:
-    value = safe_yaml_load(path.read_text(encoding="utf-8"))
+def _parse_policy_file(raw: bytes) -> ReflexConfig:
+    value = safe_yaml_load(raw.decode("utf-8"))
     return ReflexConfig.model_validate(value)
 
 
@@ -1860,14 +1860,23 @@ def policy_simulate(
     audit: Path = typer.Option(..., "--audit"),
     baseline: Path = typer.Option(..., "--baseline"),
     candidate: Path = typer.Option(..., "--candidate"),
+    public_key: Path | None = typer.Option(
+        None, "--public-key", help="Trusted audit verification key."
+    ),
 ) -> None:
     """Replay verified audit decisions against a proposed policy without model calls."""
     from .policy_rollout import simulate
 
     try:
-        report = simulate(audit, _policy_file(baseline), _policy_file(candidate))
+        report = simulate(
+            audit,
+            _parse_policy_file(read_config_bytes(baseline)),
+            _parse_policy_file(read_config_bytes(candidate)),
+            public_key=public_key,
+        )
         typer.echo(json.dumps(report, indent=2, sort_keys=True))
-    except (OSError, ValueError):
+    except Exception:
+        # YAML, model and audit diagnostics can contain private input.
         typer.echo("Policy simulation failed; check the audit chain and input policies.", err=True)
         raise typer.Exit(code=2) from None
 
@@ -1877,14 +1886,23 @@ def policy_impact(
     audit: Path = typer.Option(..., "--audit"),
     baseline: Path = typer.Option(..., "--baseline"),
     candidate: Path = typer.Option(..., "--candidate"),
+    public_key: Path | None = typer.Option(
+        None, "--public-key", help="Trusted audit verification key."
+    ),
     max_new_allows: int | None = typer.Option(None, "--max-new-allows", min=0),
+    max_relaxations: int | None = typer.Option(
+        None,
+        "--max-relaxations",
+        min=0,
+        help="Limit new ALLOW and HOLD-to-REVIEW decisions combined.",
+    ),
     github_output: Path | None = typer.Option(None, "--github-output"),
 ) -> None:
     """Preview a candidate policy using aggregate audit replay counts."""
     from .policy_impact import impact_report
 
     try:
-        report = impact_report(audit, baseline, candidate)
+        report = impact_report(audit, baseline, candidate, public_key=public_key)
     except Exception:
         # Policy values and private audit data can appear in diagnostics.
         typer.echo("Unassessed. Check policy syntax, replay support and audit integrity.")
@@ -1904,6 +1922,9 @@ def policy_impact(
     if max_new_allows is not None and report.new_allows > max_new_allows:
         typer.echo(f"\nNew ALLOW decisions exceed the limit of {max_new_allows}.")
         raise typer.Exit(1)
+    if max_relaxations is not None and report.relaxations > max_relaxations:
+        typer.echo(f"\nPolicy relaxations exceed the limit of {max_relaxations}.")
+        raise typer.Exit(1)
 
 
 def _rollout_store(bootstrap: Path):
@@ -1921,6 +1942,9 @@ def policy_rollout_stage(
     bootstrap: Path = typer.Option(..., "--bootstrap"),
     baseline: Path = typer.Option(..., "--baseline"),
     audit: Path = typer.Option(..., "--audit"),
+    public_key: Path | None = typer.Option(
+        None, "--public-key", help="Trusted audit verification key."
+    ),
     max_new_allows: int = typer.Option(0, "--max-new-allows", min=0),
 ) -> None:
     """Fetch a signed remote candidate and stage it after an offline replay."""
@@ -1932,14 +1956,15 @@ def policy_rollout_stage(
         settings, store = _rollout_store(bootstrap)
         if settings.policy_source.type is None:
             raise ValueError("a signed policy source is required")
+        baseline_bytes = read_config_bytes(baseline)
         if settings.require_signature:
-            _verify_config_signature(baseline, settings)
-        active = _policy_file(baseline)
+            _verify_config_signature(baseline, settings, data=baseline_bytes)
+        active = _parse_policy_file(baseline_bytes)
         current = store.status()
         if current["active_hash"] and current["active_hash"] != policy_hash(active):
             raise ValueError("baseline policy differs from active rollout policy")
         candidate, _hash = PolicyFetcher(settings.policy_source).fetch()
-        report = simulate(audit, active, candidate)
+        report = simulate(audit, active, candidate, public_key=public_key)
         if report["replayed"] == 0 or report["new_allows"] > max_new_allows:
             raise ValueError("simulation gate failed")
         store.stage(active, candidate)

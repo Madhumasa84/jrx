@@ -23,7 +23,13 @@ def policy_hash(config: ReflexConfig) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def simulate(audit_path: Path, baseline: ReflexConfig, candidate: ReflexConfig) -> dict[str, Any]:
+def simulate(
+    audit_path: Path,
+    baseline: ReflexConfig,
+    candidate: ReflexConfig,
+    *,
+    public_key: Path | None = None,
+) -> dict[str, Any]:
     """Replay policy decisions over recorded findings, not original actions."""
     # Audit records cannot reconstruct raw commands, context, semantic samples,
     # or enforcement side effects. Only the pure decision inputs may change.
@@ -42,18 +48,9 @@ def simulate(audit_path: Path, baseline: ReflexConfig, candidate: ReflexConfig) 
         unsupported.append("stability_policy.majority")
     if unsupported:
         raise ValueError("cannot replay configuration changes: " + ", ".join(unsupported))
+    public_key = AuditLog.verification_key(baseline, public_key)
     snapshot = audit_path.read_text(encoding="utf-8")
-    # Verification only needs the log. Keep the original signing settings in
-    # the baseline hash without loading the producer's private key.
-    verification_config = baseline.model_copy(
-        update={
-            "audit": baseline.audit.model_copy(update={"path": str(audit_path)}),
-            "signing": baseline.signing.model_copy(update={"private_key_path": None}),
-        }
-    )
-    valid, reason = AuditLog(verification_config).verify(snapshot=snapshot)
-    if not valid:
-        raise ValueError(f"audit chain verification failed: {reason}")
+    AuditLog.verify_snapshot(baseline, snapshot, public_key_path=public_key)
     report: dict[str, Any] = {
         "baseline_hash": policy_hash(baseline),
         "candidate_hash": policy_hash(candidate),
@@ -116,7 +113,6 @@ def simulate(audit_path: Path, baseline: ReflexConfig, candidate: ReflexConfig) 
                             "seq": entry["seq"],
                             "before": baseline_result,
                             "after": candidate_result,
-                            "action": entry["action_summary"],
                         }
                     )
     report["new_allows"] = report["changes"]["REVIEW_to_ALLOW"] + report["changes"]["HOLD_to_ALLOW"]
