@@ -4,7 +4,7 @@
 
 # JEV Reflex (`jrx`)
 
-**Runtime Policy Enforcement for AI Coding Agents**
+**Runtime policy enforcement, an MCP gateway, and policy impact PR checks for AI coding agents**
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=flat-square)](LICENSE)
 [![Python Version](https://img.shields.io/badge/python-3.11+-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
@@ -14,17 +14,12 @@
 
 <p align="center">
   <a href="#quickstart">Quickstart</a> •
-  <a href="#architecture">Architecture</a> •
+  <a href="#policy-impact-on-pull-requests">Policy impact</a> •
   <a href="#agent-integrations">Supported Agents</a> •
-  <a href="#host-broker-architecture">Host Broker</a> •
-  <a href="#verified-identity-and-reviewed-execution">Identity &amp; Approvals</a> •
-  <a href="#isolated-command-execution">Isolated Execution</a> •
   <a href="#cli-command-reference">CLI Reference</a> •
   <a href="#configuration-reference-reflexyaml">Configuration</a> •
   <a href="#documentation-index">Documentation</a>
 </p>
-
-> *“Probabilistic judgment. Deterministic enforcement.”*
 
 </div>
 
@@ -47,6 +42,16 @@ Use it as a CLI wrapper, an agent hook, or a Model Context Protocol (MCP) gatewa
 | Audit and operations | Optional tamper-evident audit logs, Prometheus metrics, and an OIDC-protected operations dashboard. |
 | Credential separation | A host broker evaluates requests without exposing the semantic API key to the agent environment. |
 
+## Policy Impact on Pull Requests
+
+`jrx policy impact` replays historical decisions against a proposed policy. The optional GitHub check posts aggregate counts on the PR head. For example,
+
+```text
+500/540 replayed, 2 new ALLOW, 4 HOLD->REVIEW, 3 new HOLD
+```
+
+The denominator includes skipped policy decisions. Review the coverage in the workflow summary before setting a merge gate. [Set up the PR check](docs/policy-impact.md)
+
 ## Architecture
 
 ### Optional session authority controls
@@ -60,7 +65,7 @@ are implemented and disabled by default; deployment in autonomous agent hosts re
 experimental. They require protected host keys, state, identity and session assertions.
 They do not trace runtime accesses or replace sandboxing, OIDC or human approval.
 
-See [Production Audit V2](PRODUCTION_AUDIT_V2.md) for reproduced defects, verification
+See [Production Audit V2](docs/audits/PRODUCTION_AUDIT_V2.md) for reproduced defects, verification
 results and remaining deployment gaps.
 
 ```mermaid
@@ -88,6 +93,18 @@ See [identity and approvals](#verified-identity-and-reviewed-execution),
 
 ### 1. Installation
 
+Once 0.2.0 is published on PyPI, install it with pipx or run it directly with uv.
+
+```bash
+pipx install jev-reflex
+# Or run without a persistent CLI install
+uvx --from jev-reflex jrx --help
+```
+
+The installed environment includes a starting policy at `share/jev-reflex/reflex.example.yaml`. Copy it to your working directory to customize or lint it.
+
+To run from `main` before PyPI publication, install from source.
+
 ```bash
 # Clone the repository
 git clone https://github.com/Madhumasa84/jrx.git
@@ -103,22 +120,6 @@ pip install -e ".[dev]"
 ```
 
 Both `jrx` and `jev-reflex` CLI commands will be available in your `$PATH`.
-
-Run bare `jrx` from an interactive terminal to open the unified Codex CLI,
-Claude Code CLI, and Antigravity CLI workspace. Provider CLIs keep their native
-subscription authentication; JRX does not require an OpenAI, Anthropic, or
-Gemini inference API key. See the [unified agent workspace guide](docs/unified-agent-workspace.md)
-for supported versions, model selection, reviewed handoffs, and enforcement limits.
-
-For managed planning, durable checkpoints, reviewable approvals, workspace
-memory and read-only research/review workers, install the optional harness
-extra with `pip install -e ".[harness]"` and press `p` in the workspace. See
-the [managed harness guide](docs/agent-harness.md) for CLI and ACP use.
-
-```bash
-jrx doctor
-jrx setup --provider codex --workspace .  # preview only
-```
 
 ### 2. Configure credentials
 
@@ -145,6 +146,12 @@ jrx exec --mode enforce -- python -m pytest
 ```
 
 This evaluates the command and runs it when policy permits. Docker isolation is opt-in; see [isolated execution](#isolated-command-execution).
+
+### Optional host utilities
+
+Run bare `jrx` in a terminal to open the interactive workspace for installed Codex, Claude Code and Antigravity CLIs. It uses each provider’s native authentication. [Unified workspace guide](docs/unified-agent-workspace.md)
+
+For managed sessions with planning, durable checkpoints and approvals, install the `harness` extra (`pip install -e ".[harness]"` from source) and run `jrx harness --help`. [Managed harness guide](docs/agent-harness.md)
 
 ## Policy decisions and modes
 
@@ -334,8 +341,6 @@ mistakes; signature verification and golden policy tests remain separate steps.
 The linter accepts files up to 1 MiB and bounds YAML nesting and alias expansion.
 
 Policy simulation replays the deterministic findings, semantic signals, risk classification, and degraded state stored in new audit entries. It verifies the audit hash chain first, checks that each entry was evaluated under the baseline policy, and reports every `ALLOW`/`REVIEW`/`HOLD` transition. Older entries lacking replay inputs are counted as skipped. Simulation does not rerun the semantic model or reconstruct a command from its audit summary. Enable `audit.enabled: true` in the policy before collecting rollout evidence.
-
-Use `jrx policy impact` to share aggregate decision changes and replay coverage. The optional GitHub workflow posts those counts on policy pull requests. [Set up the policy impact check](docs/policy-impact.md).
 
 ```bash
 jrx policy simulate --audit /var/log/jrx/audit.jsonl \
@@ -533,8 +538,8 @@ agent hooks or upstream MCP servers.
 
 | Command | Usage | Description |
 | :--- | :--- | :--- |
-| `jrx` | `jrx` | Open the interactive agent workspace when stdin/stdout are TTYs. |
-| `jrx harness` | `jrx harness [run\|resume\|status\|acp]` | Run or resume managed agent sessions, inspect checkpoints, or connect an ACP agent. See the [managed harness guide](docs/agent-harness.md). |
+| `jrx` | `jrx` | Optional host utility. Open the interactive agent workspace when stdin/stdout are TTYs. |
+| `jrx harness` | `jrx harness [run\|resume\|status\|acp]` | Optional host utility. Run or resume managed agent sessions, inspect checkpoints, or connect an ACP agent. See the [managed harness guide](docs/agent-harness.md). |
 | `jrx doctor` | `jrx doctor [--provider NAME] [--models]` | Inspect installed CLIs, safe authentication status, hook files, JEV status, and policy coverage. |
 | `jrx setup` | `jrx setup --provider NAME [--apply\|--rollback]` | Preview or apply a merged provider hook configuration, or narrowly remove JRX's entry. |
 | `jrx check` | `jrx check --command "<cmd>"` | Analyze proposed action without executing. Supports `--json`, `--task`, `--stdin-diff`. |
@@ -544,7 +549,7 @@ agent hooks or upstream MCP servers.
 | `jrx stability` | `jrx stability --runs 100 --command "<cmd>"` | Test decision consistency and calculate flip rates over repeated evaluations. |
 | `jrx broker` | `jrx broker [run\|start\|stop\|status]` | Manage the host-side semantic daemon and IPC socket. |
 | `jrx audit` | `jrx audit [verify\|tail\|overrides\|report]` | Audit log verification, override governance, and verified decision reports. |
-| `jrx policy` | `jrx policy [lint\|sign\|verify\|test\|keygen\|simulate\|rollout]` | Offline diagnostics, signing, regression testing, replay, and staged rollout. |
+| `jrx policy` | `jrx policy [lint\|sign\|verify\|test\|keygen\|simulate\|impact\|rollout]` | Lint, sign and test policies, preview decision changes on PRs, and manage staged rollout. |
 | `jrx dashboard` | `jrx dashboard serve --config dashboard.yaml` | OIDC-protected local operations dashboard. |
 | `jrx mcp` | `jrx mcp serve --config reflex.yaml --server NAME -- <server command>` | Policy-enforcing stdio MCP gateway. |
 | `jrx session` | `jrx session [list\|status\|stop] --config reflex.yaml` | List sessions, inspect remaining budgets, or stop a session by ID. |
@@ -600,6 +605,12 @@ audit:
 policy:
   allow_hold_override: false
 ```
+
+### Semantic backend, latency and privacy
+
+TypeSafe JEV is the hosted evaluator that scores a proposed action for risk. A live evaluation sends a bounded, redacted description of the action and its context, directly or through the host broker. This can include command arguments, repository and working paths, changed files, diff excerpts, test results, and supplied task or external text. Redaction removes recognized secrets. Review which context your deployment permits leaving the machine.
+
+Live checks incur network and provider latency. `jev.samples` controls the number of sequential evaluations and `jev.api_timeout` configures the request timeout. To inspect local rules offline, run `jrx check --no-jev --command "git status"`. Demo mode uses fixture signals. Policy impact reuses the scores already recorded in the audit snapshot and makes no semantic API calls.
 
 ---
 

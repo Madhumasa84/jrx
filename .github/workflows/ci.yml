@@ -26,7 +26,7 @@ jobs:
             python-version: "3.11"
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -48,7 +48,7 @@ jobs:
   package:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -60,11 +60,15 @@ jobs:
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m pip install dist/*.whl
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m pip check
           cd "$RUNNER_TEMP"
+          cp "$RUNNER_TEMP/jev-reflex-clean/share/jev-reflex/reflex.example.yaml" reflex.example.yaml
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m jev_reflex --help
           "$RUNNER_TEMP/jev-reflex-clean/bin/jev-reflex" --help
           "$RUNNER_TEMP/jev-reflex-clean/bin/jrx" --help
-          "$RUNNER_TEMP/jev-reflex-clean/bin/jev-reflex" policy test --config "$GITHUB_WORKSPACE/reflex.example.yaml" --json
-          "$RUNNER_TEMP/jev-reflex-clean/bin/jrx" policy test --config "$GITHUB_WORKSPACE/reflex.example.yaml" --json
+          "$RUNNER_TEMP/jev-reflex-clean/bin/jrx" policy impact --help
+          "$RUNNER_TEMP/jev-reflex-clean/bin/jrx" policy lint --config reflex.example.yaml
+          "$RUNNER_TEMP/jev-reflex-clean/bin/jrx" check --demo --command "rm -rf ./cache"
+          "$RUNNER_TEMP/jev-reflex-clean/bin/jev-reflex" policy test --config reflex.example.yaml --json
+          "$RUNNER_TEMP/jev-reflex-clean/bin/jrx" policy test --config reflex.example.yaml --json
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m jev_reflex check --demo --command "pytest tests/" --json
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m jev_reflex benchmark stability --runs 1 --json
       - name: Verify release tag matches installed package
@@ -81,7 +85,7 @@ jobs:
   broker-image:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - run: docker build -t jrx-ci .
       - name: Check broker startup with the Helm configuration and packaged health probe
         shell: bash

@@ -53,6 +53,7 @@ version = {attr = "jev_reflex.__version__"}
 where = ["src"]
 
 [tool.setuptools.data-files]
+"share/jev-reflex" = ["reflex.example.yaml"]
 "share/jev-reflex/benchmarks/stability" = ["benchmarks/stability/*.json"]
 
 [tool.setuptools.package-data]

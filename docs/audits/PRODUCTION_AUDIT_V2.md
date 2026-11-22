@@ -35,8 +35,8 @@ authenticated identities, session assertions and execution routing before enabli
 | Broker build | Fresh `jrx-production-audit-v2:local`, Python 3.11 slim |
 | Tools | Ruff, mypy, Bandit, pip-audit, build, uv, Helm, Gitleaks |
 
-[Environment and dependency versions](docs/audit-v2-evidence/environment.json) and
-[installed development dependencies](docs/audit-v2-evidence/dependencies.json) record
+[Environment and dependency versions](../audit-v2-evidence/environment.json) and
+[installed development dependencies](../audit-v2-evidence/dependencies.json) record
 exact versions. Clean package installations resolved 34 core dependencies without
 optional harness dependencies. Cryptography resolved to 50.0.2 versus development
 50.0.1; the successful runs do not establish compatibility with every allowed version.
@@ -53,7 +53,7 @@ Boundary sequence: agent → adapter/hook → bounded Git/context collection →
 forwarding → Docker/egress proxy/external service. Different entrypoints apply the
 identity and session gates at different points; ordinary policy remains a pure function.
 
-The [trust map and design](docs/production-audit-v2-plan.md) identifies trusted host
+The [trust map and design](../production-audit-v2-plan.md) identifies trusted host
 code, executable resolution, protected policy/bootstrap and public keys, identity settings,
 private keys/state, Docker daemon and host gateway. Agent text, repository files,
 symlinks, nested arguments, model output, upstream MCP catalogs and network responses
@@ -124,7 +124,7 @@ repeated, with targeted regression suites rerun after implementation.
 | Clock-skew validation absent | FIXED before this audit | Stale response and finite timestamp/skew-boundary tests passed |
 | Audit rotation absent | STILL PRESENT | `rotate_mb` exists but automatic rotation does not; documented limitation |
 
-[Historical regression output](docs/audit-v2-evidence/historical-revalidation.log).
+[Historical regression output](../audit-v2-evidence/historical-revalidation.log).
 Pipeline inspection is not evidence that an external release or multiarch deployment succeeded.
 
 ## 7. Security Tests
@@ -178,9 +178,9 @@ unknown MCP call denial without upstream forwarding, intent keygen/create/status
 These are installed-package CLI functional checks, not the entire pytest suite running
 against wheel dependencies. Original development dependency resolution also passed.
 
-[Artifact hashes](docs/audit-v2-evidence/artifacts.json),
-[wheel CLI checks](docs/audit-v2-evidence/wheel-cli-checks.json),
-[sdist CLI checks](docs/audit-v2-evidence/sdist-cli-checks.json).
+[Artifact hashes](../audit-v2-evidence/artifacts.json),
+[wheel CLI checks](../audit-v2-evidence/wheel-cli-checks.json),
+[sdist CLI checks](../audit-v2-evidence/sdist-cli-checks.json).
 License and module/fixture contents were inspected. No repository dependency constraints were changed. Clean wheel dependency scanning
 reported no known vulnerabilities; the unpublished project itself has no PyPI advisory entry.
 
@@ -239,7 +239,7 @@ unknown options/executable traversal and full evaluation/CLI enforcement.
 Limitations: conservative supported preflight mappings; no perfect intent understanding
 or actual process access tracing; exact task/config binding may require fresh sessions
 for routine policy updates. Host metadata must be authenticated. Whole-store rollback
-and the final execution race need external/OS controls. See [dedicated docs](docs/intent-lineage.md).
+and the final execution race need external/OS controls. See [dedicated docs](../intent-lineage.md).
 
 ## 14. Feature 2 — Scoped Agent Authority Leases
 
@@ -261,7 +261,7 @@ Limitations: protected host equivalent, not portable signed bearer tokens or rem
 attestation; same-UID key/config/environment access defeats isolation. Action IDs must
 remain unique for a lease lifetime. State capacity refuses authorization; operator
 archival is manual. Trustworthy wall clock and externally protected freshness are needed.
-See [dedicated docs](docs/authority-delegation.md).
+See [dedicated docs](../authority-delegation.md).
 
 Novelty research examined official Claude Code sandboxing, SPIFFE workload identity and
 OpenFGA conditional authorization. The controls are novel relative to current JRX;
@@ -320,7 +320,7 @@ installed executable, removed `PYTHONPATH`, and ran outside the repository.
 | `git diff --check` | Exit 0 |
 | TODO/FIXME/XXX/pass/NotImplementedError/print/skip scan | Reviewed; Cosign stub and existing cleanup/protocol/test uses retained; no new skipped tests or debugging prints |
 
-[Evidence directory](docs/audit-v2-evidence) retains before-fix reproductions, final
+[Evidence directory](../audit-v2-evidence) retains before-fix reproductions, final
 outputs, dependency metadata and package checks. Restricted initial IPC/network runs
 failed because the execution sandbox prohibited sockets/DNS; permitted local reruns
 succeeded. These environmental failures are not reported as repository vulnerabilities.
