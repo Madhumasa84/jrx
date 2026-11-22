@@ -93,7 +93,7 @@ See [identity and approvals](#verified-identity-and-reviewed-execution),
 
 ### 1. Installation
 
-Once 0.2.0 is published on PyPI, install the CLI with uv or pipx (Python 3.11 or newer).
+Install the `jrx` CLI with uv or pipx. JRX requires Python 3.11 or newer. [PyPI package](https://pypi.org/project/jev-reflex/) · [v0.2.0 release](https://github.com/Madhumasa84/jrx/releases/tag/v0.2.0)
 
 ```bash
 uv tool install jev-reflex
@@ -105,7 +105,7 @@ uvx --from jev-reflex jrx --help
 
 The installed environment includes a starting policy at `share/jev-reflex/reflex.example.yaml`. Copy it to your working directory to customize or lint it.
 
-To run from `main` before PyPI publication, install from source.
+To develop JRX or try the latest changes on `main`, install from source.
 
 ```bash
 # Clone the repository
@@ -643,16 +643,13 @@ Deploy the broker into Kubernetes clusters using the included Helm chart:
 # Validate chart
 helm lint ./helm/jrx-broker
 
-# Install with an image built from this revision and a pre-provisioned API-key Secret
+# Install with the published image and a pre-provisioned API-key Secret
 helm install jrx-broker ./helm/jrx-broker \
-  --set image.repository=registry.example.com/jrx-broker \
-  --set image.tag=your-build-tag \
   --set secrets.typesafeApiKey.existingSecret=jrx-typesafe \
   --set service.metricsPort=9090
 ```
 
-The chart defaults to broker image `0.2.0`. Until that tag is published, use
-an image built from this revision as shown above. Both probes run
+The chart defaults to `ghcr.io/madhumasa84/jrx-broker:0.2.0`. Both probes run
 `jrx broker status --local` against the local health socket at
 `/tmp/jrx/reflex.sock` in each pod.
 For remote evaluation, choose `config.jev.transport=broker-tls` and mount the server
