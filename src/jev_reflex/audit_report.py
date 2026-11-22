@@ -43,6 +43,7 @@ def build_audit_report(
     end = parse_report_time(until) if until is not None else None
     if start is not None and end is not None and start > end:
         raise ValueError("Report start must not be after its end.")
+    public_key = AuditLog.verification_key(config, public_key)
     # Match the writer's locking protocol so a concurrently appended record is
     # either fully present or absent from this immutable report snapshot.
     with path.expanduser().open("rb") as stream:

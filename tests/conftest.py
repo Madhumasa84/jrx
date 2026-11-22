@@ -84,8 +84,7 @@ def impact_case(tmp_path, write_impact_entry):
                 *args,
             ],
         )
-        assert "PRIVATE-CANARY" not in result.stdout
-        assert "PRIVATE-CANARY" not in result.stderr
+        assert "PRIVATE-CANARY" not in result.output
         if "--github-output" in args:
             output = Path(args[args.index("--github-output") + 1])
             if output.is_file():

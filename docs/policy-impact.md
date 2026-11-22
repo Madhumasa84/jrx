@@ -41,13 +41,13 @@ Replay never needs the producer’s private key. With only `signing.private_key_
    | `JRX_EVIDENCE_REPO` | Variable | Private evidence repository as `owner/repo` |
    | `JRX_EVIDENCE_SHA` | Variable | Full evidence commit SHA |
    | `JRX_EVIDENCE_TOKEN` | Secret | Token with read-only Contents permission on the evidence repository |
-   | `JRX_AUDIT_PUBLIC_KEY` | Optional variable | Trusted audit verification public key in PEM format |
+   | `JRX_AUDIT_PUBLIC_KEY` | Variable | Trusted audit verification public key in PEM format. Required when the baseline sets `signing.require_signature` and supplies no usable public key on the runner. |
    | `JRX_MAX_NEW_ALLOWS` | Optional variable | Maximum new ALLOWs |
    | `JRX_MAX_RELAXATIONS` | Optional variable | Maximum total relaxations |
 
 4. Set the **repository** Actions variable `JRX_POLICY_IMPACT_ENABLED` to `true`. Open a PR targeting `main` and inspect the `jrx/policy-impact` commit status on its head SHA.
 
-The **detect** job runs without the evidence environment. It fetches GitHub’s test merge as data and verifies both parents. An unchanged policy gets `Policy file unchanged.`. A missing merge ref or stale parents produce an actionable error. A fork changing the policy requires a maintainer to review the change and open a same-repository PR for replay.
+The **detect** job runs without the evidence environment. A PR retargeted to `main` gets a fresh assessment. It fetches GitHub’s test merge as data and verifies both parents. An unchanged policy gets `Policy file unchanged.`. A missing merge ref or stale parents produce an actionable error. A fork changing the policy requires a maintainer to review the change and open a same-repository PR for replay.
 
 The **replay** job enters `jrx-impact` only for a changed, valid same-repository proposal. It rechecks the detected merge before extracting the policy blobs and installs JRX from the exact trusted workflow revision (`github.sha`). It then reads the pinned evidence into `$RUNNER_TEMP/evidence` and runs the installed interpreter with `-I`. The proposed source tree is never checked out. Only aggregate results reach the PR.
 

@@ -440,20 +440,26 @@ class AuditLog:
         except OSError:
             return []
 
-    @classmethod
-    def verify_snapshot(
-        cls, config: ReflexConfig, snapshot: str, *, public_key_path: Path | None = None
-    ) -> bool:
-        """Raise on invalid evidence; return whether every signature was verified."""
+    @staticmethod
+    def verification_key(config: ReflexConfig, public_key_path: Path | None = None) -> Path | None:
+        """Resolve the trusted key path before reading an audit snapshot."""
         if public_key_path is None and config.signing.public_key_path:
             public_key_path = Path(config.signing.public_key_path)
         if config.signing.require_signature and public_key_path is None:
             raise ValueError("Audit signature verification requires a public key.")
+        return public_key_path.expanduser() if public_key_path is not None else None
+
+    @classmethod
+    def verify_snapshot(
+        cls, config: ReflexConfig, snapshot: str, *, public_key_path: Path | None = None
+    ) -> bool:
+        """Verify a snapshot with trusted reader settings without initializing a writer."""
+        public_key_path = cls.verification_key(config, public_key_path)
         reader_config = config.model_copy(
             update={"signing": config.signing.model_copy(update={"private_key_path": None})}
         )
         valid, _ = cls(reader_config).verify(
-            public_key_path=public_key_path.expanduser() if public_key_path is not None else None,
+            public_key_path=public_key_path,
             snapshot=snapshot,
         )
         if not valid:

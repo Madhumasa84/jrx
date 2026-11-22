@@ -364,7 +364,7 @@ policy_source:
     -----END PUBLIC KEY-----
 ```
 
-The fetched candidate must have a valid Ed25519 signature. Staging requires at least one matching replayed decision. By default, it rejects any new `ALLOW` decision; set `--max-new-allows` only after reviewing the simulation. The baseline file must match the active rollout revision. Canary selection hashes the repository scope so the same repository remains in the same cohort at a given percentage.
+The fetched candidate must have a valid Ed25519 signature. Staging requires at least one matching replayed decision. By default, it rejects any new `ALLOW` decision; set `--max-new-allows` only after reviewing the simulation. The baseline file must match the active rollout revision. For signed audit evidence, pass `--public-key` with the audit verification key if its path is supplied separately from the baseline policy. Canary selection hashes the repository scope so the same repository remains in the same cohort at a given percentage.
 
 ```bash
 jrx policy rollout stage --bootstrap /etc/jrx/bootstrap.yaml \

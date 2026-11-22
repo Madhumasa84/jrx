@@ -117,8 +117,7 @@ def test_signed_audit_verified_without_signer(
         audit.write_text(json.dumps(record) + "\n")
         rejected = CliRunner().invoke(app, args)
         assert rejected.exit_code == 2
-        assert "PRIVATE-CANARY" not in rejected.stdout
-        assert "PRIVATE-CANARY" not in rejected.stderr
+        assert "PRIVATE-CANARY" not in rejected.output
         assert github_output.read_text() == "prior=value\n"
 
 
@@ -133,9 +132,19 @@ def test_required_audit_signature_needs_public_key(impact_case, write_impact_ent
     assert run().exit_code == 2
 
 
-def test_simulation_invalid_yaml_has_value_free_diagnostic(impact_case):
+def test_sparse_report_treats_missing_hold_to_review_as_zero():
+    report = PolicyImpactReport(1, 1, 1, 0, 0, 0, 0, {"REVIEW_to_ALLOW": 1})
+    assert report.relaxations == 1
+    assert report.summary() == "1/1 replayed, 1 new ALLOW, 0 new HOLD"
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16"])
+def test_simulation_invalid_yaml_has_value_free_diagnostic(impact_case, encoding):
     audit, baseline, candidate, _ = impact_case
-    candidate.write_text("hold_on: [PRIVATE-CANARY")
+    if encoding == "utf-16":
+        candidate.write_text(candidate.read_text(), encoding=encoding)
+    else:
+        candidate.write_text("hold_on: [PRIVATE-CANARY", encoding=encoding)
     result = CliRunner().invoke(
         app,
         [
@@ -150,5 +159,5 @@ def test_simulation_invalid_yaml_has_value_free_diagnostic(impact_case):
         ],
     )
     assert result.exit_code == 2
-    assert "Policy simulation failed" in result.stderr
+    assert "Policy simulation failed" in result.output
     assert "PRIVATE-CANARY" not in result.output

@@ -1825,8 +1825,8 @@ def audit_overrides(
         raise typer.Exit(code=1) from None
 
 
-def _policy_file(path: Path) -> ReflexConfig:
-    value = safe_yaml_load(read_config_bytes(path))
+def _parse_policy_file(raw: bytes) -> ReflexConfig:
+    value = safe_yaml_load(raw.decode("utf-8"))
     return ReflexConfig.model_validate(value)
 
 
@@ -1869,7 +1869,10 @@ def policy_simulate(
 
     try:
         report = simulate(
-            audit, _policy_file(baseline), _policy_file(candidate), public_key=public_key
+            audit,
+            _parse_policy_file(read_config_bytes(baseline)),
+            _parse_policy_file(read_config_bytes(candidate)),
+            public_key=public_key,
         )
         typer.echo(json.dumps(report, indent=2, sort_keys=True))
     except Exception:
@@ -1939,6 +1942,9 @@ def policy_rollout_stage(
     bootstrap: Path = typer.Option(..., "--bootstrap"),
     baseline: Path = typer.Option(..., "--baseline"),
     audit: Path = typer.Option(..., "--audit"),
+    public_key: Path | None = typer.Option(
+        None, "--public-key", help="Trusted audit verification key."
+    ),
     max_new_allows: int = typer.Option(0, "--max-new-allows", min=0),
 ) -> None:
     """Fetch a signed remote candidate and stage it after an offline replay."""
@@ -1950,14 +1956,15 @@ def policy_rollout_stage(
         settings, store = _rollout_store(bootstrap)
         if settings.policy_source.type is None:
             raise ValueError("a signed policy source is required")
+        baseline_bytes = read_config_bytes(baseline)
         if settings.require_signature:
-            _verify_config_signature(baseline, settings)
-        active = _policy_file(baseline)
+            _verify_config_signature(baseline, settings, data=baseline_bytes)
+        active = _parse_policy_file(baseline_bytes)
         current = store.status()
         if current["active_hash"] and current["active_hash"] != policy_hash(active):
             raise ValueError("baseline policy differs from active rollout policy")
         candidate, _hash = PolicyFetcher(settings.policy_source).fetch()
-        report = simulate(audit, active, candidate)
+        report = simulate(audit, active, candidate, public_key=public_key)
         if report["replayed"] == 0 or report["new_allows"] > max_new_allows:
             raise ValueError("simulation gate failed")
         store.stage(active, candidate)

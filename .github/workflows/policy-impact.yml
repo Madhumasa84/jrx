@@ -2,14 +2,16 @@ name: JRX policy impact
 on:
   pull_request_target:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 permissions:
   contents: read
   statuses: write
 
 concurrency:
-  group: jrx-impact-${{ github.event.pull_request.number }}
+  group: >-
+    jrx-impact-${{ (github.event.action != 'edited' || github.event.changes.base.ref.from)
+    && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -20,7 +22,9 @@ env:
 
 jobs:
   detect:
-    if: vars.JRX_POLICY_IMPACT_ENABLED == 'true'
+    if: >-
+      vars.JRX_POLICY_IMPACT_ENABLED == 'true' &&
+      (github.event.action != 'edited' || github.event.changes.base.ref.from)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -56,7 +60,7 @@ jobs:
           IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           state=error
-          desc='Unassessed. Check policy file mode, size and workflow details.'
+          desc='Unassessed. Check policy file presence, mode, size and workflow details.'
           if [[ "$REF_STATUS" == conflict ]]; then
             desc='Merge ref missing. Resolve conflicts or update the branch to replay.'
           elif [[ "$REF_STATUS" == stale ]]; then
@@ -88,7 +92,7 @@ jobs:
         id: inputs
         env:
           EXPECTED_MERGE: ${{ needs.detect.outputs.merge }}
-        run: bash .github/scripts/policy-impact-inputs.sh
+        run: test -n "$EXPECTED_MERGE" && bash .github/scripts/policy-impact-inputs.sh
 
       - name: Install JRX from the trusted workflow revision
         id: install

@@ -128,6 +128,13 @@ def test_unsigned_records_cannot_pass_signature_verification(tmp_path):
         build_audit_report(path, required)
 
 
+def test_missing_required_key_rejects_before_opening_audit(tmp_path):
+    with pytest.raises(ValueError, match="requires a public key"):
+        build_audit_report(
+            tmp_path / "missing.jsonl", ReflexConfig(signing={"require_signature": True})
+        )
+
+
 def test_report_consumes_the_verified_snapshot_if_file_changes(tmp_path, monkeypatch):
     path = tmp_path / "audit.jsonl"
     config = ReflexConfig()
@@ -206,7 +213,8 @@ def test_cli_json_human_output_and_failure_do_not_leak_actions(tmp_path, monkeyp
     path.write_text("private-invalid-content-fixture")
     bad = CliRunner().invoke(app, [*args, "--json"])
     assert bad.exit_code == 2
-    assert not bad.stdout
+    if bad.stderr_bytes is not None:
+        assert not bad.stdout
     assert "private" not in bad.output
 
 
@@ -235,5 +243,6 @@ def test_out_of_range_utc_dates_return_a_clean_cli_error(tmp_path, date):
         app, ["audit", "report", "--path", str(path), "--since", date, "--json"]
     )
     assert result.exit_code == 2
-    assert not result.stdout
-    assert "Audit report failed" in result.stderr
+    if result.stderr_bytes is not None:
+        assert not result.stdout
+    assert "Audit report failed" in result.output

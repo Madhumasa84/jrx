@@ -19,7 +19,13 @@ for attempt in 1 2 3 4 5; do
     rc=0
     git ls-remote --exit-code origin "$ref" >/dev/null 2>&1 || rc=$?
     case "$rc" in
-      0) exit 2 ;;
+      0)
+        # The ref may have appeared since the failed fetch.
+        if [[ "$attempt" == 5 ]]; then
+          echo 'The merge ref exists but could not be fetched.' >&2
+          exit 2
+        fi
+        ;;
       2) ref_status=conflict ;;
       *) exit 2 ;;
     esac
@@ -35,10 +41,6 @@ fi
 
 base_entry=$(git ls-tree "$BASE" -- "$POLICY")
 merge_entry=$(git ls-tree "$merge" -- "$POLICY")
-if [[ -z "$base_entry" && -z "$merge_entry" ]]; then
-  echo 'changed=false' >> "$GITHUB_OUTPUT"
-  exit 0
-fi
 for rev in "$BASE" "$merge"; do
   mode=$(git ls-tree "$rev" -- "$POLICY" | cut -d' ' -f1)
   size=0

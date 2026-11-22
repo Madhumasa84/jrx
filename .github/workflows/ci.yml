@@ -54,7 +54,8 @@ jobs:
           python-version: "3.11"
       - run: python -m pip install --upgrade pip
       - run: python -m pip wheel . --no-deps --wheel-dir dist
-      - run: |
+      - shell: bash
+        run: |
           python -m venv "$RUNNER_TEMP/jev-reflex-clean"
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m pip install --upgrade pip
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m pip install dist/*.whl
@@ -66,7 +67,8 @@ jobs:
           "$RUNNER_TEMP/jev-reflex-clean/bin/jrx" --help
           "$RUNNER_TEMP/jev-reflex-clean/bin/jrx" policy impact --help
           "$RUNNER_TEMP/jev-reflex-clean/bin/jrx" policy lint --config reflex.example.yaml
-          "$RUNNER_TEMP/jev-reflex-clean/bin/jrx" check --demo --command "rm -rf ./cache"
+          "$RUNNER_TEMP/jev-reflex-clean/bin/jrx" check --config reflex.example.yaml --demo --command "rm -rf ./cache" --json |
+            jq -e '.decision == "HOLD"' >/dev/null
           "$RUNNER_TEMP/jev-reflex-clean/bin/jev-reflex" policy test --config reflex.example.yaml --json
           "$RUNNER_TEMP/jev-reflex-clean/bin/jrx" policy test --config reflex.example.yaml --json
           "$RUNNER_TEMP/jev-reflex-clean/bin/python" -m jev_reflex check --demo --command "pytest tests/" --json

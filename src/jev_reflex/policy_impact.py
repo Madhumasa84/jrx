@@ -22,7 +22,7 @@ class PolicyImpactReport:
 
     @property
     def relaxations(self) -> int:
-        return self.new_allows + self.changes["HOLD_to_REVIEW"]
+        return self.new_allows + self.changes.get("HOLD_to_REVIEW", 0)
 
     def summary(self) -> str:
         # At most 15 characters per count keeps even the prefixed failure
@@ -34,7 +34,7 @@ class PolicyImpactReport:
             f"{count(self.replayed)}/{count(self.total)} replayed",
             f"{count(self.new_allows)} new ALLOW",
         ]
-        if hold_review := self.changes["HOLD_to_REVIEW"]:
+        if hold_review := self.changes.get("HOLD_to_REVIEW", 0):
             parts.append(f"{count(hold_review)} HOLD->REVIEW")
         parts.append(f"{count(self.new_holds)} new HOLD")
         return ", ".join(parts)

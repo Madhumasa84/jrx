@@ -33,9 +33,20 @@ def _step(job, step_id):
     return next(s for s in _job(job)["steps"] if s.get("id") == step_id)
 
 
+def test_retargeting_rechecks_policy_without_canceling_replay_on_metadata_edits():
+    workflow = yaml.load(WORKFLOW.read_text(), Loader=yaml.BaseLoader)
+    assert "edited" in workflow["on"]["pull_request_target"]["types"]
+    triggers_replay = "(github.event.action != 'edited' || github.event.changes.base.ref.from)"
+    assert triggers_replay in _job("detect")["if"]
+    assert triggers_replay in workflow["concurrency"]["group"]
+    assert "|| github.run_id" in workflow["concurrency"]["group"]
+
+
 def test_only_trusted_policy_changes_enter_evidence_environment():
     detect = _job("detect")
     replay = _job("replay")
+    assert detect["outputs"]["merge"] == "${{ steps.inputs.outputs.merge }}"
+    assert _step("replay", "inputs")["env"]["EXPECTED_MERGE"] == "${{ needs.detect.outputs.merge }}"
     assert "environment" not in detect
     assert "secrets." not in str(detect)
     assert replay["environment"] == "jrx-impact"
@@ -58,7 +69,8 @@ def test_only_trusted_policy_changes_enter_evidence_environment():
     [
         ("changed", "ok", 0),
         ("unchanged", "ok", 0),
-        ("absent", "ok", 0),
+        ("absent", "ok", 2),
+        ("fetch-race", "ok", 0),
         ("deleted", "ok", 2),
         ("symlink", "ok", 2),
         ("executable", "ok", 2),
@@ -102,7 +114,7 @@ def test_merge_ref_and_data_only_checkout(tmp_path, proposal, ref_status, code):
     script.write_text("exit 19\n")
     (repo / "cli.py").write_text("print('proposed CLI')\n")
     candidate = b"# preserved CRLF\r\nmode: advisory\r\n"
-    if proposal == "changed":
+    if proposal in {"changed", "fetch-race"}:
         policy.write_bytes(candidate)
     elif proposal == "deleted":
         policy.unlink()
@@ -129,6 +141,18 @@ def test_merge_ref_and_data_only_checkout(tmp_path, proposal, ref_status, code):
     sleeper = bin_dir / "sleep"
     sleeper.write_text("#!/bin/sh\nexit 0\n")
     sleeper.chmod(0o755)
+    if proposal == "fetch-race":
+        # The ref exists by the time ls-remote probes after the first failed fetch.
+        git_wrapper = bin_dir / "git"
+        git_wrapper.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = fetch ] && [ ! -e "$RUNNER_TEMP/retried" ]; then\n'
+            '    touch "$RUNNER_TEMP/retried"\n'
+            "    exit 1\n"
+            "fi\n"
+            'exec "$REAL_GIT" "$@"\n'
+        )
+        git_wrapper.chmod(0o755)
     outputs = tmp_path / "outputs"
     env = {
         "BASE": head if proposal == "stale-base" else base,
@@ -138,14 +162,15 @@ def test_merge_ref_and_data_only_checkout(tmp_path, proposal, ref_status, code):
         "GITHUB_OUTPUT": str(outputs),
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "RUNNER_TEMP": str(tmp_path),
+        "REAL_GIT": shutil.which("git"),
     }
     result = _run_step(_step("detect", "inputs"), checkout, env)
     assert result.returncode == code, result.stderr
     values = dict(line.split("=", 1) for line in outputs.read_text().splitlines())
     assert values["ref_status"] == ref_status
-    assert values["changed"] == ("true" if proposal == "changed" else "false")
+    assert values["changed"] == ("true" if proposal in {"changed", "fetch-race"} else "false")
     assert not (tmp_path / "candidate.yaml").exists()
-    if proposal == "changed":
+    if proposal in {"changed", "fetch-race"}:
         assert values["merge"] == merge
         result = _run_step(_step("replay", "inputs"), checkout, {**env, "EXPECTED_MERGE": merge})
         assert result.returncode == 0, result.stderr
