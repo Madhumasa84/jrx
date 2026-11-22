@@ -34,7 +34,7 @@ Use it as a CLI wrapper, an agent hook, or a Model Context Protocol (MCP) gatewa
 | Capability | Implementation |
 | :--- | :--- |
 | Runtime policy enforcement | Local destructive-command, secret, and repository-boundary checks combined with semantic evaluation. |
-| Policy as code | YAML thresholds and rules, Ed25519 signatures, audit replay, staged rollout, and rollback. |
+| Policy as code | YAML thresholds and rules, Ed25519 signatures, policy impact checks on PRs, staged rollout, and rollback. |
 | Identity and approvals | OIDC verification, roles scoped to repositories and environments, and single-use approvals bound to an action. Production requires two independent reviewers. |
 | MCP tool authorization | Explicit server/tool allowlists, JSON Schema argument validation, JSON Pointer constraints, and optional upstream schema pins. |
 | Session controls | Persistent call and evaluation budgets, reserved spend estimates, time limits, and stop controls. |
@@ -50,7 +50,20 @@ Use it as a CLI wrapper, an agent hook, or a Model Context Protocol (MCP) gatewa
 500/540 replayed, 2 new ALLOW, 4 HOLD->REVIEW, 3 new HOLD
 ```
 
-The denominator includes skipped policy decisions. Review the coverage in the workflow summary before setting a merge gate. [Set up the PR check](docs/policy-impact.md)
+The denominator includes skipped policy decisions. The workflow summary shows all six decision transitions and why records were skipped. Review that coverage before setting a merge gate.
+
+Run the same check locally against a captured audit and the baseline that produced it:
+
+```bash
+jrx policy impact --audit audit.jsonl --baseline baseline.yaml \
+  --candidate proposed.yaml --max-relaxations 0
+```
+
+- **Gate policy relaxations.** `--max-new-allows` limits transitions from REVIEW or HOLD to ALLOW. `--max-relaxations` also counts HOLD → REVIEW. An assessed replay exits with code 1 when it exceeds either configured limit.
+- **Replay signed evidence with a public key.** The check verifies the audit hash chain and can verify decision signatures with a trusted public key. Use `--public-key` when the verifier keeps that key separately. The producer's private key stays on the collector. Replay reuses recorded findings and scores without calling the semantic backend.
+- **Keep audit evidence private in CI.** Unchanged policies and fork PRs skip replay. For eligible same-repository changes, the separate replay job reads the pinned private audit and posts aggregate counts. [Set up the PR check](docs/policy-impact.md)
+
+v0.2.0 also adds a separate audit verification key option to `jrx policy rollout stage` and enforces the same 1 MiB policy byte limit in the runtime and operations dashboard. [v0.2.0 release notes](docs/releases/v0.2.0.md)
 
 ## Architecture
 
