@@ -744,6 +744,7 @@ storage with multiple replicas, use a StatefulSet with a claim per pod.
 | **[Host Broker Daemon](docs/broker.md)** | Unix socket protocol, permissions specification, mTLS transport, and IPC limits. |
 | **[Observability & Metrics](docs/observability.md)** | Prometheus metrics exposition (`:9090/metrics`), structured logging, and calibration. |
 | **[Benchmark Methodology](docs/live-benchmark.md)** | Empirical stability metrics, decision consistency calculation, and live API test suites. |
+| **[Offline Deterministic Benchmark](benchmarks/RESULTS.md)** | v0.2.0 latency, benign false positives, ASI01–ASI06 recall, and obfuscation results. |
 | **[Isolated Execution](docs/execution-sandbox.md)** | Docker command isolation, resource limits, setup, and end-to-end verification. |
 | **[MCP Argument Policy](docs/mcp-argument-policy.md)** | Per-tool JSON Schema validation and resource-scoped argument constraints. |
 
