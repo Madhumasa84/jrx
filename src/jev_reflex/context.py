@@ -133,6 +133,7 @@ class RepositoryContextProvider:
             proposed_action=proposed_action,
             changed_files=[bounded_text(item, 1_000) for item in files[:500]],
             git_diff=bounded_text(diff, self.max_diff_chars),
+            proposed_diff=bool(stdin_diff),
             test_results=bounded_text(
                 test_results if self.include_tests else "", self.max_context_chars
             ),

@@ -14,6 +14,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     SerializerFunctionWrapHandler,
     model_serializer,
     model_validator,
@@ -352,6 +353,38 @@ class SessionLimitsConfig(BaseModel):
     max_elapsed_seconds: int = Field(default=3600, ge=1)
     max_execution_seconds: int = Field(default=300, ge=1)
     max_risky_attempts: int = Field(default=10, ge=1)
+    track_secret_taint: bool = False
+    pin_protected_files: bool = False
+
+    @model_serializer(mode="wrap")
+    def _omit_new_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        for name in ("track_secret_taint", "pin_protected_files"):
+            if not data.get(name):
+                data.pop(name, None)
+        return data
+
+
+class LocalChecksConfig(BaseModel):
+    """Trusted exceptions for local security checks."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    protected_path_allowlist: list[str] = Field(default_factory=list)
+    trusted_package_hosts: list[str] = Field(
+        default_factory=lambda: ["pypi.org", "files.pythonhosted.org", "registry.npmjs.org"]
+    )
+
+    @model_validator(mode="after")
+    def _validate_exceptions(self) -> LocalChecksConfig:
+        for value in self.protected_path_allowlist:
+            path = Path(value)
+            if not path.parts or ".." in path.parts or any(char in value for char in "*?[\0"):
+                raise ValueError("protected path exceptions must name exact files")
+        for host in self.trusted_package_hosts:
+            if not re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*", host):
+                raise ValueError("trusted package hosts must be exact hostnames")
+        return self
 
 
 class SandboxConfig(BaseModel):
@@ -492,6 +525,7 @@ class ReflexConfig(BaseModel):
     """Validated user configuration. Untrusted evaluated state never changes this object."""
 
     model_config = ConfigDict(extra="forbid")
+    _source_path: Path | None = PrivateAttr(default=None)
 
     mode: Mode = "advisory"
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
@@ -507,12 +541,20 @@ class ReflexConfig(BaseModel):
     access: AccessConfig | None = None
     mcp: MCPGatewayConfig = Field(default_factory=MCPGatewayConfig)
     session: SessionLimitsConfig = Field(default_factory=SessionLimitsConfig)
+    local_checks: LocalChecksConfig = Field(default_factory=LocalChecksConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     intent: IntentConfig = Field(default_factory=IntentConfig)
     authority: AuthorityConfig = Field(default_factory=AuthorityConfig)
     jev: JEVConfig = Field(default_factory=JEVConfig)
     stability: StabilityConfig = Field(default_factory=StabilityConfig)
     stability_policy: StabilityPolicyConfig = Field(default_factory=StabilityPolicyConfig)
+
+    @model_serializer(mode="wrap")
+    def _omit_local_checks_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if self.local_checks == LocalChecksConfig():
+            data.pop("local_checks", None)
+        return data
 
     @model_validator(mode="after")
     def _normalize_rule_names(self) -> ReflexConfig:
@@ -572,6 +614,7 @@ def load_config(
     if mode_override is not None:
         config = config.model_copy(update={"mode": mode_override})
 
+    config._source_path = config_path.absolute()
     return config
 
 

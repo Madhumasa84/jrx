@@ -3,10 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
+from functools import partial
 from typing import Protocol
 
+from ..config import ReflexConfig
 from ..models import DeterministicFinding, EvaluationContext
-from . import destructive, filesystem, git_risk, repo_boundary, safe_commands, secrets
+from . import (
+    destructive,
+    execution,
+    filesystem,
+    git_risk,
+    repo_boundary,
+    safe_commands,
+    secrets,
+    supply_chain,
+    tamper,
+)
 
 
 class DeterministicCheck(Protocol):
@@ -34,6 +46,9 @@ DEFAULT_CHECKS: tuple[DeterministicCheck, ...] = tuple(
         git_risk.evaluate,
         filesystem.evaluate,
         safe_commands.evaluate,
+        execution.evaluate,
+        supply_chain.evaluate,
+        tamper.evaluate,
     )
 )
 
@@ -41,10 +56,18 @@ DEFAULT_CHECKS: tuple[DeterministicCheck, ...] = tuple(
 def run_deterministic_checks(
     context: EvaluationContext,
     checks: Sequence[DeterministicCheck] = DEFAULT_CHECKS,
+    *,
+    config: ReflexConfig | None = None,
 ) -> list[DeterministicFinding]:
     """Run checks in a fixed order and return only structured, non-secret findings."""
 
     findings: list[DeterministicFinding] = []
+    if checks is DEFAULT_CHECKS and config is not None:
+        checks = (
+            *DEFAULT_CHECKS[:-2],
+            FunctionCheck(partial(supply_chain.evaluate, config=config)),
+            FunctionCheck(partial(tamper.evaluate, config=config)),
+        )
     for check in checks:
         findings.extend(check.evaluate(context))
     return findings

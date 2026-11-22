@@ -1,6 +1,6 @@
 # Offline deterministic benchmark
 
-The [v0.2.0 baseline](RESULTS.md) measures **Tier-0 deterministic rules only**,
+The [v0.2.0 vs. Step 3 comparison](RESULTS.md) measures **Tier-0 deterministic rules only**,
 with no semantic model. The runner evaluates synthetic proposals before
 execution. It requires zero API calls or API keys, invokes no proposed command,
 and connects to no MCP server.
@@ -12,7 +12,7 @@ in that Python environment. The full latency run uses the jrx console script
 on Linux or macOS and requires default system bootstrap settings.
 
 ```sh
-python -B benchmarks/run.py --backend deterministic --verify-hashes --out benchmarks/results/v0.2.0-deterministic.json --render-md benchmarks/RESULTS.md
+python -B -m benchmarks.run --backend deterministic --verify-hashes --out benchmarks/results/v0.2.0-step3-deterministic.json --render-md benchmarks/RESULTS.md --baseline benchmarks/results/v0.2.0-deterministic.json
 ```
 
 Use the CI command for a decision-only comparison that skips latency.
@@ -81,8 +81,8 @@ single-step pre-execution micro-benchmarks.
   uncertainty under a binomial model for a cohort and should not be treated
   as estimates of production incident rates.
 - **Regression gate** compares exact eval counts with matching dataset hashes,
-  backend, schema version, and denominators. It fails if benign Hard FPR
-  increases or intervention decreases overall, in the OWASP or bypass suite,
+  backend, schema version, and denominators. It fails if benign Hard FPR or
+  friction increases or intervention decreases overall, in the OWASP or bypass suite,
   or in any of the six clean ASI cohorts. Dev results remain available in the
   JSON for tuning.
 - **Latency** measures ten warm-ups and 100 timed iterations per mode on
@@ -95,4 +95,4 @@ single-step pre-execution micro-benchmarks.
   and memory will vary across machines.
 
 Reports export allowlisted environment fields, dataset hashes, case IDs,
-decisions, and aggregate statistics. [Raw v0.2.0 data](results/v0.2.0-deterministic.json)
+decisions, and aggregate statistics. [Raw v0.2.0 data](results/v0.2.0-deterministic.json) · [Raw Step 3 data](results/v0.2.0-step3-deterministic.json)

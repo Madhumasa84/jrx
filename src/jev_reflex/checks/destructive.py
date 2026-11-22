@@ -3,19 +3,36 @@
 from __future__ import annotations
 
 import re
-import shlex
+from pathlib import Path
 
 from ..models import DeterministicFinding, EvaluationContext
-from .common import action_argv, command_text, git_option_sets
+from .common import git_command, roots
+from .shell import Command, inspect, program
 
-
-def _clear() -> DeterministicFinding:
-    return DeterministicFinding(
-        check="known_destructive",
-        triggered=False,
-        severity="low",
-        reason_code="CLEAR",
-    )
+_GENERATED_DIRECTORIES = frozenset(
+    {
+        "dist",
+        "node_modules",
+        "coverage-html",
+        ".pytest_cache",
+        "__pycache__",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".next",
+        ".turbo",
+    }
+)
+_SAFE_RM_OPTIONS = frozenset(
+    {"--force", "--recursive", "--interactive", "--verbose", "--one-file-system", "--preserve-root"}
+)
+_INTERPRETER_SIDE_EFFECT_RE = re.compile(
+    r"\b(?:os\.(?:system|popen|remove|unlink|rmdir)|"
+    r"shutil\.(?:rmtree|move)|(?:pathlib\.)?path\.(?:unlink|rmdir)|"
+    r"subprocess\.(?:run|popen|call|check_call|check_output)|"
+    r"fs\.(?:rm|rmSync|rmdir|rmdirSync)|"
+    r"child_process\.(?:exec|execFile|spawn)|remove-item)\b",
+    re.IGNORECASE,
+)
 
 
 def _trigger(reason_code: str) -> DeterministicFinding:
@@ -28,131 +45,91 @@ def _trigger(reason_code: str) -> DeterministicFinding:
     )
 
 
-def _program_name(value: str) -> str:
-    return value.replace("\\", "/").rsplit("/", 1)[-1].lower()
-
-
-def _rm_is_recursive_force(argv: list[str]) -> bool:
-    if not argv or _program_name(argv[0]) != "rm":
-        return False
+def _rm_options(argv: tuple[str, ...]) -> tuple[list[str], list[str]]:
+    options, targets = [], []
+    literal = False
     for item in argv[1:]:
-        if item == "--":
-            break
-        if not item.startswith("-") or item == "-":
-            continue
-        if item.startswith("--"):
-            if item.split("=", 1)[0].lower() == "--recursive":
-                return True
-        elif "r" in item[1:].lower():
-            return True
-    return False
-
-
-_SHELL_PROGRAMS = {"sh", "bash", "dash", "zsh", "ksh", "fish"}
-_WRAPPER_PROGRAMS = {
-    "command",
-    "doas",
-    "env",
-    "exec",
-    "nice",
-    "nohup",
-    "setsid",
-    "sudo",
-    "timeout",
-    "xargs",
-    "find",
-}
-_EVAL_PROGRAMS = {"eval"}
-_SHELL_OPERATORS = {";", "&&", "||", "|", "&", "(", ")", "\n"}
-_INTERPRETER_SIDE_EFFECT_RE = re.compile(
-    r"\b(?:os\.(?:system|popen|remove|unlink|rmdir)|"
-    r"shutil\.(?:rmtree|move)|(?:pathlib\.)?path\.(?:unlink|rmdir)|"
-    r"subprocess\.(?:run|popen|call|check_call|check_output)|"
-    r"fs\.(?:rm|rmSync|rmdir|rmdirSync)|"
-    r"child_process\.(?:exec|execFile|spawn)|remove-item)\b",
-    re.IGNORECASE,
-)
-
-
-def _shell_tokens(value: str) -> list[str]:
-    try:
-        lexer = shlex.shlex(value, posix=True, punctuation_chars=";&|()\n")
-        lexer.whitespace = " \t\r"
-        lexer.whitespace_split = True
-        return list(lexer)
-    except ValueError:
-        return value.split()
-
-
-def _is_shell_command_flag(value: str) -> bool:
-    return value == "-c" or (value.startswith("-") and not value.startswith("--") and "c" in value)
-
-
-def _contains_recursive_rm(argv: list[str], depth: int = 0) -> bool:
-    """Recognize recursive rm through common command wrappers without executing it."""
-
-    if not argv or depth > 4:
-        return False
-
-    segments: list[list[str]] = [[]]
-    for token in argv:
-        if token in _SHELL_OPERATORS or (token and all(char in ";&|()\n" for char in token)):
-            if segments[-1]:
-                segments.append([])
+        if not literal and item == "--":
+            literal = True
+        elif not literal and item.startswith("-") and item != "-":
+            options.append(item)
         else:
-            segments[-1].append(token)
+            targets.append(item)
+    return options, targets
 
-    for segment in segments:
-        if not segment:
-            continue
-        program = _program_name(segment[0])
-        if program == "rm" and _rm_is_recursive_force(segment):
-            return True
-        if program in _SHELL_PROGRAMS:
-            for index, token in enumerate(segment[1:], start=1):
-                if _is_shell_command_flag(token) and index + 1 < len(segment):
-                    if _contains_recursive_rm(_shell_tokens(segment[index + 1]), depth + 1):
-                        return True
-            continue
-        if program in _EVAL_PROGRAMS:
-            if any(
-                _contains_recursive_rm(_shell_tokens(value), depth + 1) for value in segment[1:]
-            ):
-                return True
-            continue
-        if program in _WRAPPER_PROGRAMS:
-            for index, token in enumerate(segment[1:], start=1):
-                token_program = _program_name(token)
-                if token_program == "rm" and _rm_is_recursive_force(segment[index:]):
-                    return True
-                if token_program in _SHELL_PROGRAMS | _WRAPPER_PROGRAMS:
-                    if _contains_recursive_rm(segment[index:], depth + 1):
-                        return True
-    return False
+
+def _generated_target(target: str, directory: Path, root: Path) -> bool:
+    path = Path(target)
+    if not path.parts or path.name not in _GENERATED_DIRECTORIES:
+        return False
+    if path.is_absolute() or {"..", ".git"}.intersection(path.parts):
+        return False
+    if any(char in target for char in "*?[{}~$"):
+        return False
+    candidate = directory / path
+    if not candidate.is_relative_to(root):
+        return False
+    # Symlinks make a name-based cleanup exception unsafe.
+    return candidate.resolve() == candidate
+
+
+def _safe_recursive_cleanup(
+    context: EvaluationContext, command: Command, options: list[str], targets: list[str]
+) -> bool:
+    if (
+        command.argv[0] not in {"rm", "/bin/rm", "/usr/bin/rm"}
+        or command.indirect
+        or command.redirects
+        or not targets
+    ):
+        return False
+    if any(opt not in _SAFE_RM_OPTIONS and not re.fullmatch(r"-[rRfiIv]+", opt) for opt in options):
+        return False
+    try:
+        directory, root = roots(context)
+        return all(_generated_target(target, directory, root) for target in targets)
+    except (ValueError, RuntimeError, OSError):
+        return False
 
 
 def evaluate(context: EvaluationContext) -> list[DeterministicFinding]:
-    """Detect actions whose destructive nature is explicit from argv."""
-
-    argv = action_argv(context)
-    text = command_text(context)
-    command_argv = (
-        _shell_tokens(context.proposed_action.command)
-        if context.proposed_action.command is not None and not context.proposed_action.argv
-        else argv
-    )
-    if _contains_recursive_rm(command_argv):
-        return [_trigger("RECURSIVE_DELETE")]
-    if _INTERPRETER_SIDE_EFFECT_RE.search(text):
-        return [_trigger("INTERPRETER_SIDE_EFFECT")]
-    if any("--hard" in flags for flags in git_option_sets(context, "reset")):
-        return [_trigger("GIT_HARD_RESET")]
-    if any(flags & {"-f", "--force"} for flags in git_option_sets(context, "clean")):
-        return [_trigger("GIT_CLEAN_FORCE")]
-    if re.search(r"\b(?:drop\s+(?:database|table)|truncate\s+table)\b", text):
-        return [_trigger("DATABASE_DESTRUCTIVE")]
-    if re.search(r"\bterraform\s+destroy\b|\bkubectl\s+delete\b", text):
-        return [_trigger("INFRASTRUCTURE_DELETE")]
-    if re.search(r"\bdocker\s+system\s+prune\b|\bshred\b", text):
-        return [_trigger("RESOURCE_PRUNE")]
-    return [_clear()]
+    plan = inspect(context.proposed_action)
+    for command in plan.commands:
+        if not command.argv:
+            continue
+        name = program(command.argv[0])
+        args = command.argv[1:]
+        if name == "rm":
+            options, targets = _rm_options(command.argv)
+            recursive = any(
+                opt == "--recursive" or (not opt.startswith("--") and "r" in opt.lower())
+                for opt in options
+            )
+            if recursive and (
+                len(plan.commands) != 1
+                or not _safe_recursive_cleanup(context, command, options, targets)
+            ):
+                return [_trigger("RECURSIVE_DELETE")]
+        if name.startswith(("python", "node")) and _INTERPRETER_SIDE_EFFECT_RE.search(
+            " ".join(args)
+        ):
+            return [_trigger("INTERPRETER_SIDE_EFFECT")]
+        if name == "git":
+            git = git_command(command)
+            if git and git.subcommand == "reset" and "--hard" in git.flags:
+                return [_trigger("GIT_HARD_RESET")]
+            if git and git.subcommand == "clean" and git.flags & {"-f", "--force"}:
+                return [_trigger("GIT_CLEAN_FORCE")]
+        if name in {"psql", "mysql", "sqlite3", "sqlcmd", "duckdb"} and re.search(
+            r"\b(?:drop\s+(?:database|table)|truncate\s+table)\b", " ".join(args), re.I
+        ):
+            return [_trigger("DATABASE_DESTRUCTIVE")]
+        if (name, args[:1]) in {("terraform", ("destroy",)), ("kubectl", ("delete",))}:
+            return [_trigger("INFRASTRUCTURE_DELETE")]
+        if name == "shred" or (name == "docker" and args[:2] == ("system", "prune")):
+            return [_trigger("RESOURCE_PRUNE")]
+    return [
+        DeterministicFinding(
+            check="known_destructive", triggered=False, severity="low", reason_code="CLEAR"
+        )
+    ]

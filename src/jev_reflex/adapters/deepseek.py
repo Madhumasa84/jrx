@@ -12,6 +12,7 @@ from typing import Any
 
 from ..config import ReflexConfig
 from ..models import EvaluationResult
+from ..policy import host_guard_denied
 from .harness import evaluate_harness_hook, hook_error_reason
 
 
@@ -29,7 +30,7 @@ def deepseek_hook_response(
         should_block = True
     if config.mode == "advisory":
         should_block = False
-    if any(rule.startswith("agent_control:") for rule in result.triggered_rules):
+    if host_guard_denied(result):
         should_block = True
 
     if should_block:

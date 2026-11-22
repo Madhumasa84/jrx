@@ -9,6 +9,7 @@ from ..config import ReflexConfig
 from ..evaluator import DefaultEvaluator, DemoEvaluator
 from ..formatters import hook_context
 from ..models import EvaluationResult
+from ..policy import host_guard_denied
 from .generic import context_from_hook_payload
 
 
@@ -34,7 +35,7 @@ def codex_hook_response(result: EvaluationResult, config: ReflexConfig) -> dict[
         should_block = True
     if config.mode == "advisory":
         should_block = False
-    if any(rule.startswith("agent_control:") for rule in result.triggered_rules):
+    if host_guard_denied(result):
         should_block = True
 
     if should_block:
@@ -78,6 +79,12 @@ def codex_hooks_json(command: str = "jev-reflex codex-hook") -> dict[str, Any]:
                     "matcher": "Bash|apply_patch|mcp__.*",
                     "hooks": [{"type": "command", "command": command, "timeout": 30}],
                 }
-            ]
+            ],
+            "PostToolUse": [
+                {
+                    "matcher": "Bash|Read|exec_command|shell_command|mcp__.*",
+                    "hooks": [{"type": "command", "command": command, "timeout": 30}],
+                }
+            ],
         },
     }

@@ -13,6 +13,7 @@ from pathlib import Path
 from .config import SessionLimitsConfig
 
 MAX_SESSION_OFFSET = 2**63 - 1
+MAX_TAINTS_PER_SESSION = 256
 
 
 class SessionLimitError(ValueError):
@@ -139,6 +140,105 @@ class SessionStore:
                 (session_id, time.time()),
             )
             connection.commit()
+
+    @staticmethod
+    def _taint_tables(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS session_taint_salts (session_id TEXT PRIMARY KEY, "
+            "salt BLOB NOT NULL, overflow INTEGER NOT NULL DEFAULT 0)"
+        )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS session_taints (session_id TEXT NOT NULL, "
+            "kind TEXT NOT NULL, fingerprint BLOB NOT NULL, "
+            "PRIMARY KEY (session_id, kind, fingerprint))"
+        )
+
+    @staticmethod
+    def _taint_hash(salt: bytes, kind: str, value: str) -> bytes:
+        return hashlib.sha256(
+            salt + kind.encode() + b"\0" + value.encode("utf-8", "surrogatepass")
+        ).digest()
+
+    def record_taints(
+        self, session_id: str, secrets: set[str], paths: set[str], *, truncated: bool = False
+    ) -> None:
+        session_id = self._id(session_id)
+        if not (secrets or paths or truncated):
+            return
+        with closing(self._connect()) as connection:
+            self._taint_tables(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT OR IGNORE INTO session_taint_salts (session_id, salt) VALUES (?, ?)",
+                (session_id, os.urandom(32)),
+            )
+            (salt,) = connection.execute(
+                "SELECT salt FROM session_taint_salts WHERE session_id=?", (session_id,)
+            ).fetchone()
+            records = {
+                (kind, self._taint_hash(salt, kind, value))
+                for kind, values in (("secret", secrets), ("path", paths))
+                for value in values
+            }
+            existing = set(
+                connection.execute(
+                    "SELECT kind, fingerprint FROM session_taints WHERE session_id=?", (session_id,)
+                )
+            )
+            pending = sorted(records - existing)
+            remaining = MAX_TAINTS_PER_SESSION - len(existing)
+            connection.executemany(
+                "INSERT INTO session_taints VALUES (?, ?, ?)",
+                ((session_id, kind, fingerprint) for kind, fingerprint in pending[:remaining]),
+            )
+            if truncated or len(pending) > remaining:
+                connection.execute(
+                    "UPDATE session_taint_salts SET overflow=1 WHERE session_id=?", (session_id,)
+                )
+            connection.commit()
+
+    def check_taints(self, session_id: str, candidates: set[str]) -> tuple[bool, bool, bool]:
+        session_id = self._id(session_id)
+        with closing(self._connect()) as connection:
+            self._taint_tables(connection)
+            connection.execute("BEGIN")
+            row = connection.execute(
+                "SELECT salt, overflow FROM session_taint_salts WHERE session_id=?", (session_id,)
+            ).fetchone()
+            if row is None:
+                return False, False, False
+            salt, overflow = row
+            fingerprints = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT fingerprint FROM session_taints WHERE session_id=? AND kind='secret'",
+                    (session_id,),
+                )
+            }
+            matched = bool(fingerprints) and any(
+                self._taint_hash(salt, "secret", value) in fingerprints for value in candidates
+            )
+            return True, matched, bool(overflow)
+
+    def check_integrity(self, session_id: str, scope: bytes, manifest: str) -> bool:
+        """Pin the first observed manifest atomically and leave it intact on drift."""
+        session_id = self._id(session_id)
+        with closing(self._connect()) as connection:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS session_integrity (session_id TEXT NOT NULL, "
+                "scope BLOB NOT NULL, manifest TEXT NOT NULL, PRIMARY KEY (session_id, scope))"
+            )
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT OR IGNORE INTO session_integrity VALUES (?, ?, ?)",
+                (session_id, scope, manifest),
+            )
+            (pinned,) = connection.execute(
+                "SELECT manifest FROM session_integrity WHERE session_id=? AND scope=?",
+                (session_id, scope),
+            ).fetchone()
+            connection.commit()
+            return pinned == manifest
 
     def status(self, session_id: str) -> dict[str, object]:
         session_id = self._id(session_id)

@@ -6,7 +6,16 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from .config import ReflexConfig
-from .models import Decision, DeterministicFinding, RiskChoice
+from .models import Decision, DeterministicFinding, EvaluationResult, RiskChoice
+
+GUARD_CHECKS = frozenset({"tamper_guard", "taint_exfiltration"})
+
+
+def host_guard_denied(result: EvaluationResult) -> bool:
+    return any(rule.startswith("agent_control:") for rule in result.triggered_rules) or any(
+        item.triggered and item.blocking and item.check in GUARD_CHECKS
+        for item in result.deterministic_findings
+    )
 
 
 @dataclass(frozen=True)

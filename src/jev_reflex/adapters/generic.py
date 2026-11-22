@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sys
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any, Literal, Protocol, TextIO
 
 from ..config import ReflexConfig
 from ..context import ContextProvider, RepositoryContextProvider
 from ..models import EvaluationContext, EvaluationResult, HookAuditCorrelation, ProposedAction
+from ..session_security import record_post_tool_use
 
 MAX_HOOK_CHARS = 1_048_576
 _SAFE_HOOK_TOOL = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
@@ -81,6 +84,61 @@ def _tool_call(payload: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
 
 
 _COMMAND_FIELDS = ("command", "CommandLine", "commandLine", "cmd", "script")
+
+
+def is_post_tool_use(payload: Mapping[str, Any]) -> bool:
+    event = _text(
+        payload,
+        "hook_event_name",
+        "hookEventName",
+        "hookName",
+        "hook_name",
+        "event",
+        "event_name",
+        "eventName",
+    )
+    return event.replace("_", "").replace("-", "").casefold() == "posttooluse"
+
+
+def ingest_post_tool_use(payload: Mapping[str, Any], config: ReflexConfig) -> None:
+    session_id = os.environ.get("JRX_SESSION_ID", "")
+    if not session_id or not config.session.track_secret_taint:
+        return
+    tool_name, arguments = _tool_call(payload)
+    if not tool_name:
+        raise ValueError("PostToolUse requires a tool name")
+    output = next(
+        (
+            payload[key]
+            for key in (
+                "tool_response",
+                "toolResponse",
+                "tool_output",
+                "toolOutput",
+                "output",
+                "result",
+            )
+            if key in payload
+        ),
+        None,
+    )
+    if payload.get("is_error") is True or (
+        isinstance(output, Mapping)
+        and (
+            output.get("is_error") is True
+            or output.get("isError") is True
+            or output.get("interrupted") is True
+            or output.get("exit_code", output.get("exitCode", 0)) not in (0, None)
+        )
+    ):
+        return
+    cwd = Path(_workspace_cwd(payload, arguments) or ".").resolve()
+    action = ProposedAction(
+        command=_text(arguments, *_COMMAND_FIELDS) or None, input=dict(arguments)
+    )
+    record_post_tool_use(
+        config, session_id, action=action, tool_name=tool_name, cwd=cwd, output=output
+    )
 
 
 def _workspace_cwd(payload: Mapping[str, Any], tool_input: Mapping[str, Any]) -> str:
@@ -253,12 +311,10 @@ def context_from_hook_payload(
         tool_name=tool_name,
         tool_input=tool_input,
     )
-    return context.model_copy(update={"hook_audit": correlation})
+    return context.model_copy(update={"hook_audit": correlation, "tool_name": tool_name})
 
 
 def _path_or_none(value: str) -> Any:
     if not value:
         return None
-    from pathlib import Path
-
     return Path(value)

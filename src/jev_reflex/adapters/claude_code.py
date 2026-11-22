@@ -9,6 +9,7 @@ from ..config import ReflexConfig
 from ..evaluator import DefaultEvaluator, DemoEvaluator
 from ..formatters import hook_context
 from ..models import EvaluationResult
+from ..policy import host_guard_denied
 from .generic import context_from_hook_payload
 
 
@@ -27,9 +28,7 @@ def claude_code_hook_response(result: EvaluationResult, config: ReflexConfig) ->
     output: dict[str, Any] = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
     specific = output["hookSpecificOutput"]
 
-    if config.mode == "advisory" and not any(
-        rule.startswith("agent_control:") for rule in result.triggered_rules
-    ):
+    if config.mode == "advisory" and not host_guard_denied(result):
         if result.decision != "ALLOW" or result.warnings:
             specific["additionalContext"] = reason
         return output if len(specific) > 1 else {}
@@ -69,6 +68,12 @@ def claude_code_settings_json(command: str = "jev-reflex claude-code-hook") -> d
                     "matcher": "Bash|Edit|Write|mcp__.*",
                     "hooks": [{"type": "command", "command": command, "timeout": 30}],
                 }
-            ]
+            ],
+            "PostToolUse": [
+                {
+                    "matcher": "Bash|Read|mcp__.*",
+                    "hooks": [{"type": "command", "command": command, "timeout": 30}],
+                }
+            ],
         }
     }

@@ -359,3 +359,52 @@ under advisory mode, ordinary approvals and `--yes`. Both require host protectio
 keys, state, configuration and identity/session assertions. They are implemented but
 autonomous host deployment remains experimental; they do not establish runtime
 confinement, perfect intent understanding or freshness against whole-store rollback.
+
+## Local control-file protection and session evidence
+
+Tier-0 recognizes explicit writes to agent instructions, hook settings, Git hooks,
+policy inputs, and user shell startup files. It inspects shell write targets,
+supported file-editing tools, and proposed patches. Read-only inspection of
+control files is allowed. An operator can add an exact path to
+`local_checks.protected_path_allowlist` in trusted policy. Relative exceptions
+are scoped to the repository root and other local checks still apply.
+
+The local evaluator also checks executable shell constructs, executable Git
+settings, and untrusted install sources. An operator can replace
+`local_checks.trusted_package_hosts` with exact approved HTTPS hostnames.
+Package-host exceptions apply to package sources. Piping a remote download to
+an interpreter still triggers a HOLD.
+
+These session controls are independent of the optional session call limits.
+
+```yaml
+session:
+  track_secret_taint: true
+  pin_protected_files: true
+```
+
+Set a distinct `JRX_SESSION_ID` in the trusted host environment for each session.
+Give the same environment and trusted policy to PreToolUse and PostToolUse.
+The Claude Code and Codex hook commands accept both event types, and their
+settings helpers include PostToolUse. A custom harness can pipe a compatible
+JSON event to `jrx post-tool-use --config /path/to/trusted-policy.yaml`.
+Without a host session ID, the two optional session checks are inactive.
+
+- **Secret taint** records salted SHA-256 fingerprints of credential values in
+  tool output and paths from recognized credential-file reads. The database
+  stores no raw values, paths, or tool output. In a tainted session, recognized
+  network actions and opaque shell execution block. A subsequent action also
+  blocks if a literal value matches a saved credential fingerprint, and that
+  action is withheld from semantic evaluation and public output. The store
+  keeps up to 256 fingerprints per session and fails closed on overflow.
+- **Integrity pinning** records SHA-256 file hashes on the first evaluation for
+  each session and repository. Later additions, removals, or content changes
+  in the protected set cause HOLD. Keep the host policy and session database
+  under host control, outside the agent's writable workspace. Signed policy
+  loading protects the settings that enable these checks. Operators should
+  establish a new session when they intentionally change pinned files.
+
+Control-file and taint HOLDs also block through advisory hooks and execution.
+These checks use bounded inspection of supported commands, payloads, and
+workspaces. Use OS-level egress enforcement when the host must restrict what
+arbitrary programs can send. [Execution sandbox](execution-sandbox.md)

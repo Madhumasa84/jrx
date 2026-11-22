@@ -39,6 +39,7 @@ from .models import (
     RiskInfo,
     SemanticSignals,
 )
+from .policy import GUARD_CHECKS
 from .policy import decide as deterministic_decide
 from .redaction import (
     REDACTED_SECRET,
@@ -47,6 +48,7 @@ from .redaction import (
     redact_text,
     redact_text_with_gitleaks,
 )
+from .session_security import private_action, security_findings
 
 JUDGMENT_NAMES = (
     "destructive",
@@ -447,19 +449,29 @@ def evaluate_context(
     if use_jev and config.stability_policy.mode == "majority" and samples < 2:
         raise ValueError("stability_policy majority requires at least two JEV samples")
     session_store = None
+    session_id = session_id if session_id is not None else os.environ.get("JRX_SESSION_ID", "")
     if config.session.enabled:
         from .session_limits import SessionStore
 
-        session_id = session_id if session_id is not None else os.environ.get("JRX_SESSION_ID", "")
         session_store = SessionStore(config.session)
         session_store.reserve(
             session_id, semantic=samples if use_jev else 0, tool_calls=session_tool_calls
         )
-    findings = run_deterministic_checks(context)
+    findings = run_deterministic_checks(context, config=config)
+    findings.extend(security_findings(context, config, session_id))
+    private = private_action(findings)
+    guarded = any(
+        finding.triggered and finding.blocking and finding.check in GUARD_CHECKS
+        for finding in findings
+    )
 
     # Use gitleaks-enhanced redaction
-    redacted_context, gitleaks_failed = _redacted_context_with_gitleaks(context)
-    safe_action = redact_text(redacted_context.proposed_action.display())
+    if private:
+        redacted_context, gitleaks_failed = None, False
+        safe_action = REDACTED_SECRET
+    else:
+        redacted_context, gitleaks_failed = _redacted_context_with_gitleaks(context)
+        safe_action = redact_text(redacted_context.proposed_action.display())
     warnings: list[str] = []
 
     if gitleaks_failed:
@@ -489,7 +501,7 @@ def evaluate_context(
         warnings.append("JEV disabled; only deterministic checks were evaluated.")
         samples = 1
         aggregation_used = None
-    elif skip_jev_on_hard and has_blocking_finding(findings):
+    elif guarded or (skip_jev_on_hard and has_blocking_finding(findings)):
         semantic = _zero_semantic(
             source="none",
             warning="JEV skipped because a deterministic hard rule already blocked the action.",
@@ -499,6 +511,7 @@ def evaluate_context(
         samples = 1
         aggregation_used = None
     else:
+        assert redacted_context is not None
         evaluator = semantic_evaluator or semantic_backend(config)
         semantic_samples = [evaluator.evaluate(redacted_context) for _ in range(samples)]
         semantic = aggregate_semantic_samples(semantic_samples, aggregation=aggregation)
@@ -631,9 +644,12 @@ def evaluate_context(
     if session_store is not None:
         assert session_id is not None
         if result.decision != "ALLOW" or result.degraded:
-            session_store.record_risky(
-                session_id, context.proposed_action.model_dump_json(exclude_none=True)
+            action = (
+                REDACTED_SECRET
+                if private
+                else context.proposed_action.model_dump_json(exclude_none=True)
             )
+            session_store.record_risky(session_id, action)
         session_store.reserve(session_id, semantic=0, tool_calls=0)
     return result
 

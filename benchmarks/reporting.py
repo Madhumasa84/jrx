@@ -21,6 +21,7 @@ def _gate_rates(report: dict) -> dict[str, Rate]:
     attack = metrics["attack"]
     return {
         "Hard FPR": metrics["benign"]["hard_fpr"],
+        "Friction Rate": metrics["benign"]["friction"],
         "Overall attack recall": attack["overall"]["intervention"],
         "OWASP ASI01–ASI06 recall": attack["owasp_asi"]["intervention"],
         "Bypass recall": attack["bypass_obfuscation"]["intervention"],
@@ -48,7 +49,7 @@ def regressions(report: dict, baseline: dict) -> list[str]:
         new = Fraction(value["count"], value["total"])
         if not 0 <= old <= 1:
             raise ValueError(f"invalid baseline rate for {name}")
-        regressed = new > old if name == "Hard FPR" else new < old
+        regressed = new > old if name in {"Hard FPR", "Friction Rate"} else new < old
         if regressed:
             failures.append(
                 f"{name} changed from {prior['count']}/{prior['total']} "
@@ -67,15 +68,66 @@ def _rate_cell(value: Rate) -> str:
     )
 
 
-def render_markdown(report: dict) -> str:
+def _comparison(report: dict, baseline: dict) -> list[str]:
+    left = baseline["evaluation"]["splits"]["eval"]
+    right = report["evaluation"]["splits"]["eval"]
+    names = (f"{_revision(baseline)} Baseline", _revision(report))
+    lines = [
+        "## Frozen eval holdout comparison",
+        "",
+        "Both revisions evaluated the same frozen cases. Recall is REVIEW or HOLD.",
+        "Individual rates include two-sided Wilson 95% intervals.",
+        "",
+        f"| Metric | {names[0]} | {names[1]} |",
+        "| --- | --- | --- |",
+        f"| Benign Hard FPR | {_rate_cell(left['benign']['hard_fpr'])} | {_rate_cell(right['benign']['hard_fpr'])} |",
+        f"| Benign Friction Rate | {_rate_cell(left['benign']['friction'])} | {_rate_cell(right['benign']['friction'])} |",
+    ]
+    old_rates, new_rates = _gate_rates(baseline), _gate_rates(report)
+    for label in (
+        "Overall attack recall",
+        "OWASP ASI01–ASI06 recall",
+        *(f"{category} recall" for category in ATTACK_LABELS),
+        "Bypass recall",
+    ):
+        lines.append(
+            f"| {label} | {_rate_cell(old_rates[label])} | {_rate_cell(new_rates[label])} |"
+        )
+    for label, mode in (("Warm in-process", "warm_in_process"), ("Cold CLI", "cold_cli")):
+        cells = []
+        for record in (baseline, report):
+            timing = record["latency"]
+            cells.append(
+                f"{timing[mode]['p50_ms']:.3f} / {timing[mode]['p95_ms']:.3f} ms"
+                if timing is not None
+                else "—"
+            )
+        lines.append(f"| {label} p50 / p95 | {cells[0]} | {cells[1]} |")
+    lines.append("")
+    for name, metrics in zip(names, (left, right), strict=True):
+        misses = ", ".join(
+            f"`{row['family']}` ({row['count']})" for row in metrics["issues"]["misses"][:3]
+        )
+        lines.extend([f"**{name} top missed families** — {misses or 'none'}.", ""])
+    return lines
+
+
+def _revision(report: dict) -> str:
+    if report.get("benchmark_revision") == "tier0-step3":
+        return "Step 3 Hardened Tier-0"
+    return f"v{report['environment']['jrx_version']}"
+
+
+def render_markdown(report: dict, baseline: dict | None = None) -> str:
     environment = report["environment"]
     metrics = report["evaluation"]["splits"]["eval"]
     benign, attack, issues = (metrics[name] for name in ("benign", "attack", "issues"))
     lines = [
-        f"# jrx v{environment['jrx_version']} deterministic benchmark",
+        f"# jrx {_revision(report)} deterministic benchmark",
         "",
-        "This baseline measures **Tier-0 deterministic rules only**, with no semantic model.",
+        "This benchmark measures **Tier-0 deterministic rules only**, with no semantic model.",
         "The benchmark covers single-step pre-execution classification of synthetic cases.",
+        "Session taint and integrity pinning are measured by the integration tests.",
         "The out-of-scope OWASP categories are **ASI07** (Insecure Inter-Agent Communication),",
         "**ASI08** (Cascading Failures), **ASI09** (Human-Agent Trust Exploitation), and",
         "**ASI10** (Rogue Agents).",
@@ -85,10 +137,11 @@ def render_markdown(report: dict) -> str:
         "Run from the repository root with jrx installed in the active Python environment.",
         "",
         "```sh",
-        "python -B benchmarks/run.py --backend deterministic --verify-hashes --out benchmarks/results/v0.2.0-deterministic.json --render-md benchmarks/RESULTS.md",
+        "python -B -m benchmarks.run --backend deterministic --verify-hashes --out benchmarks/results/v0.2.0-step3-deterministic.json --render-md benchmarks/RESULTS.md --baseline benchmarks/results/v0.2.0-deterministic.json",
         "```",
         "",
-        "## Eval holdout headline results",
+        *(_comparison(report, baseline) if baseline is not None else []),
+        "## Current eval holdout details",
         "",
         "Rates show the observed fraction and its two-sided Wilson 95% confidence interval.",
         "Attack recall is the intervention rate (REVIEW or HOLD). Strict block counts HOLD only.",

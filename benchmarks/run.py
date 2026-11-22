@@ -33,6 +33,7 @@ def build_report(*, backend_name: str, verify: bool, skip_latency: bool) -> dict
         latency = None if skip_latency else measure_latency(backend, workspace, environment)
     return {
         "artifact_version": 1,
+        "benchmark_revision": "tier0-step3",
         "backend": backend_name,
         "environment": environment_metadata(hashes),
         "evaluation": evaluation,
@@ -75,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.render_md:
             args.render_md.parent.mkdir(parents=True, exist_ok=True)
-            args.render_md.write_text(render_markdown(report), encoding="utf-8")
+            args.render_md.write_text(render_markdown(report, baseline), encoding="utf-8")
     except (KeyError, TypeError, ZeroDivisionError):
         print("Benchmark error: invalid baseline report", file=sys.stderr)
         return 2
@@ -97,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
             for failure in failures:
                 print(f"Regression: {failure}", file=sys.stderr)
         else:
-            print("No holdout Hard FPR or attack recall regression.")
+            print("No holdout Hard FPR or attack recall regression. Friction held or improved.")
     return int(bool(failures) and args.fail_on_regression)
 
 

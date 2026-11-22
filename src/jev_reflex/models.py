@@ -83,6 +83,8 @@ class EvaluationContext(BaseModel):
     proposed_action: ProposedAction
     changed_files: list[str] = Field(default_factory=list)
     git_diff: str = ""
+    proposed_diff: bool = Field(default=False, exclude=True)
+    tool_name: str = Field(default="", exclude=True)
     test_results: str = ""
     recent_context: str = ""
     external_content: str = ""

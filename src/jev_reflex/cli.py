@@ -28,7 +28,12 @@ from .adapters.claude_code import (
 from .adapters.codex import _hook_error as codex_hook_error
 from .adapters.codex import evaluate_codex_hook
 from .adapters.deepseek import deepseek_hook_error, evaluate_deepseek_hook
-from .adapters.generic import context_from_hook_payload, read_hook_payload
+from .adapters.generic import (
+    context_from_hook_payload,
+    ingest_post_tool_use,
+    is_post_tool_use,
+    read_hook_payload,
+)
 from .adapters.openrouter import evaluate_openrouter_hook, openrouter_hook_error
 from .adapters.pi import evaluate_pi_hook, pi_hook_error
 from .agent_cli import authority_app, intent_app
@@ -44,7 +49,7 @@ from .harness_cli import app as harness_app
 from .identity import resolve_approver
 from .logging_config import log_structured
 from .models import EvaluationContext, EvaluationResult, ProposedAction
-from .policy import execution_allowed
+from .policy import execution_allowed, host_guard_denied
 from .sandbox import (
     build_sandbox_command,
     prepare_sandbox_egress,
@@ -348,6 +353,8 @@ def _emit_result(result: EvaluationResult, *, json_output: bool) -> None:
 
 
 def _check_exit_code(result: EvaluationResult, config: ReflexConfig) -> int:
+    if host_guard_denied(result):
+        return 2
     if config.mode == "review" and result.decision != "ALLOW":
         return 2
     if config.mode == "enforce" and (result.decision == "HOLD" or result.degraded):
@@ -712,7 +719,7 @@ def exec_action(
         raise typer.Exit(code=2) from None
 
     _emit_result(result, json_output=json_output)
-    if any(rule.startswith("agent_control:") for rule in result.triggered_rules):
+    if host_guard_denied(result):
         typer.echo("Execution blocked by host agent controls.", err=True)
         raise typer.Exit(code=2)
     if result.degraded and loaded.mode != "advisory":
@@ -1161,8 +1168,10 @@ def _antigravity_hook_workspace(payload: dict[str, Any]) -> Path:
 
 
 def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool) -> None:
+    post = False
     try:
         payload = read_hook_payload()
+        post = is_post_tool_use(payload)
         hook_cwd = payload.get("cwd")
         selected_config = config_path
         if kind == "antigravity":
@@ -1179,6 +1188,10 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
             mode,
             Path(hook_cwd) if isinstance(hook_cwd, str) and hook_cwd else None,
         )
+        if post:
+            ingest_post_tool_use(payload, loaded)
+            typer.echo("{}")
+            return
         if loaded.access is not None:
             if demo or mode is not None:
                 raise AccessDenied("Enterprise hooks require normal evaluation")
@@ -1202,6 +1215,9 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
             _result, output = evaluate_deepseek_hook(payload, config=loaded, demo=demo)
         if any(rule.startswith("agent_control:") for rule in _result.triggered_rules):
             raise AccessDenied("Host agent control denied this action")
+        if host_guard_denied(_result):
+            typer.echo(json.dumps(output, separators=(",", ":")))
+            return
         if loaded.access is not None:
             if verified_identity(loaded.access) != identity:
                 raise AccessDenied("Identity changed during evaluation")
@@ -1229,6 +1245,9 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
                 else:
                     output = {}
     except Exception:
+        if post:
+            typer.echo("PostToolUse evidence could not be recorded.", err=True)
+            raise typer.Exit(code=2) from None
         # Hook hosts differ in how they treat non-zero hook exits. A valid deny response
         # is the most portable fail-safe for malformed input/configuration.
         output = {
@@ -1240,6 +1259,19 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
             "deepseek": deepseek_hook_error,
         }[kind]()
     typer.echo(json.dumps(output, separators=(",", ":")))
+
+
+@app.command("post-tool-use")
+def post_tool_use(
+    config: Path | None = typer.Option(None, "--config", help="Path to reflex.yaml."),
+) -> None:
+    """Read a PostToolUse JSON event from stdin and record session credential evidence."""
+    try:
+        payload = read_hook_payload()
+        ingest_post_tool_use(payload, _load(config, None))
+    except (OSError, ValueError, RuntimeError, sqlite3.Error):
+        typer.echo("PostToolUse evidence could not be recorded.", err=True)
+        raise typer.Exit(code=2) from None
 
 
 @app.command("codex-hook")

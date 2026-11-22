@@ -9,6 +9,7 @@ from ..config import ReflexConfig
 from ..evaluator import DefaultEvaluator, DemoEvaluator
 from ..formatters import hook_context
 from ..models import EvaluationResult
+from ..policy import host_guard_denied
 from .generic import context_from_hook_payload
 
 
@@ -30,7 +31,7 @@ def evaluate_harness_hook(
 def should_block(result: EvaluationResult, config: ReflexConfig, *, review_supported: bool) -> bool:
     """Apply the configured execution mode to a harness that can block calls."""
 
-    if any(rule.startswith("agent_control:") for rule in result.triggered_rules):
+    if host_guard_denied(result):
         return True
     if config.mode == "advisory":
         return False
@@ -42,7 +43,7 @@ def should_block(result: EvaluationResult, config: ReflexConfig, *, review_suppo
 def permission_decision(result: EvaluationResult, config: ReflexConfig) -> str:
     """Map the public policy result to a host with allow/ask/deny controls."""
 
-    if any(rule.startswith("agent_control:") for rule in result.triggered_rules):
+    if host_guard_denied(result):
         return "deny"
     if config.mode == "advisory":
         return "allow"

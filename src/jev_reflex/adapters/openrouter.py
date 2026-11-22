@@ -7,6 +7,7 @@ from typing import Any
 
 from ..config import ReflexConfig
 from ..models import EvaluationResult
+from ..policy import host_guard_denied
 from .harness import (
     evaluate_harness_hook,
     hook_error_reason,
@@ -38,9 +39,7 @@ def openrouter_hook_response(
     """Map policy output to OpenRouter's pre-tool and approval hook results."""
 
     message = reason or result.reason_summary()
-    if config.mode == "advisory" and not any(
-        rule.startswith("agent_control:") for rule in result.triggered_rules
-    ):
+    if config.mode == "advisory" and not host_guard_denied(result):
         return {}
     if _is_permission_request(event):
         decision = permission_decision(result, config)

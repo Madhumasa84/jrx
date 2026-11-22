@@ -7,7 +7,7 @@ import shlex
 from pathlib import Path
 
 from .agent_state import ControlError, digest
-from .checks.repo_boundary import _input_paths
+from .checks.repo_boundary import input_paths
 from .config import ReflexConfig
 from .models import EvaluationContext
 
@@ -19,7 +19,7 @@ def describe_action(
     if len(action.model_dump_json()) > 262144:
         raise ControlError("action exceeds control size limit")
     classes: set[str] = {"unknown"}
-    resources = _input_paths(action.input)
+    resources = input_paths(action.input)
     if action.type.startswith("mcp:") and config is not None:
         for rule in config.mcp.tools:
             if action.type == f"mcp:{rule.server}.{rule.name}":

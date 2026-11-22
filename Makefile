@@ -16,4 +16,4 @@ format:
 	$(PYTHON) -m ruff format .
 
 bench-deterministic:
-	$(PYTHON) -B benchmarks/run.py --backend deterministic --verify-hashes --skip-latency --baseline benchmarks/results/v0.2.0-deterministic.json --fail-on-regression
+	$(PYTHON) -B benchmarks/run.py --backend deterministic --verify-hashes --skip-latency --baseline benchmarks/results/v0.2.0-step3-deterministic.json --fail-on-regression
