@@ -51,6 +51,11 @@ def display(value: dict, json_output: bool = False) -> None:
             typer.echo("Transport: unix socket")
             typer.echo(f"Socket: {value['socket']}")
         typer.echo("JEV: " + ("configured" if value["jev_configured"] else "not configured"))
+        if local := value.get("local_evaluator"):
+            state = "warm" if local["warm"] else "not warm"
+            typer.echo(f"Local evaluator: {local['model_id']} ({state})")
+            if warning := local.get("warning"):
+                typer.echo(warning, err=True)
         if value.get("pid"):
             typer.echo(f"PID: {value['pid']}")
 

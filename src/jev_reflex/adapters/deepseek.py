@@ -12,8 +12,7 @@ from typing import Any
 
 from ..config import ReflexConfig
 from ..models import EvaluationResult
-from ..policy import host_guard_denied
-from .harness import evaluate_harness_hook, hook_error_reason
+from .harness import evaluate_harness_hook, hook_error_reason, should_block
 
 
 def deepseek_hook_response(
@@ -25,15 +24,7 @@ def deepseek_hook_response(
     """Map policy output to the Codex-compatible DeepSeek bridge contract."""
 
     message = reason or result.reason_summary()
-    should_block = result.decision == "HOLD" or (result.degraded and config.mode != "advisory")
-    if config.mode == "review" and result.decision == "REVIEW":
-        should_block = True
-    if config.mode == "advisory":
-        should_block = False
-    if host_guard_denied(result):
-        should_block = True
-
-    if should_block:
+    if should_block(result, config, review_supported=config.mode == "enforce"):
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",

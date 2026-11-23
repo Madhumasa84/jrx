@@ -45,13 +45,16 @@ from .state import (
 from .streaming import NormalizedEvent, sanitize_terminal_text
 
 
-def _load_workspace_config(workspace: Path, config_path: Path | None = None) -> ReflexConfig:
+def _load_workspace_config(
+    workspace: Path, config_path: Path | None = None, *, validate_production: bool = True
+) -> ReflexConfig:
     try:
         selected_path = config_path or workspace / "reflex.yaml"
         return load_config(
             selected_path,
             scope=str(workspace),
             default_if_missing=config_path is None,
+            validate_production=validate_production,
         )
     except (OSError, RuntimeError, ValueError):
         raise WorkspaceError(
@@ -83,8 +86,11 @@ def doctor_report(
     include_models: bool = False,
     json_output: bool = False,
 ) -> str:
+    from ..production import production_issues
+
     root = validate_workspace(workspace)
-    config = _load_workspace_config(root, config_path)
+    config = _load_workspace_config(root, config_path, validate_production=False)
+    missing_controls = production_issues(config)
     providers = detect_providers(root)
     if provider_filter is not None:
         providers = tuple(status for status in providers if status.provider.key == provider_filter)
@@ -127,6 +133,7 @@ def doctor_report(
         "workspace": str(root),
         "jev": _jev_status(config),
         "policy_mode": config.mode,
+        "production_policy": {"valid": not missing_controls, "issues": missing_controls},
         "enforced_provider_launch_available": False,
         "enforced_provider_launch_reason": (
             "No real-provider shell and file-edit denial smoke has been recorded for these CLI versions."
@@ -138,10 +145,13 @@ def doctor_report(
     }
     if json_output:
         return json.dumps(report, ensure_ascii=True, indent=2, sort_keys=True)
+    production_status = "passes" if not missing_controls else "needs configuration"
     lines = [
         f"Workspace: {root}",
         f"JEV: {_jev_status(config)}",
         f"Policy mode: {config.mode}",
+        f"Production policy: {production_status}",
+        *(f"  {issue['path']}: {issue['message']}" for issue in missing_controls),
         "Enforcement: non-advisory launches are blocked until real provider shell and file-edit denial checks pass.",
         "",
     ]

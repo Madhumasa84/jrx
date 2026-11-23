@@ -3,7 +3,7 @@
 image:
   repository: ghcr.io/madhumasa84/jrx-broker
   pullPolicy: IfNotPresent
-  tag: ""  # Overrides the image tag whose default is the chart appVersion
+  tag: ""  # Falls back to Chart.yaml appVersion (0.3.0 for this chart)
 
 imagePullSecrets: []
 nameOverride: ""

@@ -446,8 +446,11 @@ class MCPGateway:
             SessionStore(self.config.session).reserve(self.session_id, semantic=0, tool_calls=0)
         if result.degraded or result.decision != "ALLOW":
             return f"MCP tool blocked: {result.decision}", None
-        if rule.effect == "write" and result.semantic_source not in {"jev", "broker/live"}:
-            return "MCP write tool requires a live semantic decision", None
+        if rule.effect == "write":
+            hosted = result.semantic_source in {"jev", "broker/live"}
+            inferred_locally = result.semantic_source == "local" and bool(result.signals)
+            if not (hosted or inferred_locally):
+                return "MCP write tool requires a live semantic decision", None
         return None, approval_scope
 
     def _review_tool_call(self, request_id: object, raw: bytes) -> str:
@@ -606,7 +609,7 @@ class MCPGateway:
             binding = mcp_action_binding(self.config, scope.repository, environment, scope.summary)
             store = ApprovalStore(access)
             if self.approval_id is not None:
-                store.consume(self.approval_id, scope.identity, binding)
+                store.consume(self.approval_id, scope.identity, binding, config=self.config)
                 if self.config.session.enabled:
                     SessionStore(self.config.session).reserve(
                         self.session_id, semantic=0, tool_calls=0
@@ -634,7 +637,7 @@ class MCPGateway:
         return False
 
     def run(self) -> int:
-        child_env = sanitized_child_env()
+        child_env = sanitized_child_env(strict=self.config.strict_review_required)
         with subprocess.Popen(
             self.command,
             stdin=subprocess.PIPE,

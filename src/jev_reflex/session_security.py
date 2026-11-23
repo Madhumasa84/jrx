@@ -49,6 +49,7 @@ _MAX_SCAN_ENTRIES = 100_000
 _SKIP_DIRECTORIES = {".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache"}
 _PRIVATE_REASONS = {
     "RECORDED_SECRET_MATCH",
+    "TAINTED_SESSION_EXECUTION",
     "SESSION_TAINT_STATE_UNAVAILABLE",
     "SESSION_TAINT_CAPACITY",
 }
@@ -244,9 +245,16 @@ def security_findings(
             elif overflow:
                 findings.append(_taint_finding("SESSION_TAINT_CAPACITY"))
             elif tainted:
-                plan = inspect(context.proposed_action)
+                action = context.proposed_action
+                plan = inspect(action)
                 if plan.opaque or any(egress(command) for command in plan.commands):
                     findings.append(_taint_finding("TAINTED_SESSION_EGRESS"))
+                elif config.profile == "production" and (
+                    plan.commands or action.type == "tool_call" or action.type.startswith("mcp:")
+                ):
+                    # The behavior of an arbitrary executable or tool cannot be
+                    # inferred from its arguments after a credential exposure.
+                    findings.append(_taint_finding("TAINTED_SESSION_EXECUTION"))
         except (OSError, RuntimeError, ValueError, sqlite3.Error):
             findings.append(_taint_finding("SESSION_TAINT_STATE_UNAVAILABLE"))
     if config.session.pin_protected_files:

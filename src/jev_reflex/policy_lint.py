@@ -8,8 +8,8 @@ from typing import Any, get_args
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from .config import ReflexConfig
-from .evaluator import JUDGMENT_NAMES, PUBLIC_SIGNAL_ALIASES
+from .config import PolicyProfile, ReflexConfig, known_semantic_rules
+from .production import production_issues
 from .serialization import MAX_CONFIG_BYTES, read_config_bytes
 
 
@@ -89,30 +89,36 @@ def _model_type(annotation: Any) -> type[BaseModel] | None:
     return None
 
 
-def _unknown_fields(value: Any, model: type[BaseModel], path: str, issues: list) -> None:
+def _unknown_fields(
+    value: Any, model: type[BaseModel], path: str, issues: list, *, omit_keys: bool
+) -> None:
     if not isinstance(value, dict):
         return
     for name, child in value.items():
-        location = f"{path}.{name}" if path else str(name)
         if name not in model.model_fields:
+            label = "<unknown>" if omit_keys else str(name)
+            location = f"{path}.{label}" if path else label
             issues.append(
                 _issue("error", "unknown_field", location, "Unknown configuration field.")
             )
             continue
+        location = f"{path}.{name}" if path else str(name)
         nested = _model_type(model.model_fields[name].annotation)
         if nested is not None:
             if isinstance(child, list):
                 for index, item in enumerate(child):
-                    _unknown_fields(item, nested, f"{location}[{index}]", issues)
+                    _unknown_fields(
+                        item, nested, f"{location}[{index}]", issues, omit_keys=omit_keys
+                    )
             else:
-                _unknown_fields(child, nested, location, issues)
+                _unknown_fields(child, nested, location, issues, omit_keys=omit_keys)
 
 
 def _issue(severity: str, code: str, path: str, message: str) -> dict[str, str]:
     return {"severity": severity, "code": code, "path": path, "message": message}
 
 
-def lint_policy(path: Path | bytes) -> dict[str, Any]:
+def lint_policy(path: Path | bytes, *, profile: PolicyProfile = "standard") -> dict[str, Any]:
     """Check the literal candidate file; never fetch policies, keys, or credentials."""
     issues: list[dict[str, str]] = []
     config = None
@@ -129,13 +135,20 @@ def lint_policy(path: Path | bytes) -> dict[str, Any]:
             data = {}
         if not isinstance(data, dict):
             raise ValueError("Policy root must be a YAML mapping.")
-        _unknown_fields(data, ReflexConfig, "", issues)
+        production = profile == "production" or data.get("profile") == "production"
+        _unknown_fields(data, ReflexConfig, "", issues, omit_keys=production)
         try:
             config = ReflexConfig.model_validate(data)
         except ValidationError as exc:
             for error in exc.errors(include_input=False, include_context=False):
-                location = ".".join(str(part) for part in error["loc"])
-                if error["type"] != "extra_forbidden":
+                parts = error["loc"]
+                if production and parts[:1] == ("rule_modes",):
+                    parts = parts[:1]
+                location = ".".join(str(part) for part in parts)
+                issue_type = error["type"]
+                if issue_type in {"unknown_rule", "host_guard_mode"}:
+                    issues.append(_issue("error", issue_type, location, error["msg"]))
+                elif issue_type != "extra_forbidden":
                     issues.append(
                         _issue(
                             "error",
@@ -156,7 +169,18 @@ def lint_policy(path: Path | bytes) -> dict[str, Any]:
         issues.append(_issue("error", "invalid_structure", "", str(exc)))
 
     if config is not None:
-        known_signals = set(JUDGMENT_NAMES) | set(PUBLIC_SIGNAL_ALIASES) | {"wrong_repo"}
+        if production:
+            issues.extend(production_issues(config))
+            if config.profile == "standard":
+                issues.append(
+                    _issue(
+                        "warning",
+                        "production_profile_inactive",
+                        "profile",
+                        "Set profile: production to activate production validation at runtime.",
+                    )
+                )
+        known_signals = known_semantic_rules(config.evaluator)
         for field in ("hold_on", "review_on"):
             rules = getattr(config, field)
             for index, rule in enumerate(rules):

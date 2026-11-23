@@ -11,6 +11,7 @@ from ..formatters import hook_context
 from ..models import EvaluationResult
 from ..policy import host_guard_denied
 from .generic import context_from_hook_payload
+from .harness import should_block
 
 
 def _hook_error() -> dict[str, Any]:
@@ -33,10 +34,7 @@ def claude_code_hook_response(result: EvaluationResult, config: ReflexConfig) ->
             specific["additionalContext"] = reason
         return output if len(specific) > 1 else {}
 
-    if result.decision == "HOLD":
-        specific["permissionDecision"] = "deny"
-        specific["permissionDecisionReason"] = reason
-    elif result.degraded:
+    if should_block(result, config, review_supported=True):
         specific["permissionDecision"] = "deny"
         specific["permissionDecisionReason"] = reason
     elif result.decision == "REVIEW":

@@ -1,9 +1,9 @@
-# Offline deterministic benchmark
+# Offline benchmark
 
-The [v0.2.0 vs. Step 3 comparison](RESULTS.md) measures **Tier-0 deterministic rules only**,
-with no semantic model. The runner evaluates synthetic proposals before
-execution. It requires zero API calls or API keys, invokes no proposed command,
-and connects to no MCP server.
+The runner evaluates synthetic proposals using Tier-0 deterministic rules, local
+CPU ONNX, or local CPU ONNX through a warm Unix broker. After model setup each
+backend runs offline without an API key. Proposed actions remain inputs to the
+evaluator. [Frozen holdout comparison](RESULTS.md)
 
 ## Reproduce
 
@@ -11,8 +11,21 @@ From the repository root, use Python 3.11 or later with jrx already installed
 in that Python environment. The full latency run uses the jrx console script
 on Linux or macOS and requires default system bootstrap settings.
 
-```sh
-python -B -m benchmarks.run --backend deterministic --verify-hashes --out benchmarks/results/v0.2.0-step3-deterministic.json --render-md benchmarks/RESULTS.md --baseline benchmarks/results/v0.2.0-deterministic.json
+```bash
+output_dir=$(mktemp -d)
+python -B -m benchmarks.run --backend deterministic --verify-hashes \
+  --out "$output_dir/step3-deterministic.json" \
+  --render-md "$output_dir/step3-deterministic.md" \
+  --baseline benchmarks/results/v0.2.0-deterministic.json
+```
+
+Install `jev-reflex[local]` and run `jrx model pull` before the local run.
+Use `local-broker` as the backend and a separate output filename to measure
+the warm Unix broker. [Local ONNX results](RESULTS.md)
+
+```bash
+python -B -m benchmarks.run --backend local --verify-hashes \
+  --out "$output_dir/local-onnx.json" --render-md "$output_dir/local-onnx.md"
 ```
 
 Use the CI command for a decision-only comparison that skips latency.
@@ -88,11 +101,11 @@ single-step pre-execution micro-benchmarks.
 - **Latency** measures ten warm-ups and 100 timed iterations per mode on
   `git status` in an empty temporary workspace. Warm timing includes the
   public evaluator on prebuilt context. Cold timing includes startup, CLI
-  context collection, and formatting through
-  `jrx check --no-jev --command "git status"`. Percentiles use nearest ranks.
+  context collection, and formatting through `jrx check`. The deterministic
+  backend uses `--no-jev`. Percentiles use nearest ranks.
   Peak RSS is the OS process high-water mark, reported in MiB. It includes
   warm-ups and, for the warm run, runner imports and dataset loading. Timing
   and memory will vary across machines.
 
 Reports export allowlisted environment fields, dataset hashes, case IDs,
-decisions, and aggregate statistics. [Raw v0.2.0 data](results/v0.2.0-deterministic.json) · [Raw Step 3 data](results/v0.2.0-step3-deterministic.json)
+decisions, and aggregate statistics. [Raw v0.2.0 data](results/v0.2.0-deterministic.json) · [Raw Step 3 data](results/v0.2.0-step3-deterministic.json) · [Raw v0.3.0 local ONNX data](results/v0.3.0-local-coba68m.json)

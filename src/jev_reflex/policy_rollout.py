@@ -33,19 +33,39 @@ def simulate(
     """Replay policy decisions over recorded findings, not original actions."""
     # Audit records cannot reconstruct raw commands, context, semantic samples,
     # or enforcement side effects. Only the pure decision inputs may change.
-    replayable = {"mode", "thresholds", "hold_on", "review_on", "stability", "stability_policy"}
+    replayable = {
+        "mode",
+        "thresholds",
+        "hold_on",
+        "review_on",
+        "rule_modes",
+        "stability",
+        "stability_policy",
+    }
     baseline_data = baseline.model_dump(mode="json")
     candidate_data = candidate.model_dump(mode="json")
     unsupported = sorted(
         name
-        for name in baseline_data
-        if name not in replayable and baseline_data[name] != candidate_data[name]
+        for name in baseline_data.keys() | candidate_data.keys()
+        if name not in replayable and baseline_data.get(name) != candidate_data.get(name)
     )
     if baseline.stability_policy.mode != candidate.stability_policy.mode and "majority" in {
         baseline.stability_policy.mode,
         candidate.stability_policy.mode,
     }:
         unsupported.append("stability_policy.majority")
+    if baseline.evaluator.provider == candidate.evaluator.provider != "jev":
+        from .local_evaluator import active_local_signals, requires_hybrid_resolution
+
+        baseline_signals = active_local_signals(baseline)
+        if baseline_signals != active_local_signals(candidate):
+            unsupported.append("evaluator.active_signals")
+        elif baseline.evaluator.provider == "hybrid" and any(
+            requires_hybrid_resolution(name, baseline)
+            != requires_hybrid_resolution(name, candidate)
+            for name in baseline_signals
+        ):
+            unsupported.append("evaluator.hybrid_fallback_signals")
     if unsupported:
         raise ValueError("cannot replay configuration changes: " + ", ".join(unsupported))
     public_key = AuditLog.verification_key(baseline, public_key)

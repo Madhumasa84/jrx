@@ -17,8 +17,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 
+from .audit import AuditLog, AuditWriteError
 from .config import AccessConfig, ReflexConfig
+from .context import sanitized_child_env
 from .git_inspection import inspect_git, status_paths
+from .logging_config import log_structured
 from .redaction import redact_text
 
 
@@ -189,6 +192,8 @@ def action_binding(
         "environment": environment,
         "policy": config.model_dump(mode="json"),
     }
+    if config.mode == "enforce" and config.strict_review_required:
+        payload["child_environment"] = sanitized_child_env(strict=True)
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return str(root), hashlib.sha256(canonical).hexdigest()
 
@@ -335,11 +340,20 @@ class ApprovalStore:
             ).fetchone()[0]
         return count, required
 
-    def consume(self, approval_id: str, identity: Identity, binding: str) -> None:
+    def consume(
+        self,
+        approval_id: str,
+        identity: Identity,
+        binding: str,
+        *,
+        config: ReflexConfig | None = None,
+        original_decision: str = "REVIEW",
+    ) -> None:
         with closing(self._connect()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT requester, binding, expires, required, consumed FROM approvals WHERE id=?",
+                "SELECT requester, binding, expires, required, consumed, summary "
+                "FROM approvals WHERE id=?",
                 (approval_id,),
             ).fetchone()
             if row is None or row[0] != identity.subject or row[1] != binding:
@@ -352,3 +366,21 @@ class ApprovalStore:
             if count < row[3]:
                 raise AccessDenied("Approval is still waiting for reviewers")
             connection.execute("UPDATE approvals SET consumed=1 WHERE id=?", (approval_id,))
+            if config is not None and (config.audit.enabled or config.audit_required):
+                try:
+                    AuditLog(config).write_human_override(
+                        identity=identity.subject,
+                        original_decision=original_decision,
+                        action_summary=row[5],
+                        justification=(
+                            config.policy.hold_override_exception or ""
+                            if original_decision == "HOLD"
+                            else ""
+                        ),
+                        approval_id=approval_id,
+                    )
+                except (OSError, RuntimeError, ValueError, TypeError):
+                    if config.audit_required:
+                        # Roll back consumption while still holding the database write lock.
+                        raise AuditWriteError("Required approval audit write failed") from None
+                    log_structured(level="ERROR", event="approval_audit_write_failed", fields={})

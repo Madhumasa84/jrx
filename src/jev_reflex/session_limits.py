@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .config import SessionLimitsConfig
 
+SEMANTIC_SPEND_TOLERANCE = 1e-9
 MAX_SESSION_OFFSET = 2**63 - 1
 MAX_TAINTS_PER_SESSION = 256
 
@@ -95,7 +96,7 @@ class SessionStore:
             if evaluations + semantic > self.config.max_semantic_evaluations:
                 raise SessionLimitError("session semantic-evaluation limit reached")
             next_spend = spent + semantic * self.config.reserved_cost_per_evaluation_usd
-            if next_spend > self.config.max_semantic_spend_usd + 1e-9:
+            if next_spend > self.config.max_semantic_spend_usd + SEMANTIC_SPEND_TOLERANCE:
                 raise SessionLimitError("session semantic-spend reservation limit reached")
             connection.execute(
                 "UPDATE sessions SET calls=?, semantic=?, reserved_usd=? WHERE id=?",
@@ -264,7 +265,7 @@ class SessionStore:
             reasons.append("semantic_evaluations_exhausted")
         if (
             row[4] + self.config.reserved_cost_per_evaluation_usd
-            > self.config.max_semantic_spend_usd + 1e-9
+            > self.config.max_semantic_spend_usd + SEMANTIC_SPEND_TOLERANCE
         ):
             reasons.append("semantic_spend_insufficient")
         state = (
@@ -303,7 +304,7 @@ class SessionStore:
                 )
             )
             and row[3] <= self.config.max_semantic_evaluations
-            and row[4] <= self.config.max_semantic_spend_usd + 1e-9,
+            and row[4] <= self.config.max_semantic_spend_usd + SEMANTIC_SPEND_TOLERANCE,
             "can_reserve_one_semantic_evaluation": not any(
                 reason in reasons
                 for reason in (
@@ -349,7 +350,7 @@ class SessionStore:
                     self.config.max_tool_calls,
                     self.config.max_semantic_evaluations,
                     self.config.reserved_cost_per_evaluation_usd,
-                    self.config.max_semantic_spend_usd + 1e-9,
+                    self.config.max_semantic_spend_usd + SEMANTIC_SPEND_TOLERANCE,
                     limit,
                     offset,
                 ),

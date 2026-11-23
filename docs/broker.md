@@ -20,8 +20,50 @@ multiple machines.
 
 ## Start and configure
 
+### Local CPU ONNX
+
+Install `jev-reflex[local]` in the broker host environment. Save this policy as
+`reflex.local-broker.yaml` and use the same policy for the host runner and the
+broker.
+
+```yaml
+mode: enforce
+evaluator:
+  provider: local
+jev:
+  transport: broker
+```
+
+```bash
+jrx model pull --config reflex.local-broker.yaml
+jrx model verify --config reflex.local-broker.yaml
+env -u TYPESAFE_API_KEY jrx broker start --config reflex.local-broker.yaml
+jrx broker status --config reflex.local-broker.yaml --json
+jrx check --config reflex.local-broker.yaml --command "git status"
+```
+
+The broker warms the model at startup and reports its SHA-256 digest and warm
+status. The digest identifies the inference bundle, including its graph,
+tokenizer, calibration, and decision metadata. If loading fails, the broker
+retries on later evaluations with bounded backoff. For mTLS, use
+`jev.transport: broker-tls` with the TLS settings below
+and keep the same `evaluator.provider: local` on both sides. The published
+core GHCR image and default Helm deployment use hosted JEV. Host an ONNX
+broker in an environment with the local extra and verified model cache.
+
+`jrx model pull` verifies and load-checks each replacement before publishing
+it. New snapshots use a version 2 manifest so only readers that take snapshot
+locks can use them. The current CLI can still read version 1 caches. Legacy
+snapshots are retained during cleanup. An older CLI needs its own cache or a
+fresh pull when rolling back from version 2.
+
+Keep the broker endpoint and credentials inside the trusted runner boundary
+for production deployments. [Controlled Linux Agent Runner](security.md#controlled-linux-agent-runner)
+
+### Hosted TypeSafe JEV
+
 In a trusted host terminal, supply `TYPESAFE_API_KEY` through your normal secret
-manager or shell environment, then run:
+manager or shell environment. With `evaluator.provider: jev` (the default), run:
 
 ```sh
 jrx broker run
@@ -58,7 +100,7 @@ jev:
 Set the hook command to `jev-reflex codex-hook --config /absolute/path/reflex.yaml`.
 An example is in `examples/reflex.broker.yaml`. The standalone default remains
 `direct` for compatibility; configured hooks select `broker` with no direct
-fallback. `--demo` and `--no-jev` continue to work without a broker.
+fallback. Use `--demo` and `--no-jev` for previews with the standard profile.
 
 ```sh
 env -u TYPESAFE_API_KEY jrx check --transport broker --command 'python migrate.py'
@@ -217,7 +259,7 @@ jev:
 This pattern provides HA without complex clustering, leveraging the broker's
 stateless design and independent policy synchronization.
 
-## Version 1 wire contract
+## Wire contract
 
 One UTF-8 JSON object followed by a newline per connection. Requests and responses
 are limited to 262,144 bytes including the newline. Request IDs contain 1–64 ASCII
@@ -230,6 +272,11 @@ letters, digits, underscores or hyphens. Unknown protocol versions are rejected.
 `operation` defaults to `evaluate`. Context fields follow `EvaluationContext`
 without `proposed_action`; the top-level `action` supplies it. Optional context
 fields include `repository_root`, `recent_context` and `external_content`.
+
+Hosted and local-only requests use protocol version 1. Hybrid evaluation uses
+version 2 and sends both uncertainty bounds. The broker verifies the bounds
+before scoring. Upgrade both ends for hybrid evaluations. Mixed hybrid results
+identify each contributing provider and model in the response.
 
 Successful evaluation returns primitive semantic data, not an enforcement decision:
 

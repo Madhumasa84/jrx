@@ -20,7 +20,13 @@ from .policy import PolicyDecision
 from .redaction import redact_obj
 from .signing import CosignSigner, Ed25519Signer, Signer
 
+_PROVENANCE_FIELDS = ("source", "model_digest", "decision_id", "semantic_contributors")
+
 GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000"
+
+
+class AuditWriteError(ValueError):
+    """A required audit record could not be persisted."""
 
 
 def _chain_tip(lines: Iterable[str]) -> tuple[str, int]:
@@ -71,6 +77,8 @@ class AuditEntry:
         degraded: bool | None = None,
         forced_review: bool | None = None,
         hook_correlation: dict[str, Any] | None = None,
+        local_provenance: dict[str, Any] | None = None,
+        approval_id: str | None = None,
     ) -> None:
         self.seq = seq
         self.timestamp_utc = timestamp_utc
@@ -90,6 +98,8 @@ class AuditEntry:
         self.degraded = degraded
         self.forced_review = forced_review
         self.hook_correlation = hook_correlation
+        self.local_provenance = local_provenance
+        self.approval_id = approval_id
         self.entry_hash = self._compute_hash()
 
     def _get_hash_dict(self) -> dict[str, Any]:
@@ -106,6 +116,7 @@ class AuditEntry:
                 "seq": self.seq,
                 "timestamp": self.timestamp_utc,
                 "timestamp_utc": self.timestamp_utc,
+                **({"approval_id": self.approval_id} if self.approval_id is not None else {}),
             }
         data = {
             "seq": self.seq,
@@ -124,6 +135,10 @@ class AuditEntry:
             data["forced_review"] = self.forced_review
         if self.hook_correlation is not None:
             data["hook_correlation"] = self.hook_correlation
+        if self.local_provenance is not None:
+            for key in _PROVENANCE_FIELDS:
+                if key in self.local_provenance:
+                    data[key] = self.local_provenance[key]
         return data
 
     def _compute_hash(self) -> str:
@@ -227,7 +242,13 @@ class AuditLog:
                     identity=data.get("identity"),
                     original_decision=data.get("original_decision"),
                     justification=data.get("justification"),
+                    approval_id=data.get("approval_id"),
                     hook_correlation=data.get("hook_correlation"),
+                    local_provenance=(
+                        {key: data[key] for key in _PROVENANCE_FIELDS if key in data}
+                        if data.get("source") in {"local", "hybrid"}
+                        else None
+                    ),
                 )
                 if "entry_hash" in data:
                     entry.entry_hash = data["entry_hash"]
@@ -245,7 +266,11 @@ class AuditLog:
 
     def should_log(self) -> bool:
         """Determine if logging should occur based on configuration."""
-        return self.config.audit.enabled or self.config.privacy.store_requests
+        return (
+            self.config.audit.enabled
+            or self.config.privacy.store_requests
+            or self.config.audit_required
+        )
 
     def write_entry(
         self,
@@ -259,6 +284,7 @@ class AuditLog:
         degraded: bool | None = None,
         forced_review: bool | None = None,
         hook_correlation: HookAuditCorrelation | dict[str, Any] | None = None,
+        local_provenance: dict[str, Any] | None = None,
     ) -> None:
         """Write a new entry to the audit log with file locking."""
         if not self.should_log():
@@ -303,6 +329,7 @@ class AuditLog:
             degraded,
             forced_review,
             safe_hook_correlation,
+            local_provenance,
         )
 
     def _write_with_lock_atomic(
@@ -318,6 +345,7 @@ class AuditLog:
         degraded: bool | None,
         forced_review: bool | None,
         hook_correlation: dict[str, Any] | None,
+        local_provenance: dict[str, Any] | None,
     ) -> None:
         """Atomically read last entry, compute next sequence, and write with file locking."""
         with self._open_append() as f:
@@ -343,6 +371,7 @@ class AuditLog:
                     degraded=degraded,
                     forced_review=forced_review,
                     hook_correlation=hook_correlation,
+                    local_provenance=local_provenance,
                 )
 
                 # Add signature if signer is configured
@@ -362,6 +391,8 @@ class AuditLog:
         original_decision: str,
         action_summary: str,
         justification: str = "",
+        *,
+        approval_id: str | None = None,
     ) -> AuditEntry:
         """Write a human override entry to the audit log with file locking."""
         redacted_summary = redact_obj(action_summary)
@@ -382,9 +413,10 @@ class AuditLog:
                     policy_version_hash=policy_version_hash,
                     prev_hash=last_hash,
                     event_type="human_override",
-                    identity=identity,
+                    identity=redact_obj(identity),
                     original_decision=original_decision,
                     justification=redacted_justification,
+                    approval_id=approval_id,
                 )
                 entry.decision_signature = self._sign_entry_hash(entry)
 

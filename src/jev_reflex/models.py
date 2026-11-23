@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import uuid
+from collections.abc import Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -13,6 +14,8 @@ from .redaction import redact_obj, redact_text
 Decision = Literal["ALLOW", "REVIEW", "HOLD"]
 RiskChoice = Literal["low", "medium", "high"]
 FindingSeverity = Literal["low", "medium", "high"]
+SemanticProvider = Literal["jev", "demo", "none", "broker/live", "broker/unavailable", "local"]
+SemanticSource = SemanticProvider | Literal["hybrid"]
 
 
 def _validate_probability(value: float) -> float:
@@ -88,6 +91,7 @@ class EvaluationContext(BaseModel):
     test_results: str = ""
     recent_context: str = ""
     external_content: str = ""
+    semantic_state_truncated: bool = Field(default=False, exclude=True, repr=False)
     # Native identifiers are used for local audit correlation only. Exclusion
     # here also protects generic model_dump() callers; to_jev_state() is an
     # explicit allow-list and never includes this field.
@@ -158,6 +162,16 @@ class DeterministicFinding(BaseModel):
     blocking: bool = False
 
 
+class SemanticContributor(BaseModel):
+    """Identity of one provider contributing scores or risk metadata."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source: SemanticProvider
+    model_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_.:/-]{1,200}$")
+    model_digest: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
 class SemanticSignals(BaseModel):
     """JEV or offline semantic output before deterministic policy is applied."""
 
@@ -165,7 +179,10 @@ class SemanticSignals(BaseModel):
 
     probabilities: dict[str, float] = Field(default_factory=dict)
     risk: RiskInfo
-    source: Literal["jev", "demo", "none", "broker/live", "broker/unavailable"] = "jev"
+    source: SemanticSource = "jev"
+    model_digest: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    contributors: tuple[SemanticContributor, ...] = ()
+    truncated: bool = False
     degraded: bool = False
     warnings: list[str] = Field(default_factory=list)
 
@@ -175,6 +192,29 @@ class SemanticSignals(BaseModel):
         return {
             str(name): _validate_probability(probability) for name, probability in value.items()
         }
+
+    def contributing_models(self) -> tuple[SemanticContributor, ...]:
+        if self.contributors:
+            return self.contributors
+        if self.source == "hybrid":
+            raise ValueError("Hybrid signals require contributor provenance")
+        return (SemanticContributor(source=self.source, model_digest=self.model_digest),)
+
+
+def semantic_provenance(
+    samples: Sequence[SemanticSignals],
+) -> tuple[SemanticSource, str | None, tuple[SemanticContributor, ...]]:
+    if len(samples) == 1 and not samples[0].contributors:
+        sample = samples[0]
+        return sample.source, sample.model_digest, sample.contributors
+    contributors = tuple(
+        dict.fromkeys(
+            contributor for sample in samples for contributor in sample.contributing_models()
+        )
+    )
+    digests = {contributor.model_digest for contributor in contributors}
+    source = contributors[0].source if len(contributors) == 1 else "hybrid"
+    return source, next(iter(digests)) if len(digests) == 1 else None, contributors
 
 
 class EvaluationResult(BaseModel):
@@ -190,7 +230,9 @@ class EvaluationResult(BaseModel):
     reasons: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     deterministic_findings: list[DeterministicFinding] = Field(default_factory=list)
-    semantic_source: Literal["jev", "demo", "none", "broker/live", "broker/unavailable"] = "jev"
+    semantic_source: SemanticSource = "jev"
+    model_digest: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    semantic_contributors: tuple[SemanticContributor, ...] | None = None
     samples: int = Field(default=1, ge=1)
     aggregation: Literal["median", "mean", "max"] | None = None
     degraded: bool = False

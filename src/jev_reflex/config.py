@@ -7,6 +7,7 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import SplitResult, urlsplit
 
 from pydantic import (
     BaseModel,
@@ -14,13 +15,34 @@ from pydantic import (
     Field,
     PrivateAttr,
     SerializerFunctionWrapHandler,
+    ValidationInfo,
+    field_validator,
     model_serializer,
     model_validator,
 )
+from pydantic_core import PydanticCustomError
 
 from .serialization import read_config_bytes, safe_yaml_load
 
 Mode = Literal["advisory", "review", "enforce"]
+PolicyProfile = Literal["standard", "production"]
+
+DEFAULT_MODEL_ID = "ollaya-dev/coba-68m-ternary"
+DEFAULT_MODEL_DIR = "~/.jev-reflex/models"
+ONNX_MIN_FRAMING_TOKENS = 6  # CLS, three SEP tokens, and two option masks
+
+HOST_GUARD_CHECKS = frozenset({"tamper_guard", "taint_exfiltration", "agent_control"})
+DETERMINISTIC_RULE_NAMES = HOST_GUARD_CHECKS | {
+    "execution_risk",
+    "filesystem",
+    "git_risk",
+    "known_destructive",
+    "repo_boundary",
+    "safe_command",
+    "secret_pattern",
+    "supply_chain",
+}
+LOCAL_SIGNAL_NAMES = frozenset({"goal_hijack_diff"})
 
 DEFAULT_HOLD_ON = [
     "destructive",
@@ -31,6 +53,9 @@ DEFAULT_HOLD_ON = [
     "wrong_repo_semantic",
     "fail_open",
 ]
+LOCAL_HOLD_ON = [*DEFAULT_HOLD_ON, "goal_hijack_diff"]
+LOCAL_HOLD_THRESHOLD = 0.95
+LOCAL_REVIEW_THRESHOLD = 0.72
 
 DEFAULT_REVIEW_ON = [
     "security_sensitive",
@@ -90,8 +115,16 @@ class AuditConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
+    fail_closed: bool = False
     path: str = "~/.jev-reflex/audit.log"
     rotate_mb: int = 100
+
+    @model_serializer(mode="wrap")
+    def _omit_new_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if not self.fail_closed:
+            data.pop("fail_closed", None)
+        return data
 
     @model_validator(mode="after")
     def _validate_rotate_mb(self) -> AuditConfig:
@@ -252,6 +285,98 @@ class JEVConfig(BaseModel):
         return self
 
 
+def parse_local_base_url(value: str, *, allow_non_loopback_http: bool) -> SplitResult:
+    """Validate the address used for local System One requests."""
+    if any(char.isspace() or ord(char) < 32 or ord(char) == 127 or char == "\\" for char in value):
+        raise ValueError("local_base_url contains invalid characters")
+    url = urlsplit(value)
+    # Accessing port rejects malformed or out-of-range ports.
+    if (
+        url.scheme not in {"https", "http"}
+        or not url.hostname
+        or url.port == 0
+        or url.username is not None
+        or url.password is not None
+        or "?" in value
+        or "#" in value
+    ):
+        raise ValueError("local_base_url must be an HTTP(S) base URL without credentials")
+    if url.scheme == "http" and allow_non_loopback_http is not True:
+        loopback = url.hostname == "localhost"
+        if not loopback:
+            try:
+                loopback = ipaddress.ip_address(url.hostname).is_loopback
+            except ValueError:
+                pass
+        if not loopback:
+            raise ValueError(
+                "non-loopback local_base_url requires HTTPS or allow_non_loopback_http"
+            )
+    return url
+
+
+class EvaluatorConfig(BaseModel):
+    """Select the semantic runtime independently of the broker transport."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["jev", "local", "hybrid"] = "jev"
+    local_base_url: str | None = None
+    local_model: str = DEFAULT_MODEL_ID
+    model_dir: str = Field(default=DEFAULT_MODEL_DIR, min_length=1)
+    max_tokens: int = Field(default=512, strict=True, ge=1, le=512)
+    hybrid_uncertain_low: float = Field(default=0.35, ge=0, le=1)
+    hybrid_uncertain_high: float = Field(default=0.65, ge=0, le=1)
+    allow_non_loopback_http: bool = False
+    require_semantic: bool = False
+
+    @model_serializer(mode="wrap")
+    def _omit_new_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if not self.require_semantic:
+            data.pop("require_semantic", None)
+        return data
+
+    @field_validator("local_model")
+    @classmethod
+    def _validate_model_id(cls, value: str, info: ValidationInfo) -> str:
+        if info.data.get("local_base_url") and re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}:[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", value
+        ):
+            return value  # Ollaya server model names may use a model:tag alias.
+        from .model_files import ModelError, canonical_model_id
+
+        try:
+            return canonical_model_id(value)
+        except ModelError as exc:
+            raise ValueError(str(exc)) from None
+
+    @model_validator(mode="after")
+    def _validate_local_evaluator(self) -> EvaluatorConfig:
+        if self.hybrid_uncertain_low >= self.hybrid_uncertain_high:
+            raise ValueError("hybrid uncertainty band must have a lower and a higher bound")
+        if self.local_base_url is not None:
+            if self.provider == "jev":
+                raise ValueError("local_base_url requires the local or hybrid evaluator")
+            parse_local_base_url(
+                self.local_base_url, allow_non_loopback_http=self.allow_non_loopback_http
+            )
+        elif self.provider != "jev" and self.max_tokens < ONNX_MIN_FRAMING_TOKENS:
+            raise ValueError(
+                f"In-process ONNX requires at least {ONNX_MIN_FRAMING_TOKENS} framing tokens"
+            )
+        return self
+
+
+def known_semantic_rules(config: EvaluatorConfig) -> set[str]:
+    from .evaluator import JUDGMENT_NAMES, PUBLIC_SIGNAL_ALIASES
+
+    names = set(JUDGMENT_NAMES) | set(PUBLIC_SIGNAL_ALIASES)
+    if config.provider != "jev":
+        names.update(LOCAL_SIGNAL_NAMES)
+    return names
+
+
 class StabilityConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -276,6 +401,17 @@ class PolicyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     allow_hold_override: bool = False
+    strict_review: bool = False
+    hold_override_exception: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_new_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if not self.strict_review:
+            data.pop("strict_review", None)
+        if self.hold_override_exception is None:
+            data.pop("hold_override_exception", None)
+        return data
 
 
 class MCPToolRule(BaseModel):
@@ -527,6 +663,7 @@ class ReflexConfig(BaseModel):
     _source_path: Path | None = PrivateAttr(default=None)
 
     mode: Mode = "advisory"
+    profile: PolicyProfile = "standard"
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     thresholds: ThresholdConfig = Field(default_factory=ThresholdConfig)
     hold_on: list[str] = Field(default_factory=lambda: list(DEFAULT_HOLD_ON))
@@ -545,20 +682,72 @@ class ReflexConfig(BaseModel):
     intent: IntentConfig = Field(default_factory=IntentConfig)
     authority: AuthorityConfig = Field(default_factory=AuthorityConfig)
     jev: JEVConfig = Field(default_factory=JEVConfig)
+    evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
+    rule_modes: dict[str, Mode] = Field(default_factory=dict)
     stability: StabilityConfig = Field(default_factory=StabilityConfig)
     stability_policy: StabilityPolicyConfig = Field(default_factory=StabilityPolicyConfig)
 
+    @property
+    def strict_review_required(self) -> bool:
+        return self.policy.strict_review or self.access is not None or self.profile == "production"
+
+    @property
+    def semantic_required(self) -> bool:
+        return self.evaluator.require_semantic or (
+            self.mode == "enforce" and self.strict_review_required
+        )
+
+    @property
+    def audit_required(self) -> bool:
+        return (
+            (self.audit.enabled and self.audit.fail_closed)
+            or self.profile == "production"
+            or (
+                self.mode == "enforce"
+                and self.access is not None
+                and self.access.environment in self.access.production_environments
+            )
+        )
+
     @model_serializer(mode="wrap")
-    def _omit_local_checks_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+    def _omit_new_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         data = handler(self)
         if self.local_checks == LocalChecksConfig():
             data.pop("local_checks", None)
+        if self.evaluator == EvaluatorConfig():
+            data.pop("evaluator", None)
+        if not self.rule_modes:
+            data.pop("rule_modes", None)
+        if self.profile == "standard":
+            data.pop("profile", None)
         return data
+
+    @field_validator("rule_modes")
+    @classmethod
+    def _validate_rule_modes(cls, modes: dict[str, Mode], info: ValidationInfo) -> dict[str, Mode]:
+        if modes and (evaluator := info.data.get("evaluator")) is not None:
+            known = DETERMINISTIC_RULE_NAMES | known_semantic_rules(evaluator)
+            if modes.keys() - known:
+                raise PydanticCustomError(
+                    "unknown_rule", "Rule modes contain an unknown rule name."
+                )
+            if any(modes.get(name, "enforce") != "enforce" for name in HOST_GUARD_CHECKS):
+                raise PydanticCustomError(
+                    "host_guard_mode", "Host guard rule modes must be enforce."
+                )
+        return modes
 
     @model_validator(mode="after")
     def _normalize_rule_names(self) -> ReflexConfig:
         if self.access is None and any(rule.require_approval for rule in self.mcp.tools):
             raise ValueError("MCP require_approval needs enterprise access configuration")
+        if self.evaluator.provider != "jev":
+            if "thresholds" not in self.model_fields_set:
+                self.thresholds = ThresholdConfig(
+                    strong=LOCAL_HOLD_THRESHOLD, review=LOCAL_REVIEW_THRESHOLD
+                )
+            if "hold_on" not in self.model_fields_set:
+                self.hold_on = list(LOCAL_HOLD_ON)
         self.hold_on = [str(name) for name in self.hold_on]
         self.review_on = [str(name) for name in self.review_on]
         return self
@@ -593,6 +782,7 @@ def load_config(
     mode_override: Mode | None = None,
     scope: str | None = None,
     default_if_missing: bool = False,
+    validate_production: bool = True,
 ) -> ReflexConfig:
     """Load config, defaulting only when the implicit ``reflex.yaml`` is absent."""
 
@@ -621,7 +811,17 @@ def load_config(
             config = selected
 
     if mode_override is not None:
+        if config.strict_review_required:
+            raise ValueError("Mode overrides are disabled by strict review")
         config = config.model_copy(update={"mode": mode_override})
+
+    if config.profile == "production" and validate_production:
+        from .production import production_issues
+
+        issues = production_issues(config)
+        if issues:
+            paths = ", ".join(issue["path"] for issue in issues)
+            raise ValueError(f"Production policy controls are invalid: {paths}")
 
     config._source_path = config_path.absolute()
     return config

@@ -14,7 +14,7 @@ user task + repository state + proposed action
              /           \
             /             \
            ↓               ↓
-  hard local findings   JEVSemanticEvaluator
+  hard local findings   SemanticEvaluator
            \             /
             \           /
              ↓         ↓
@@ -89,9 +89,14 @@ escapes, known dangerous Git operations, filesystem/database hazards, and a
 small safe-command allow-list. Checks handle obvious cases only; ambiguous
 intent remains a semantic-evaluation problem.
 
-### JEVSemanticEvaluator
+### SemanticEvaluator
 
-`JEVSemanticEvaluator` is the semantic layer. It builds 18 independent `Noul`
+`LocalSemanticEvaluator` scores active policy questions on CPU using verified
+Coba ONNX assets. It loads the optional runtime on demand. A broker can warm the
+model and serve requests over a private Unix socket or mTLS. The client applies
+policy locally to validated signals. [Host Broker](broker.md)
+
+For hosted evaluation, `JEVSemanticEvaluator` builds 18 independent `Noul`
 judgments plus a `Choice` and `Score` risk classification, for 20 small
 structured primitives in one System One request. It consumes probabilities and
 risk metadata only. It never returns or chooses `ALLOW`, `REVIEW`, or `HOLD`.
