@@ -8,8 +8,7 @@ from typing import Any, get_args
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from .config import ReflexConfig
-from .evaluator import JUDGMENT_NAMES, PUBLIC_SIGNAL_ALIASES
+from .config import ReflexConfig, known_semantic_rules
 from .serialization import MAX_CONFIG_BYTES, read_config_bytes
 
 
@@ -135,7 +134,10 @@ def lint_policy(path: Path | bytes) -> dict[str, Any]:
         except ValidationError as exc:
             for error in exc.errors(include_input=False, include_context=False):
                 location = ".".join(str(part) for part in error["loc"])
-                if error["type"] != "extra_forbidden":
+                issue_type = error["type"]
+                if issue_type in {"unknown_rule", "host_guard_mode"}:
+                    issues.append(_issue("error", issue_type, location, error["msg"]))
+                elif issue_type != "extra_forbidden":
                     issues.append(
                         _issue(
                             "error",
@@ -156,7 +158,7 @@ def lint_policy(path: Path | bytes) -> dict[str, Any]:
         issues.append(_issue("error", "invalid_structure", "", str(exc)))
 
     if config is not None:
-        known_signals = set(JUDGMENT_NAMES) | set(PUBLIC_SIGNAL_ALIASES) | {"wrong_repo"}
+        known_signals = known_semantic_rules(config.evaluator)
         for field in ("hold_on", "review_on"):
             rules = getattr(config, field)
             for index, rule in enumerate(rules):

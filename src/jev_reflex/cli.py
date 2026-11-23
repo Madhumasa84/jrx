@@ -95,8 +95,10 @@ approval_app = typer.Typer(name="approval", help="Request and grant action-bound
 dashboard_app = typer.Typer(name="dashboard", help="Serve a read-only operations dashboard.")
 mcp_app = typer.Typer(name="mcp", help="Run a policy-enforcing MCP stdio gateway.")
 session_app = typer.Typer(name="session", help="Inspect or stop an agent session.")
+model_app = typer.Typer(name="model", help="Install and verify local ONNX models.")
 app.add_typer(benchmark_app, name="benchmark")
 app.add_typer(broker_app, name="broker")
+app.add_typer(model_app, name="model")
 app.add_typer(audit_app, name="audit")
 app.add_typer(policy_app, name="policy")
 policy_app.add_typer(rollout_app, name="rollout")
@@ -107,6 +109,45 @@ app.add_typer(session_app, name="session")
 app.add_typer(harness_app, name="harness")
 app.add_typer(intent_app, name="intent")
 app.add_typer(authority_app, name="authority")
+
+
+@model_app.command("pull")
+def model_pull(
+    model_id: str | None = typer.Argument(None, help="Hugging Face model ID or alias."),
+    config: Path | None = typer.Option(
+        None, "--config", help="Read the model cache configuration."
+    ),
+) -> None:
+    """Download and verify the configured Coba ONNX model."""
+    from .model_cli import pull
+
+    pull(model_id, config)
+
+
+@model_app.command("status")
+def model_status(
+    json_output: bool = typer.Option(False, "--json", help="Emit a machine-readable report."),
+    config: Path | None = typer.Option(
+        None, "--config", help="Read the model cache configuration."
+    ),
+) -> None:
+    """List installed local models and verify their manifests."""
+    from .model_cli import status
+
+    status(config, json_output)
+
+
+@model_app.command("verify")
+def model_verify(
+    model_id: str | None = typer.Argument(None, help="Hugging Face model ID or alias."),
+    config: Path | None = typer.Option(
+        None, "--config", help="Read the model cache configuration."
+    ),
+) -> None:
+    """Check each model artifact against its recorded SHA-256."""
+    from .model_cli import verify
+
+    verify(model_id, config)
 
 
 @app.callback()
@@ -193,6 +234,35 @@ def workspace_setup(
     except (OSError, ValueError, RuntimeError) as exc:
         typer.echo(f"JRX setup failed: {exc}", err=True)
         raise typer.Exit(2) from None
+
+
+@app.command("init")
+def init_policy(
+    preset: str = typer.Option(..., "--preset", help="dev-safe, strict-ci, or enterprise."),
+    output: Path = typer.Option(Path("reflex.yaml"), "--output", help="Policy file to write."),
+    force: bool = typer.Option(False, "--force", help="Replace an existing policy file."),
+) -> None:
+    """Write a starter policy for the local semantic evaluator."""
+    from .presets import write_preset
+
+    path = output.expanduser()
+    try:
+        write_preset(preset, path, force=force)
+    except FileExistsError:
+        typer.echo(f"{path} already exists. Use --force to replace it.", err=True)
+        raise typer.Exit(2) from None
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Could not write policy. {exc}", err=True)
+        raise typer.Exit(2) from None
+
+    typer.echo(f"Wrote {path} using the {preset} preset.")
+    typer.echo(
+        'Install and pull the local evaluator with pip install "jev-reflex[local]" and jrx model pull.'
+    )
+    if preset == "enterprise":
+        typer.echo(
+            "Set your OIDC and role details and install the audit signing keys before starting the broker."
+        )
 
 
 @benchmark_app.command("live")

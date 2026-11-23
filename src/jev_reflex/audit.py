@@ -71,6 +71,7 @@ class AuditEntry:
         degraded: bool | None = None,
         forced_review: bool | None = None,
         hook_correlation: dict[str, Any] | None = None,
+        local_provenance: dict[str, str | None] | None = None,
     ) -> None:
         self.seq = seq
         self.timestamp_utc = timestamp_utc
@@ -90,6 +91,7 @@ class AuditEntry:
         self.degraded = degraded
         self.forced_review = forced_review
         self.hook_correlation = hook_correlation
+        self.local_provenance = local_provenance
         self.entry_hash = self._compute_hash()
 
     def _get_hash_dict(self) -> dict[str, Any]:
@@ -124,6 +126,9 @@ class AuditEntry:
             data["forced_review"] = self.forced_review
         if self.hook_correlation is not None:
             data["hook_correlation"] = self.hook_correlation
+        if self.local_provenance is not None:
+            for key in ("source", "model_digest", "decision_id"):
+                data[key] = self.local_provenance[key]
         return data
 
     def _compute_hash(self) -> str:
@@ -228,6 +233,11 @@ class AuditLog:
                     original_decision=data.get("original_decision"),
                     justification=data.get("justification"),
                     hook_correlation=data.get("hook_correlation"),
+                    local_provenance=(
+                        {key: data[key] for key in ("source", "model_digest", "decision_id")}
+                        if data.get("source") == "local"
+                        else None
+                    ),
                 )
                 if "entry_hash" in data:
                     entry.entry_hash = data["entry_hash"]
@@ -259,6 +269,7 @@ class AuditLog:
         degraded: bool | None = None,
         forced_review: bool | None = None,
         hook_correlation: HookAuditCorrelation | dict[str, Any] | None = None,
+        local_provenance: dict[str, str | None] | None = None,
     ) -> None:
         """Write a new entry to the audit log with file locking."""
         if not self.should_log():
@@ -303,6 +314,7 @@ class AuditLog:
             degraded,
             forced_review,
             safe_hook_correlation,
+            local_provenance,
         )
 
     def _write_with_lock_atomic(
@@ -318,6 +330,7 @@ class AuditLog:
         degraded: bool | None,
         forced_review: bool | None,
         hook_correlation: dict[str, Any] | None,
+        local_provenance: dict[str, str | None] | None,
     ) -> None:
         """Atomically read last entry, compute next sequence, and write with file locking."""
         with self._open_append() as f:
@@ -343,6 +356,7 @@ class AuditLog:
                     degraded=degraded,
                     forced_review=forced_review,
                     hook_correlation=hook_correlation,
+                    local_provenance=local_provenance,
                 )
 
                 # Add signature if signer is configured

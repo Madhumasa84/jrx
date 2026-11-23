@@ -13,6 +13,7 @@ from .redaction import redact_obj, redact_text
 Decision = Literal["ALLOW", "REVIEW", "HOLD"]
 RiskChoice = Literal["low", "medium", "high"]
 FindingSeverity = Literal["low", "medium", "high"]
+SemanticSource = Literal["jev", "demo", "none", "broker/live", "broker/unavailable", "local"]
 
 
 def _validate_probability(value: float) -> float:
@@ -88,6 +89,7 @@ class EvaluationContext(BaseModel):
     test_results: str = ""
     recent_context: str = ""
     external_content: str = ""
+    semantic_state_truncated: bool = Field(default=False, exclude=True, repr=False)
     # Native identifiers are used for local audit correlation only. Exclusion
     # here also protects generic model_dump() callers; to_jev_state() is an
     # explicit allow-list and never includes this field.
@@ -165,7 +167,9 @@ class SemanticSignals(BaseModel):
 
     probabilities: dict[str, float] = Field(default_factory=dict)
     risk: RiskInfo
-    source: Literal["jev", "demo", "none", "broker/live", "broker/unavailable"] = "jev"
+    source: SemanticSource = "jev"
+    model_digest: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    truncated: bool = False
     degraded: bool = False
     warnings: list[str] = Field(default_factory=list)
 
@@ -190,7 +194,8 @@ class EvaluationResult(BaseModel):
     reasons: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     deterministic_findings: list[DeterministicFinding] = Field(default_factory=list)
-    semantic_source: Literal["jev", "demo", "none", "broker/live", "broker/unavailable"] = "jev"
+    semantic_source: SemanticSource = "jev"
+    model_digest: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     samples: int = Field(default=1, ge=1)
     aggregation: Literal["median", "mean", "max"] | None = None
     degraded: bool = False

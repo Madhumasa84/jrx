@@ -101,7 +101,7 @@ class RepositoryContextProvider:
         del root  # The Git command runs relative to the provider's canonical directory.
         output = self._git("status", "--porcelain=v1", "-z", "--untracked-files=all")
         return list(dict.fromkeys(status_paths(output.encode("utf-8", errors="surrogateescape"))))[
-            :500
+            :501
         ]
 
     def build(
@@ -125,18 +125,24 @@ class RepositoryContextProvider:
         if not diff and self.include_git_diff:
             diff = self._git("diff", "--unified=3")
 
+        truncated = len(files) > 500
+
+        def bound(value: str, limit: int) -> str:
+            nonlocal truncated
+            truncated = truncated or len(value) > limit
+            return bounded_text(value, limit)
+
         return EvaluationContext(
-            user_task=bounded_text(user_task, self.max_context_chars),
-            repository=bounded_text(repository, 500),
-            repository_root=bounded_text(str(root or self.working_directory), 1_000),
-            working_directory=bounded_text(str(self.working_directory), 1_000),
+            user_task=bound(user_task, self.max_context_chars),
+            repository=bound(repository, 500),
+            repository_root=bound(str(root or self.working_directory), 1_000),
+            working_directory=bound(str(self.working_directory), 1_000),
             proposed_action=proposed_action,
-            changed_files=[bounded_text(item, 1_000) for item in files[:500]],
-            git_diff=bounded_text(diff, self.max_diff_chars),
+            changed_files=[bound(item, 1_000) for item in files[:500]],
+            git_diff=bound(diff, self.max_diff_chars),
             proposed_diff=bool(stdin_diff),
-            test_results=bounded_text(
-                test_results if self.include_tests else "", self.max_context_chars
-            ),
-            recent_context=bounded_text(recent_context, self.max_context_chars),
-            external_content=bounded_text(external_content, self.max_context_chars),
+            test_results=bound(test_results if self.include_tests else "", self.max_context_chars),
+            recent_context=bound(recent_context, self.max_context_chars),
+            external_content=bound(external_content, self.max_context_chars),
+            semantic_state_truncated=truncated,
         )

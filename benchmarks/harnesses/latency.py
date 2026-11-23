@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from time import perf_counter_ns
 
-from benchmarks.harnesses.evaluation import EvaluatorBackend
+from benchmarks.harnesses.evaluation import EvaluatorBackend, LocalBackend
 from jev_reflex import __version__
 from jev_reflex.models import EvaluationContext, ProposedAction
 
@@ -45,8 +45,25 @@ def _measure(action: Callable[[], None]) -> dict[str, float]:
     }
 
 
+def _broker_peak_rss_mb(pid: int | None) -> float | None:
+    if pid is None or platform.system() != "Linux":
+        return None
+    try:
+        with Path(f"/proc/{pid}/status").open(encoding="utf-8") as status:
+            for line in status:
+                if line.startswith("VmHWM:"):
+                    return int(line.split()[1]) / 1024
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def measure_latency(
-    backend: EvaluatorBackend, workspace: Path, environment: dict[str, str]
+    backend: EvaluatorBackend,
+    workspace: Path,
+    environment: dict[str, str],
+    *,
+    backend_name: str = "deterministic",
 ) -> dict:
     import resource
 
@@ -65,7 +82,8 @@ def measure_latency(
     )
 
     def warm_check() -> None:
-        if backend.evaluate(context) != "ALLOW":
+        decision = backend.evaluate(context)
+        if backend_name == "deterministic" and decision != "ALLOW":
             raise RuntimeError("warm latency control did not return ALLOW")
 
     def cold_check() -> None:
@@ -88,12 +106,19 @@ def measure_latency(
     # Linux reports KiB and macOS reports bytes. The runner owns the child process set.
     rss_divisor = 1024**2 if platform.system() == "Darwin" else 1024
     warm = _measure(warm_check)
-    warm["peak_rss_mb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / rss_divisor
+    warm_peak_rss = (
+        _broker_peak_rss_mb(backend.broker_pid)
+        if isinstance(backend, LocalBackend) and backend_name == "local-broker"
+        else resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / rss_divisor
+    )
     cold = _measure(cold_check)
     cold["peak_rss_mb"] = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / rss_divisor
     return {
         "warmups_per_mode": WARMUPS,
         "timed_iterations_per_mode": ITERATIONS,
-        "warm_in_process": warm,
+        ("warm_broker" if backend_name == "local-broker" else "warm_in_process"): {
+            **warm,
+            "peak_rss_mb": warm_peak_rss,
+        },
         "cold_cli": cold,
     }

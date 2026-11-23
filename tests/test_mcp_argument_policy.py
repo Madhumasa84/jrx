@@ -7,6 +7,43 @@ from pydantic import ValidationError
 
 from jev_reflex.config import MCPToolRule, ReflexConfig
 from jev_reflex.mcp_gateway import MCPGateway
+from jev_reflex.models import EvaluationResult, RiskInfo
+
+
+@pytest.mark.parametrize(
+    "decision, signals, degraded, expected",
+    [
+        ("ALLOW", {"destructive": 0.0}, False, None),
+        ("ALLOW", {}, False, "MCP write tool requires a live semantic decision"),
+        ("ALLOW", {"destructive": 0.0}, True, "MCP tool blocked: ALLOW"),
+        ("REVIEW", {"destructive": 0.8}, False, "MCP tool blocked: REVIEW"),
+    ],
+)
+def test_mcp_write_requires_successful_local_inference(
+    monkeypatch, tmp_path, decision, signals, degraded, expected
+):
+    monkeypatch.chdir(tmp_path)
+    config = ReflexConfig.model_validate(
+        {
+            "evaluator": {"provider": "local"},
+            "mcp": {"tools": [{"server": "data", "name": "db.update", "effect": "write"}]},
+        }
+    )
+    gateway = MCPGateway(config, "data", ["unused"])
+
+    def evaluate(context, **_):
+        assert context.proposed_action.type == "mcp:data.db.update"
+        assert context.proposed_action.input == {"value": "updated"}
+        return EvaluationResult(
+            decision=decision,
+            signals=signals,
+            degraded=degraded,
+            semantic_source="local",
+            risk=RiskInfo(choice="low"),
+        )
+
+    monkeypatch.setattr("jev_reflex.mcp_gateway.evaluate_context", evaluate)
+    assert gateway._authorize_tool("db.update", {"value": "updated"}, 1, b"") == (expected, None)
 
 
 @pytest.mark.parametrize(

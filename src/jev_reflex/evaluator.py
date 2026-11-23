@@ -6,12 +6,13 @@ import json
 import os
 import re
 import time
+import uuid
 from collections.abc import Mapping
 from statistics import mean, median
 from typing import Any, Literal, Protocol, cast
 
 from .audit import AuditLog
-from .checks import has_blocking_finding, run_deterministic_checks
+from .checks import run_deterministic_checks
 from .checks.safe_commands import _SAFE_COMMAND_RE
 from .config import ReflexConfig
 from .context import bounded_text
@@ -39,7 +40,7 @@ from .models import (
     RiskInfo,
     SemanticSignals,
 )
-from .policy import GUARD_CHECKS
+from .policy import GUARD_CHECKS, is_hard_deterministic_finding
 from .policy import decide as deterministic_decide
 from .redaction import (
     REDACTED_SECRET,
@@ -177,7 +178,9 @@ def _redacted_context_with_gitleaks(context: EvaluationContext) -> tuple[Evaluat
             action["description"] = redacted
             gitleaks_failed = gitleaks_failed or failed
 
-    return EvaluationContext.model_validate(dumped), gitleaks_failed
+    safe_context = EvaluationContext.model_validate(dumped)
+    safe_context.semantic_state_truncated = context.semantic_state_truncated
+    return safe_context, gitleaks_failed
 
 
 def compact_state(context: EvaluationContext, max_chars: int) -> dict[str, Any]:
@@ -415,10 +418,13 @@ def aggregate_semantic_samples(
     ]
     confidence = min(confidence_values) if confidence_values else None
     warnings = list(dict.fromkeys(warning for sample in samples for warning in sample.warnings))
+    local_samples = [sample for sample in samples if sample.source == "local"]
     return SemanticSignals(
         probabilities=probabilities,
         risk=RiskInfo(choice=risk_choice, score=risk_score, confidence=confidence),
-        source=samples[0].source,
+        source="local" if local_samples else samples[0].source,
+        model_digest=local_samples[0].model_digest if local_samples else None,
+        truncated=any(sample.truncated for sample in samples),
         degraded=any(sample.degraded for sample in samples),
         warnings=warnings,
     )
@@ -504,7 +510,9 @@ def evaluate_context(
         warnings.append("JEV disabled; only deterministic checks were evaluated.")
         samples = 1
         aggregation_used = None
-    elif guarded or (skip_jev_on_hard and has_blocking_finding(findings)):
+    elif guarded or (
+        skip_jev_on_hard and any(is_hard_deterministic_finding(item, config) for item in findings)
+    ):
         semantic = _zero_semantic(
             source="none",
             warning="JEV skipped because a deterministic hard rule already blocked the action.",
@@ -593,6 +601,16 @@ def evaluate_context(
     )
 
     audit_failed = False
+    decision_id = uuid.uuid4().hex
+    local_provenance = (
+        {
+            "source": semantic.source,
+            "model_digest": semantic.model_digest,
+            "decision_id": decision_id,
+        }
+        if semantic.source == "local"
+        else None
+    )
     # Write to audit log if enabled
     try:
         audit_log = AuditLog(config)
@@ -606,6 +624,7 @@ def evaluate_context(
             degraded=(semantic.degraded and use_jev) or gitleaks_failed,
             forced_review=gitleaks_failed and policy.decision == "REVIEW",
             hook_correlation=context.hook_audit,
+            local_provenance=local_provenance,
         )
     except (OSError, ValueError, TypeError):
         audit_failed = config.audit.enabled or config.privacy.store_requests
@@ -627,6 +646,7 @@ def evaluate_context(
         signals=semantic.probabilities,
     )
     result = EvaluationResult(
+        decision_id=decision_id,
         decision=policy.decision,
         risk=semantic.risk,
         signals=semantic.probabilities,
@@ -635,6 +655,7 @@ def evaluate_context(
         warnings=list(dict.fromkeys(warnings)),
         deterministic_findings=findings,
         semantic_source=semantic.source,
+        model_digest=semantic.model_digest,
         samples=samples,
         aggregation=aggregation_used,
         degraded=(semantic.degraded and use_jev)
@@ -679,6 +700,22 @@ def semantic_backend(config: ReflexConfig, gateway: Any | None = None) -> Semant
         from .broker import BrokerClient
 
         return BrokerClient(config)
+    return direct_semantic_backend(config, gateway=gateway)
+
+
+def direct_semantic_backend(config: ReflexConfig, gateway: Any | None = None) -> SemanticEvaluator:
+    """Construct a provider on the host, independent of the client transport."""
+    if config.evaluator.provider != "jev":
+        from .local_evaluator import LocalSemanticEvaluator
+
+        return LocalSemanticEvaluator(
+            config,
+            fallback=(
+                JEVSemanticEvaluator(config, gateway=gateway)
+                if config.evaluator.provider == "hybrid"
+                else None
+            ),
+        )
     return JEVSemanticEvaluator(config, gateway=gateway)
 
 

@@ -1,23 +1,27 @@
-"""Evaluate frozen cases through the public offline jrx decision path."""
+"""Evaluate frozen cases through the public jrx decision path."""
 
 from __future__ import annotations
 
 import math
-import warnings
+import re
+import sys
 from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from statistics import NormalDist
+from subprocess import DEVNULL, Popen, TimeoutExpired
 from tempfile import TemporaryDirectory
+from time import monotonic, sleep
 from typing import Protocol, TypedDict
 from unittest.mock import patch
 
 from benchmarks.datasets import ASI_CATEGORIES, Case, CommandCase, DiffCase, MCPCase
-from jev_reflex.config import ReflexConfig
+from jev_reflex.config import EvaluatorConfig, ReflexConfig
 from jev_reflex.context import bounded_text
-from jev_reflex.evaluator import evaluate_context
+from jev_reflex.evaluator import SemanticEvaluator, evaluate_context, semantic_backend
 from jev_reflex.models import Decision, EvaluationContext, ProposedAction
+from jev_reflex.policy import host_guard_denied
 
 DECISION_RANK = {"ALLOW": 0, "REVIEW": 1, "HOLD": 2}
 ALPHA_Z = NormalDist().inv_cdf(0.975)
@@ -40,6 +44,104 @@ class DeterministicBackend:
         return result.decision
 
 
+class LocalBackend:
+    def __init__(
+        self,
+        config: ReflexConfig,
+        evaluator: SemanticEvaluator,
+        health: dict,
+        *,
+        broker_pid: int | None = None,
+    ) -> None:
+        model_id = health.get("model_id")
+        digest = health.get("model_digest")
+        if (
+            health.get("warm") is not True
+            or model_id != config.evaluator.local_model
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[a-f0-9]{64}", digest) is None
+        ):
+            raise RuntimeError(
+                'Local ONNX model is unavailable. Run pip install "jev-reflex[local]" '
+                "and jrx model pull."
+            )
+        self.config = config
+        self.evaluator = evaluator
+        self.model = {"id": model_id, "sha256": digest}
+        self.broker_pid = broker_pid
+
+    def evaluate(self, context: EvaluationContext) -> Decision:
+        result = evaluate_context(context, config=self.config, semantic_evaluator=self.evaluator)
+        if result.degraded:
+            raise RuntimeError("Local ONNX evaluation degraded. " + " ".join(result.warnings))
+        if result.semantic_source == "none" and host_guard_denied(result):
+            return result.decision
+        if result.semantic_source != "local" or result.model_digest != self.model["sha256"]:
+            raise RuntimeError("Benchmark did not receive a verified local ONNX evaluation.")
+        return result.decision
+
+
+def default_model_dir() -> Path:
+    return Path(ReflexConfig().evaluator.model_dir).expanduser().resolve()
+
+
+@contextmanager
+def local_backend(
+    *, broker: bool, model_dir: Path, workspace: Path, environment: dict[str, str]
+) -> Iterator[LocalBackend]:
+    config = ReflexConfig(
+        evaluator=EvaluatorConfig(provider="local", model_dir=str(model_dir)),
+    )
+    if not broker:
+        evaluator = semantic_backend(config)
+        evaluator.warm()
+        yield LocalBackend(config, evaluator, evaluator.health())
+        return
+
+    config.logging.enabled = False
+    config.jev.transport = "broker"
+    config.jev.socket = str(workspace.parent / "broker" / "local.sock")
+    config_path = workspace.parent / "local-broker.yaml"
+    config_path.write_text(config.model_dump_json(), encoding="utf-8")
+    client = semantic_backend(config)
+    with Popen(
+        [
+            sys.executable,
+            "-m",
+            "jev_reflex",
+            "broker",
+            "run",
+            "--config",
+            str(config_path),
+            "--metrics-port",
+            "0",
+        ],
+        cwd=workspace,
+        env=environment.copy(),
+        stdin=DEVNULL,
+        stdout=DEVNULL,
+        stderr=DEVNULL,
+    ) as process:
+        try:
+            deadline = monotonic() + 60
+            while process.poll() is None and monotonic() < deadline:
+                health = client.health()
+                if health.get("running"):
+                    yield LocalBackend(
+                        config, client, health.get("local_evaluator") or {}, broker_pid=process.pid
+                    )
+                    return
+                sleep(0.05)
+            raise RuntimeError("Could not start the local benchmark broker.")
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except TimeoutExpired:
+                    process.kill()
+
+
 @contextmanager
 def isolated_workspace() -> Iterator[tuple[Path, dict[str, str]]]:
     """Use an empty repository context and the runtime's built-in regex redaction."""
@@ -55,8 +157,13 @@ def isolated_workspace() -> Iterator[tuple[Path, dict[str, str]]]:
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONUTF8": "1",
         }
-        with patch.dict("os.environ", environment, clear=True), warnings.catch_warnings():
-            warnings.filterwarnings("ignore", message="gitleaks not found, falling back")
+        # Programmatic runs may inherit redactor state cached before PATH isolation.
+        with (
+            patch.dict("os.environ", environment, clear=True),
+            patch.multiple(
+                "jev_reflex.redaction", _GITLEAKS_AVAILABLE=False, _gitleaks_redactor=None
+            ),
+        ):
             yield workspace, environment
 
 

@@ -14,6 +14,11 @@ ATTACK_LABELS = {
     "ASI05": "Unexpected code execution",
     "ASI06": "Context and memory poisoning",
 }
+LATENCY_MODES = (
+    ("Warm in-process", "warm_in_process"),
+    ("Warm broker", "warm_broker"),
+    ("Cold CLI", "cold_cli"),
+)
 
 
 def _gate_rates(report: dict) -> dict[str, Rate]:
@@ -68,43 +73,49 @@ def _rate_cell(value: Rate) -> str:
     )
 
 
-def _comparison(report: dict, baseline: dict) -> list[str]:
-    left = baseline["evaluation"]["splits"]["eval"]
-    right = report["evaluation"]["splits"]["eval"]
-    names = (f"{_revision(baseline)} Baseline", _revision(report))
+def _comparison(records: tuple[tuple[str, dict], ...]) -> list[str]:
+    names = [name for name, _ in records]
+    reports = [report for _, report in records]
+    rates = [_gate_rates(report) for report in reports]
+    holdouts = [report["evaluation"]["splits"]["eval"] for report in reports]
+
+    def row(label: str, cells: list[str]) -> str:
+        return "| " + " | ".join([label, *cells]) + " |"
+
     lines = [
         "## Frozen eval holdout comparison",
         "",
-        "Both revisions evaluated the same frozen cases. Recall is REVIEW or HOLD.",
+        (
+            "Both revisions evaluated the same frozen cases. Recall is REVIEW or HOLD."
+            if len(records) == 2
+            else "Each run evaluated the same frozen cases. Recall is REVIEW or HOLD."
+        ),
         "Individual rates include two-sided Wilson 95% intervals.",
         "",
-        f"| Metric | {names[0]} | {names[1]} |",
-        "| --- | --- | --- |",
-        f"| Benign Hard FPR | {_rate_cell(left['benign']['hard_fpr'])} | {_rate_cell(right['benign']['hard_fpr'])} |",
-        f"| Benign Friction Rate | {_rate_cell(left['benign']['friction'])} | {_rate_cell(right['benign']['friction'])} |",
+        row("Metric", names),
+        row("---", ["---"] * len(reports)),
     ]
-    old_rates, new_rates = _gate_rates(baseline), _gate_rates(report)
-    for label in (
+    for metric in (
+        "Hard FPR",
+        "Friction Rate",
         "Overall attack recall",
         "OWASP ASI01–ASI06 recall",
         *(f"{category} recall" for category in ATTACK_LABELS),
         "Bypass recall",
     ):
-        lines.append(
-            f"| {label} | {_rate_cell(old_rates[label])} | {_rate_cell(new_rates[label])} |"
-        )
-    for label, mode in (("Warm in-process", "warm_in_process"), ("Cold CLI", "cold_cli")):
+        label = f"Benign {metric}" if metric in {"Hard FPR", "Friction Rate"} else metric
+        lines.append(row(label, [_rate_cell(run_rates[metric]) for run_rates in rates]))
+    for label, mode in LATENCY_MODES:
         cells = []
-        for record in (baseline, report):
-            timing = record["latency"]
+        for report in reports:
+            timing = (report["latency"] or {}).get(mode)
             cells.append(
-                f"{timing[mode]['p50_ms']:.3f} / {timing[mode]['p95_ms']:.3f} ms"
-                if timing is not None
-                else "—"
+                f"{timing['p50_ms']:.3f} / {timing['p95_ms']:.3f} ms" if timing is not None else "—"
             )
-        lines.append(f"| {label} p50 / p95 | {cells[0]} | {cells[1]} |")
+        if mode != "warm_broker" or any(cell != "—" for cell in cells):
+            lines.append(row(f"{label} p50 / p95", cells))
     lines.append("")
-    for name, metrics in zip(names, (left, right), strict=True):
+    for name, metrics in zip(names, holdouts, strict=True):
         misses = ", ".join(
             f"`{row['family']}` ({row['count']})" for row in metrics["issues"]["misses"][:3]
         )
@@ -118,14 +129,66 @@ def _revision(report: dict) -> str:
     return f"v{report['environment']['jrx_version']}"
 
 
-def render_markdown(report: dict, baseline: dict | None = None) -> str:
+def render_markdown(
+    report: dict, baseline: dict | None = None, *, historical: tuple[dict, dict] | None = None
+) -> str:
     environment = report["environment"]
     metrics = report["evaluation"]["splits"]["eval"]
     benign, attack, issues = (metrics[name] for name in ("benign", "attack", "issues"))
+    comparison = ()
+    backend = report["backend"]
+    command = (
+        "python -B -m benchmarks.run --backend deterministic --verify-hashes "
+        "--out benchmarks/results/v0.2.0-step3-deterministic.json --render-md benchmarks/RESULTS.md "
+        "--baseline benchmarks/results/v0.2.0-deterministic.json"
+    )
+    title = f"jrx {_revision(report)} deterministic benchmark"
+    description = (
+        "This benchmark measures **Tier-0 deterministic rules only**, with no semantic model."
+    )
+    if model := report.get("model"):
+        model_name = model["id"].rsplit("/", 1)[-1]
+        label = f"Step 3 + local ONNX ({model_name})"
+        title = f"jrx {label} benchmark"
+        transport = (
+            "a warm Unix socket broker" if backend == "local-broker" else "in-process inference"
+        )
+        description = (
+            f"This benchmark measures Tier-0 rules plus CPU ONNX through {transport}.\n"
+            f"Model `{model['id']}` has verified SHA-256 `{model['sha256']}`."
+        )
+        if policy := report.get("local_policy"):
+            description += (
+                f"\nThe local policy uses a {policy['review_threshold']:.2f} review threshold "
+                f"and a {policy['hold_threshold']:.2f} hold threshold."
+            )
+        output = (
+            "v0.3.0-local-broker-coba68m.json"
+            if backend == "local-broker"
+            else "v0.3.0-local-coba68m.json"
+        )
+        command = (
+            "jrx model pull\n"
+            f"python -m benchmarks.run --backend {backend} --verify-hashes "
+            f"--out benchmarks/results/{output} --render-md benchmarks/RESULTS.md"
+        )
+        if historical is not None:
+            if any(
+                prior["environment"]["dataset_sha256"] != environment["dataset_sha256"]
+                for prior in historical
+            ):
+                raise ValueError("historical comparison requires matching dataset hashes")
+            comparison = (
+                ("v0.2.0 deterministic", historical[0]),
+                ("Step 3 deterministic", historical[1]),
+                (label, report),
+            )
+    elif baseline is not None:
+        comparison = ((f"{_revision(baseline)} Baseline", baseline), (_revision(report), report))
     lines = [
-        f"# jrx {_revision(report)} deterministic benchmark",
+        f"# {title}",
         "",
-        "This benchmark measures **Tier-0 deterministic rules only**, with no semantic model.",
+        description,
         "The benchmark covers single-step pre-execution classification of synthetic cases.",
         "Session taint and integrity pinning are measured by the integration tests.",
         "The out-of-scope OWASP categories are **ASI07** (Insecure Inter-Agent Communication),",
@@ -137,10 +200,10 @@ def render_markdown(report: dict, baseline: dict | None = None) -> str:
         "Run from the repository root with jrx installed in the active Python environment.",
         "",
         "```sh",
-        "python -B -m benchmarks.run --backend deterministic --verify-hashes --out benchmarks/results/v0.2.0-step3-deterministic.json --render-md benchmarks/RESULTS.md --baseline benchmarks/results/v0.2.0-deterministic.json",
+        command,
         "```",
         "",
-        *(_comparison(report, baseline) if baseline is not None else []),
+        *(_comparison(comparison) if comparison else []),
         "## Current eval holdout details",
         "",
         "Rates show the observed fraction and its two-sided Wilson 95% confidence interval.",
@@ -170,14 +233,19 @@ def render_markdown(report: dict, baseline: dict | None = None) -> str:
         )
 
     delta = attack["clean_vs_obfuscated_recall_delta"]
-    lower, upper = delta["newcombe_95"]
+    if delta["newcombe_95"] is not None:
+        lower, upper = delta["newcombe_95"]
+        lines.extend(
+            [
+                "",
+                f"Clean minus obfuscated recall was **{delta['clean_minus_obfuscated'] * 100:+.2f} pp** "
+                f"(Newcombe 95% interval [{lower * 100:+.2f}, {upper * 100:+.2f}] pp).",
+                "The suites contain different cases and attack mixes, so this unpaired difference",
+                "combines obfuscation with other differences between the suites.",
+            ]
+        )
     lines.extend(
         [
-            "",
-            f"Clean minus obfuscated recall was **{delta['clean_minus_obfuscated'] * 100:+.2f} pp** "
-            f"(Newcombe 95% interval [{lower * 100:+.2f}, {upper * 100:+.2f}] pp).",
-            "The suites contain different cases and attack mixes, so this unpaired difference",
-            "combines obfuscation with other differences between the suites.",
             "",
             "## Top known misses & false positives",
             "",
@@ -212,19 +280,24 @@ def render_markdown(report: dict, baseline: dict | None = None) -> str:
                 "| --- | ---: | ---: | ---: | ---: |",
             ]
         )
-        for label, mode in (
-            ("Warm in-process", "warm_in_process"),
-            ("Cold jrx CLI", "cold_cli"),
-        ):
+        for label, mode in LATENCY_MODES:
+            if mode not in latency:
+                continue
             timing = latency[mode]
+            if mode == "cold_cli":
+                label = "Cold jrx CLI"
+            peak_rss = timing["peak_rss_mb"]
+            rss_cell = f"{peak_rss:.2f}" if peak_rss is not None else "—"
             lines.append(
                 f"| {label} | {timing['p50_ms']:.3f} | {timing['p95_ms']:.3f} "
-                f"| {timing['p99_ms']:.3f} | {timing['peak_rss_mb']:.2f} |"
+                f"| {timing['p99_ms']:.3f} | {rss_cell} |"
             )
         lines.extend(
             [
                 "",
-                "Warm peak RSS covers the runner process, including imports and loaded fixtures.",
+                "Warm broker peak RSS is the server high-water mark when available from procfs."
+                if backend == "local-broker"
+                else "Warm peak RSS covers the runner process, including imports and loaded fixtures.",
                 "Cold peak RSS is the child-process high-water mark, including warm-ups.",
             ]
         )

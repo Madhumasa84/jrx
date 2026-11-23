@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from .config import ReflexConfig
+from .config import HOST_GUARD_CHECKS, Mode, ReflexConfig
 from .models import Decision, DeterministicFinding, EvaluationResult, RiskChoice
 
-GUARD_CHECKS = frozenset({"tamper_guard", "taint_exfiltration"})
+GUARD_CHECKS = HOST_GUARD_CHECKS - {"agent_control"}
 
 
 def host_guard_denied(result: EvaluationResult) -> bool:
@@ -38,6 +38,31 @@ def _boundary_rule(name: str, threshold_name: str, threshold: float) -> str:
     return f"BOUNDARY_UNCERTAIN: {name} near {threshold_name} threshold {threshold:.2f}"
 
 
+def _finding_mode(finding: DeterministicFinding, config: ReflexConfig) -> Mode | None:
+    if finding.check in HOST_GUARD_CHECKS:
+        return None
+    return config.rule_modes.get(finding.check)
+
+
+def is_hard_deterministic_finding(finding: DeterministicFinding, config: ReflexConfig) -> bool:
+    if not finding.triggered:
+        return False
+    mode = _finding_mode(finding, config)
+    if mode == "enforce":
+        return finding.blocking or finding.severity in {"medium", "high"}
+    return mode is None and finding.blocking
+
+
+def semantic_rule_mode(name: str, config: ReflexConfig) -> Mode | None:
+    alias = {
+        "wrong_repo_semantic": "wrong_repo",
+        "tests_needed": "needs_tests",
+        "needs_tests": "tests_needed",
+    }.get(name)
+    modes = config.rule_modes
+    return modes.get(name) or (modes.get(alias) if alias is not None else None)
+
+
 class DeterministicPolicyEngine:
     """Apply explicit policy; this class performs no network calls or random work."""
 
@@ -50,6 +75,87 @@ class DeterministicPolicyEngine:
         risk_confidence: float | None = None,
         config: ReflexConfig,
         degraded: bool = False,
+    ) -> PolicyDecision:
+        default_findings = deterministic_findings
+        default_signals = jev_signals
+        overrides: list[tuple[Decision, str, Mode]] = []
+        if config.rule_modes:
+            ordinary_findings: list[DeterministicFinding] = []
+            for finding in deterministic_findings:
+                mode = _finding_mode(finding, config)
+                if mode is None:
+                    ordinary_findings.append(finding)
+                elif finding.triggered:
+                    decision: Decision = "ALLOW"
+                    if is_hard_deterministic_finding(finding, config):
+                        decision = "HOLD"
+                    elif mode == "review" and (
+                        finding.blocking or finding.severity in {"medium", "high"}
+                    ):
+                        decision = "REVIEW"
+                    overrides.append((decision, f"{finding.check}:{finding.reason_code}", mode))
+            default_findings = ordinary_findings
+
+            ordinary_signals: dict[str, float] = {}
+            review = config.thresholds.review
+            strong = config.thresholds.strong
+            margin = (
+                config.stability.boundary_margin
+                if config.stability_policy.mode == "conservative"
+                else 0.0
+            )
+            for name, probability in jev_signals.items():
+                mode = semantic_rule_mode(name, config)
+                if mode is None:
+                    ordinary_signals[name] = probability
+                    continue
+                decision = "ALLOW" if mode == "advisory" else "REVIEW"
+                if margin > 0 and abs(probability - strong) <= margin:
+                    rule = _boundary_rule(name, "hold", strong)
+                elif probability >= strong:
+                    rule = f"{name} >= {strong:.2f}"
+                    if mode == "enforce":
+                        decision = "HOLD"
+                elif margin > 0 and abs(probability - review) <= margin:
+                    rule = _boundary_rule(name, "review", review)
+                elif probability >= review:
+                    rule = f"{name} between {review:.2f} and {strong:.2f}"
+                else:
+                    continue
+                overrides.append((decision, rule, mode))
+            default_signals = ordinary_signals
+
+        ordinary = self._decide_default(
+            default_findings,
+            default_signals,
+            risk_choice=risk_choice,
+            risk_confidence=risk_confidence,
+            config=config,
+            degraded=degraded,
+        )
+        if not overrides:
+            return ordinary
+
+        ranks = {"ALLOW": 0, "REVIEW": 1, "HOLD": 2}
+        decision = ordinary.decision
+        for disposition, _, _ in overrides:
+            if ranks[disposition] > ranks[decision]:
+                decision = disposition
+        return PolicyDecision(
+            decision,
+            tuple(dict.fromkeys((*ordinary.triggered_rules, *(rule for _, rule, _ in overrides)))),
+            (*ordinary.reasons, *(f"{mode} rule override: {rule}" for _, rule, mode in overrides)),
+        )
+
+    def _decide_default(
+        self,
+        deterministic_findings: Sequence[DeterministicFinding],
+        jev_signals: Mapping[str, float],
+        *,
+        risk_choice: RiskChoice,
+        risk_confidence: float | None,
+        config: ReflexConfig,
+        degraded: bool,
     ) -> PolicyDecision:
         strong = config.thresholds.strong
         review = config.thresholds.review
