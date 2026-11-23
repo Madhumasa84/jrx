@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -10,7 +11,9 @@ DIGEST = "a" * 64
 RISK_TOKEN = 50000
 
 
-def install_runtime(monkeypatch, tmp_path, *, risk_text=None) -> SimpleNamespace:
+def install_runtime(
+    monkeypatch, tmp_path, *, risk_text=None, stub_verification=True
+) -> SimpleNamespace:
     from jev_reflex import local_evaluator as local
 
     class FakeTokenizer:
@@ -73,6 +76,7 @@ def install_runtime(monkeypatch, tmp_path, *, risk_text=None) -> SimpleNamespace
 
     state = SimpleNamespace(sessions=0, calls=0, feeds=None, logits=(0.0, 2.0))
     ort = ModuleType("onnxruntime")
+    ort.__spec__ = ModuleSpec("onnxruntime", loader=None)
     ort.SessionOptions = lambda: SimpleNamespace(add_session_config_entry=lambda *_: None)
     ort.InferenceSession = FakeORTSession
     ort.ExecutionMode = SimpleNamespace(ORT_SEQUENTIAL=0)
@@ -125,6 +129,7 @@ def install_runtime(monkeypatch, tmp_path, *, risk_text=None) -> SimpleNamespace
             assert Path(model_dir) == tmp_path
         return verified
 
-    monkeypatch.setattr(local, "verify_model", verify_model)
+    if stub_verification:
+        monkeypatch.setattr(local, "verify_model", verify_model)
     state.verified = verified
     return state

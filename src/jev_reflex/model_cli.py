@@ -14,12 +14,19 @@ from .model_files import ModelError, installed_models, pull_model, verify_model
 
 def pull(model_id: str | None, config: Path | None) -> None:
     try:
-        evaluator = load_config(config).evaluator
-        model = pull_model(model_id or evaluator.local_model, evaluator.model_dir)
+        policy = load_config(config)
+        evaluator = policy.evaluator
+        model = pull_model(
+            model_id or evaluator.local_model,
+            evaluator.model_dir,
+            config=policy if evaluator.provider != "jev" and not evaluator.local_base_url else None,
+        )
     except (ModelError, ValueError, OSError) as exc:
         typer.echo(f"Model pull failed. {exc}", err=True)
         raise typer.Exit(1) from None
-    typer.echo(f"Installed {model.model_id} ({model.size_bytes:,} bytes, SHA-256 {model.digest}).")
+    typer.echo(
+        f"Installed {model.model_id} ({model.size_bytes:,} bytes, bundle SHA-256 {model.digest})."
+    )
 
 
 def status(config: Path | None, json_output: bool) -> None:

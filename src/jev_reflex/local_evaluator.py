@@ -18,7 +18,13 @@ from .context import bounded_text
 from .evaluator import _redacted_context
 from .metrics import get_registry
 from .model_files import INSTALL_LOCAL, PULL_MODEL, verify_model
-from .models import EvaluationContext, RiskInfo, SemanticSignals
+from .models import (
+    EvaluationContext,
+    RiskInfo,
+    SemanticContributor,
+    SemanticSignals,
+    semantic_provenance,
+)
 from .policy import semantic_rule_mode
 
 if TYPE_CHECKING:
@@ -26,6 +32,7 @@ if TYPE_CHECKING:
 
     from .config import ReflexConfig
     from .evaluator import SemanticEvaluator
+    from .model_files import VerifiedModel
 
 NOUL = 2
 WINDOW = 512
@@ -182,7 +189,7 @@ def _validate_tensors(nodes: list[Any], expected: dict[str, tuple[str, int]]) ->
 class LocalONNXModel:
     """A verified, self-contained Laya graph using only the CPU provider."""
 
-    def __init__(self, config: ReflexConfig) -> None:
+    def __init__(self, config: ReflexConfig, *, assets: VerifiedModel | None = None) -> None:
         try:
             np = import_module("numpy")
             ort = import_module("onnxruntime")
@@ -191,7 +198,8 @@ class LocalONNXModel:
             raise LocalEvaluationError(DEPENDENCY_WARNING) from exc
 
         try:
-            assets = verify_model(config.evaluator.local_model, config.evaluator.model_dir)
+            if assets is None:
+                assets = verify_model(config.evaluator.local_model, config.evaluator.model_dir)
             decision = json.loads(assets.read_asset(assets.decision))
             calibration = json.loads(assets.read_asset(assets.calibration))
             if (
@@ -249,6 +257,9 @@ class LocalONNXModel:
                 self._encode(" false: no, the statement does not hold"),
                 self._encode(" true: yes, the statement holds"),
             )
+            # Include conditional diff questions if the policy can activate them later.
+            for name in active_local_signals(config) & RISK_QUESTIONS.keys():
+                self._question_frame(RISK_QUESTIONS[name])
             cpu = ort.SessionOptions()
             cpu.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
             cpu.intra_op_num_threads = min(4, os.cpu_count() or 1)
@@ -275,6 +286,18 @@ class LocalONNXModel:
             raise ValueError("unexpected option marker in supplied text")
         return ids
 
+    def _question_frame(self, question: str) -> tuple[list[int], list[int], int]:
+        head = [self.cls, *self._encode(f"noul question: {question}"), self.sep]
+        positions = []
+        for option in self.options:
+            positions.append(len(head))
+            head.extend([self.mask, *option])
+        head.append(self.sep)
+        room = self.max_tokens - len(head) - 1
+        if len(head) > self.head_max_len or room < 0:
+            raise ValueError("the question exceeds the configured token window")
+        return head, positions, room
+
     def score(self, state: str, questions: dict[str, str]) -> tuple[dict[str, float], bool]:
         if not questions:
             return {}, False
@@ -282,15 +305,7 @@ class LocalONNXModel:
         rows, markers = [], []
         truncated = False
         for question in questions.values():
-            head = [self.cls, *self._encode(f"noul question: {question}"), self.sep]
-            positions = []
-            for option in self.options:
-                positions.append(len(head))
-                head.extend([self.mask, *option])
-            head.append(self.sep)
-            room = self.max_tokens - len(head) - 1
-            if len(head) > self.head_max_len or room < 0:
-                raise ValueError("the question exceeds the configured token window")
+            head, positions, room = self._question_frame(question)
             excerpt = state_ids
             if len(excerpt) > room:
                 truncated = True
@@ -419,6 +434,8 @@ class LocalSemanticEvaluator:
         self.last_api_requests = 0
         self.last_usage: dict[str, int] | None = None
         self._lock = Lock()
+        self._retry_at = 0.0
+        self._retry_delay = 1.0
         self._count = 0
         self._latency_seconds = 0.0
 
@@ -426,11 +443,15 @@ class LocalSemanticEvaluator:
         if self.config.evaluator.local_base_url:
             return
         with self._lock:
-            if self.model is None and self.loading_warning is None:
+            if self.model is None and time.monotonic() >= self._retry_at:
                 try:
                     self.model = LocalONNXModel(self.config)
                 except LocalEvaluationError as exc:
                     self.loading_warning = str(exc)
+                    self._retry_at = time.monotonic() + self._retry_delay
+                    self._retry_delay = min(self._retry_delay * 2, 30.0)
+                else:
+                    self.loading_warning = None
 
     def health(self) -> dict[str, Any]:
         with self._lock:
@@ -445,10 +466,12 @@ class LocalSemanticEvaluator:
 
     def _evaluate_local(self, context: EvaluationContext) -> SemanticSignals:
         self.warm()
-        digest = self.model.digest if self.model else None
+        with self._lock:
+            model = self.model
+            warning = self.loading_warning
+        digest = model.digest if model else None
         probabilities: dict[str, float] = {}
         truncated = False
-        warning = self.loading_warning
         started = None
         try:
             if warning is None:
@@ -459,8 +482,8 @@ class LocalSemanticEvaluator:
                     if self.config.evaluator.local_base_url:
                         probabilities = _evaluate_system_one(self.config, state, questions)
                     else:
-                        assert self.model is not None
-                        probabilities, token_truncated = self.model.score(state, questions)
+                        assert model is not None
+                        probabilities, token_truncated = model.score(state, questions)
                         truncated = truncated or token_truncated
                     if "needs_tests" in probabilities and "tests_needed" in active_local_signals(
                         self.config
@@ -483,6 +506,9 @@ class LocalSemanticEvaluator:
             risk=RiskInfo(choice="medium" if warning else "low"),
             source="local",
             model_digest=digest,
+            contributors=(
+                SemanticContributor(source="local", model_id=self.model_id, model_digest=digest),
+            ),
             truncated=truncated,
             degraded=warning is not None,
             warnings=[warning] if warning else [TRUNCATED_WARNING] if truncated else [],
@@ -533,6 +559,7 @@ class LocalSemanticEvaluator:
                     }
                     if not retained:
                         return hosted
+                    source, digest, contributors = semantic_provenance((result, hosted))
                     return result.model_copy(
                         update={
                             "probabilities": {
@@ -544,6 +571,9 @@ class LocalSemanticEvaluator:
                                 **retained,
                             },
                             "risk": hosted.risk,
+                            "source": source,
+                            "model_digest": digest,
+                            "contributors": contributors,
                         }
                     )
         return result.model_copy(

@@ -149,7 +149,12 @@ def test_hybrid_retains_local_only_hold_when_hosted_fallback_succeeds(monkeypatc
     state = context().model_copy(update={"git_diff": "+more text"})
     result = evaluate_context(state, config=config, semantic_evaluator=evaluator)
     assert result.decision == "HOLD" and not result.degraded
-    assert result.model_digest == DIGEST
+    assert result.semantic_source == "hybrid" and result.model_digest is None
+    assert result.semantic_contributors is not None
+    assert {(item.source, item.model_digest) for item in result.semantic_contributors} == {
+        ("local", DIGEST),
+        ("jev", None),
+    }
     assert result.signals == {"prompt_injection": 0.05, "goal_hijack_diff": 0.99}
 
 
@@ -402,3 +407,124 @@ assert blocked.isdisjoint(sys.modules)
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_active_question_window_is_verified_before_loading_graph(runtime):
+    result = evaluate_context(context(), config=configure(max_tokens=10))
+    assert result.degraded and result.signals == {}
+    assert runtime.sessions == 0
+
+
+def test_required_audit_failure_publishes_only_final_advisory_decision(tmp_path, monkeypatch):
+    from jev_reflex import evaluator
+    from jev_reflex.audit import AuditLog
+
+    events = []
+
+    def fail_audit(self, **kwargs):
+        events.append(("audit", kwargs["policy_decision"].decision))
+        raise OSError("fixture failure")
+
+    def log(*, event, fields, **kwargs):
+        if event == "policy_decision":
+            events.append(("log", fields["decision"], fields["degraded"]))
+
+    monkeypatch.setattr(AuditLog, "write_entry", fail_audit)
+    monkeypatch.setattr(evaluator, "log_structured", log)
+    monkeypatch.setattr(
+        evaluator.decisions_total,
+        "inc",
+        lambda **labels: events.append(("count", labels["decision"])),
+    )
+    monkeypatch.setattr(
+        evaluator.degraded_evaluations_total,
+        "inc",
+        lambda **labels: events.append(("degraded", labels["reason"])),
+    )
+    config = ReflexConfig(
+        mode="advisory",
+        audit={"enabled": True, "fail_closed": True, "path": str(tmp_path / "audit")},
+    )
+    result = evaluate_context(context(), config=config, use_jev=False)
+    assert result.decision == "HOLD" and result.degraded
+    assert events == [
+        ("audit", "ALLOW"),
+        ("count", "HOLD"),
+        ("degraded", "audit_unavailable"),
+        ("log", "HOLD", True),
+    ]
+
+
+def test_mixed_samples_record_every_contributor_in_audit(tmp_path):
+    from jev_reflex.audit import AuditLog
+
+    other = "b" * 64
+    samples = iter(
+        [
+            SemanticSignals(source="local", model_digest=DIGEST, risk=RiskInfo(choice="low")),
+            SemanticSignals(source="local", model_digest=other, risk=RiskInfo(choice="low")),
+            SemanticSignals(source="jev", risk=RiskInfo(choice="low")),
+        ]
+    )
+    audit = tmp_path / "audit.jsonl"
+    config = ReflexConfig(audit={"enabled": True, "path": str(audit)})
+    result = evaluate_context(
+        context(),
+        config=config,
+        samples=3,
+        semantic_evaluator=SimpleNamespace(evaluate=lambda _: next(samples)),
+    )
+    assert result.semantic_source == "hybrid" and result.model_digest is None
+    entry = json.loads(audit.read_text())
+    assert entry["source"] == "hybrid" and entry.get("model_digest") is None
+    assert entry["semantic_contributors"] == [
+        {"source": "local", "model_digest": DIGEST},
+        {"source": "local", "model_digest": other},
+        {"source": "jev"},
+    ]
+    assert AuditLog(config).verify()[0]
+
+
+def test_hybrid_broker_checks_bounds_and_round_trips_mixed_models(monkeypatch):
+    from jev_reflex.broker import BrokerClient
+    from jev_reflex.local_evaluator import LocalSemanticEvaluator
+    from test_broker import running_broker
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-only")
+    config = configure(provider="hybrid", local_base_url="http://127.0.0.1:11435")
+    config.hold_on.append("goal_hijack_diff")
+    calls = []
+    local = LocalSemanticEvaluator(
+        config,
+        fallback=SimpleNamespace(
+            evaluate=lambda _: SemanticSignals(
+                probabilities={"prompt_injection": 0.05}, risk=RiskInfo(choice="low")
+            )
+        ),
+    )
+
+    def score(ctx):
+        calls.append(ctx)
+        return SemanticSignals(
+            source="local",
+            model_digest=DIGEST,
+            risk=RiskInfo(choice="low"),
+            probabilities={"prompt_injection": 0.5, "goal_hijack_diff": 0.99},
+        )
+
+    monkeypatch.setattr(local, "_evaluate_local", score)
+    state = context().model_copy(update={"git_diff": "+more text"})
+    with running_broker(evaluator=local, config=config) as (broker, _):
+        for change in ({"hybrid_uncertain_low": 0.25}, {"hybrid_uncertain_high": 0.75}):
+            mismatched = broker.model_copy(
+                update={"evaluator": broker.evaluator.model_copy(update=change)}
+            )
+            assert BrokerClient(mismatched).evaluate(state).degraded
+        assert not calls
+        result = BrokerClient(broker).evaluate(state)
+    assert len(calls) == 1 and not result.degraded
+    assert result.source == "hybrid" and result.model_digest is None
+    assert {(item.source, item.model_digest) for item in result.contributors} == {
+        ("local", DIGEST),
+        ("jev", None),
+    }

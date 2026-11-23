@@ -164,6 +164,49 @@ def test_explicit_hold_exception_is_lintable(production):
     assert lint(path)[0] == 0
 
 
+def test_production_lint_flags_standard_profile(production):
+    path, _, settings = production
+    settings.pop("profile")
+    path.write_text(yaml.safe_dump(settings))
+    exit_code, report = lint(path)
+    assert exit_code == 0
+    assert any(issue["code"] == "production_profile_inactive" for issue in report["issues"])
+
+
+def test_production_lint_accepts_exactly_funded_batch(production):
+    path, _, settings = production
+    settings["jev"]["samples"] = 35
+    settings["session"]["max_semantic_spend_usd"] = 0.35
+    path.write_text(yaml.safe_dump(settings))
+    assert lint(path)[0] == 0
+
+
+def test_production_lint_rejects_matching_relative_scopes(production):
+    path, _, settings = production
+    for rule in settings["access"]["rules"]:
+        rule["repositories"] = ["team/checkout"]
+    path.write_text(yaml.safe_dump(settings))
+    exit_code, report = lint(path)
+    assert exit_code == 1
+    assert any(issue["code"] == "production_checkout_scope" for issue in report["issues"])
+
+
+def test_production_lint_rejects_dotted_oidc_placeholders(production):
+    path, _, settings = production
+    settings["access"].update(
+        issuer="https://idp.example.com.", jwks_uri="https://idp.example.com./keys"
+    )
+    path.write_text(yaml.safe_dump(settings))
+    exit_code, report = lint(path)
+    assert exit_code == 1
+    assert {
+        issue["path"] for issue in report["issues"] if issue["code"] == "production_oidc_endpoint"
+    } == {
+        "access.issuer",
+        "access.jwks_uri",
+    }
+
+
 def test_doctor_reports_missing_production_controls(production, monkeypatch):
     path, repo, settings = production
     monkeypatch.setattr("jev_reflex.workspace.ui.detect_providers", lambda _: ())

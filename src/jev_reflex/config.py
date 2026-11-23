@@ -29,6 +29,7 @@ PolicyProfile = Literal["standard", "production"]
 
 DEFAULT_MODEL_ID = "ollaya-dev/coba-68m-ternary"
 DEFAULT_MODEL_DIR = "~/.jev-reflex/models"
+ONNX_MIN_FRAMING_TOKENS = 6  # CLS, three SEP tokens, and two option masks
 
 HOST_GUARD_CHECKS = frozenset({"tamper_guard", "taint_exfiltration", "agent_control"})
 DETERMINISTIC_RULE_NAMES = HOST_GUARD_CHECKS | {
@@ -355,8 +356,14 @@ class EvaluatorConfig(BaseModel):
         if self.hybrid_uncertain_low >= self.hybrid_uncertain_high:
             raise ValueError("hybrid uncertainty band must have a lower and a higher bound")
         if self.local_base_url is not None:
+            if self.provider == "jev":
+                raise ValueError("local_base_url requires the local or hybrid evaluator")
             parse_local_base_url(
                 self.local_base_url, allow_non_loopback_http=self.allow_non_loopback_http
+            )
+        elif self.provider != "jev" and self.max_tokens < ONNX_MIN_FRAMING_TOKENS:
+            raise ValueError(
+                f"In-process ONNX requires at least {ONNX_MIN_FRAMING_TOKENS} framing tokens"
             )
         return self
 

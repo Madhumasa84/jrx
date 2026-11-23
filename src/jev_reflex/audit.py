@@ -20,6 +20,8 @@ from .policy import PolicyDecision
 from .redaction import redact_obj
 from .signing import CosignSigner, Ed25519Signer, Signer
 
+_PROVENANCE_FIELDS = ("source", "model_digest", "decision_id", "semantic_contributors")
+
 GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000"
 
 
@@ -75,7 +77,7 @@ class AuditEntry:
         degraded: bool | None = None,
         forced_review: bool | None = None,
         hook_correlation: dict[str, Any] | None = None,
-        local_provenance: dict[str, str | None] | None = None,
+        local_provenance: dict[str, Any] | None = None,
         approval_id: str | None = None,
     ) -> None:
         self.seq = seq
@@ -134,8 +136,9 @@ class AuditEntry:
         if self.hook_correlation is not None:
             data["hook_correlation"] = self.hook_correlation
         if self.local_provenance is not None:
-            for key in ("source", "model_digest", "decision_id"):
-                data[key] = self.local_provenance[key]
+            for key in _PROVENANCE_FIELDS:
+                if key in self.local_provenance:
+                    data[key] = self.local_provenance[key]
         return data
 
     def _compute_hash(self) -> str:
@@ -242,8 +245,8 @@ class AuditLog:
                     approval_id=data.get("approval_id"),
                     hook_correlation=data.get("hook_correlation"),
                     local_provenance=(
-                        {key: data[key] for key in ("source", "model_digest", "decision_id")}
-                        if data.get("source") == "local"
+                        {key: data[key] for key in _PROVENANCE_FIELDS if key in data}
+                        if data.get("source") in {"local", "hybrid"}
                         else None
                     ),
                 )
@@ -281,7 +284,7 @@ class AuditLog:
         degraded: bool | None = None,
         forced_review: bool | None = None,
         hook_correlation: HookAuditCorrelation | dict[str, Any] | None = None,
-        local_provenance: dict[str, str | None] | None = None,
+        local_provenance: dict[str, Any] | None = None,
     ) -> None:
         """Write a new entry to the audit log with file locking."""
         if not self.should_log():
@@ -342,7 +345,7 @@ class AuditLog:
         degraded: bool | None,
         forced_review: bool | None,
         hook_correlation: dict[str, Any] | None,
-        local_provenance: dict[str, str | None] | None,
+        local_provenance: dict[str, Any] | None,
     ) -> None:
         """Atomically read last entry, compute next sequence, and write with file locking."""
         with self._open_append() as f:

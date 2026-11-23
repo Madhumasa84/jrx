@@ -171,6 +171,15 @@ def lint_policy(path: Path | bytes, *, profile: PolicyProfile = "standard") -> d
     if config is not None:
         if production:
             issues.extend(production_issues(config))
+            if config.profile == "standard":
+                issues.append(
+                    _issue(
+                        "warning",
+                        "production_profile_inactive",
+                        "profile",
+                        "Set profile: production to activate production validation at runtime.",
+                    )
+                )
         known_signals = known_semantic_rules(config.evaluator)
         for field in ("hold_on", "review_on"):
             rules = getattr(config, field)

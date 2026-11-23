@@ -59,6 +59,9 @@ def test_init_default_path_and_overwrite_guard(monkeypatch, tmp_path):
     [
         b"evaluator: {provider: invalid}",
         b"evaluator: {max_tokens: 513}",
+        b"evaluator: {provider: local, max_tokens: 1}",
+        b"evaluator: {local_base_url: 'http://127.0.0.1:11435'}",
+        b"evaluator: {provider: jev, local_base_url: 'http://127.0.0.1:11435'}",
         b"evaluator: {hybrid_uncertain_low: 0.7, hybrid_uncertain_high: 0.4}",
         b"evaluator: {local_base_url: 'http://example.org:11435'}",
         b"evaluator: {local_base_url: 'http://user:secret@127.0.0.1'}",
@@ -79,9 +82,11 @@ def test_evaluator_defaults_and_explicit_http_opt_in():
     assert "evaluator" not in config.model_dump()
     assert "rule_modes" not in config.model_dump()
     for endpoint in ("http://127.0.0.1:11435", "http://[::1]:11435", "http://localhost:11435"):
-        assert lint_policy(f'evaluator: {{local_base_url: "{endpoint}"}}'.encode())["valid"]
+        assert lint_policy(
+            f'evaluator: {{provider: local, local_base_url: "{endpoint}"}}'.encode()
+        )["valid"]
     assert lint_policy(
-        b"evaluator: {local_base_url: 'http://example.org:11435', allow_non_loopback_http: true}"
+        b"evaluator: {provider: hybrid, local_base_url: 'http://example.org:11435', allow_non_loopback_http: true}"
     )["valid"]
     http_config = EvaluatorConfig(
         provider="local", local_base_url="http://127.0.0.1:11435", local_model="coba:68m-ternary"

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from .config import ReflexConfig, parse_local_base_url
+from .session_limits import SEMANTIC_SPEND_TOLERANCE
 
 OIDC_PLACEHOLDER = "https://idp.example.com"
 CHECKOUT_PLACEHOLDER = "/path/to/production-checkout"
@@ -16,7 +18,7 @@ def _configured_oidc_url(value: str) -> bool:
         url = parse_local_base_url(value, allow_non_loopback_http=False)
     except ValueError:
         return False
-    return url.scheme == "https" and url.hostname != "idp.example.com"
+    return url.scheme == "https" and (url.hostname or "").rstrip(".") != "idp.example.com"
 
 
 def _pinned_image(value: str | None) -> bool:
@@ -83,7 +85,7 @@ def production_issues(config: ReflexConfig) -> list[dict[str, str]]:
     )
     require(
         config.session.reserved_cost_per_evaluation_usd * config.jev.samples
-        <= config.session.max_semantic_spend_usd
+        <= config.session.max_semantic_spend_usd + SEMANTIC_SPEND_TOLERANCE
         and config.jev.samples <= config.session.max_semantic_evaluations,
         "production_session_budget",
         "session",
@@ -133,15 +135,23 @@ def production_issues(config: ReflexConfig) -> list[dict[str, str]]:
                 execute.update(rule.repositories)
             if "review" in rule.actions:
                 review.update(rule.repositories)
+        scopes = execute | review
+        absolute_scopes = all(repo == "*" or Path(repo).is_absolute() for repo in scopes)
         require(
-            bool(execute)
-            and CHECKOUT_PLACEHOLDER not in (execute | review)
-            and all(repo.strip() for repo in execute | review)
-            and ("*" in review or execute <= review),
-            "production_review_scope",
+            absolute_scopes,
+            "production_checkout_scope",
             "access.rules",
-            "Configure OIDC execute and review rules covering each production checkout.",
+            "Use absolute checkout paths or * in production execute and review rules.",
         )
+        if absolute_scopes:
+            require(
+                bool(execute)
+                and CHECKOUT_PLACEHOLDER not in scopes
+                and ("*" in review or execute <= review),
+                "production_review_scope",
+                "access.rules",
+                "Configure OIDC execute and review rules covering each production checkout.",
+            )
     require(
         config.sandbox.enabled,
         "production_sandbox_disabled",

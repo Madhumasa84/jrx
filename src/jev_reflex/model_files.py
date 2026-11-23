@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import io
 import json
@@ -11,14 +12,15 @@ import shutil
 import stat
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from errno import ELOOP, ENOTDIR
 from importlib import import_module
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+from weakref import finalize
 
-from .config import DEFAULT_MODEL_DIR, DEFAULT_MODEL_ID
+from .config import DEFAULT_MODEL_DIR, DEFAULT_MODEL_ID, EvaluatorConfig, ReflexConfig
 
 INSTALL_LOCAL = 'pip install "jev-reflex[local]"'
 PULL_MODEL = "jrx model pull"
@@ -27,17 +29,28 @@ _MODEL_COMPONENT = r"[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,94}[A-Za-z0-9_])?"
 _MODEL_ID = re.compile(rf"{_MODEL_COMPONENT}/{_MODEL_COMPONENT}")
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
-_GENERATION = re.compile(r"snapshot-[0-9a-f]{32}")
+_LEGACY_GENERATION = re.compile(r"snapshot-[0-9a-f]{32}")
+_GENERATION = re.compile(r"snapshot-v2-[0-9a-f]{32}")
 _MANIFEST = "manifest.json"
 _MANIFEST_LIMIT = 16_384
 _GRAPH = "onnx/model.onnx"
-_FILES = (_GRAPH, "tokenizer.json", "calibration.json", "decision.json", "LICENSE", "NOTICE")
+_INFERENCE_FILES = (_GRAPH, "tokenizer.json", "calibration.json", "decision.json")
+_FILES = (*_INFERENCE_FILES, "LICENSE", "NOTICE")
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
 
 
 class ModelError(RuntimeError):
     """The local model cannot be installed or used safely."""
+
+
+class _SnapshotLease:
+    """Keep a shared lock until the reader releases its verified snapshot."""
+
+    def __init__(self, cache: Path, snapshot: Path) -> None:
+        with _open_cache_directory(cache, snapshot) as fd:
+            fcntl.flock(fd, fcntl.LOCK_SH)
+            self.close = finalize(self, os.close, os.dup(fd))
 
 
 @dataclass(frozen=True)
@@ -53,6 +66,7 @@ class VerifiedModel:
     revision: str
     _cache: Path
     _asset_hashes: dict[Path, str]
+    _lease: _SnapshotLease = field(repr=False, compare=False)
 
     def read_asset(self, file: Path) -> bytes:
         """Verify the exact bytes the tokenizer or inference runtime will consume."""
@@ -156,12 +170,15 @@ def _read_manifest(model_id: str, cache: Path) -> tuple[dict[str, Any], str]:
         data = None
     if (
         not isinstance(data, dict)
-        or data.get("version") != 1
+        or type(data.get("version")) is not int
+        or data["version"] not in {1, 2}
         or data.get("model_id") != model_id
         or not isinstance(data.get("revision"), str)
         or not _REVISION.fullmatch(data["revision"])
         or not isinstance(data.get("generation"), str)
-        or not _GENERATION.fullmatch(data["generation"])
+        or not (_LEGACY_GENERATION if data["version"] == 1 else _GENERATION).fullmatch(
+            data["generation"]
+        )
         or not isinstance(data.get("sha256"), dict)
         or data["sha256"].keys() != set(_FILES)
         or any(
@@ -192,36 +209,60 @@ def _verify_hashes(cache: Path, files: dict[str, Path], expected: dict[str, str]
     return total_size
 
 
-def verify_model(model_id: str, model_dir: str | Path = DEFAULT_MODEL_DIR) -> VerifiedModel:
-    """Verify the published manifest and every required file before returning their paths."""
-    model_id = canonical_model_id(model_id)
-    try:
-        cache = _cache_directory(model_dir)
-        manifest, manifest_sha256 = _read_manifest(model_id, cache)
-        files = _snapshot_paths(cache / model_id / manifest["generation"])
-        size = _verify_hashes(cache, files, manifest["sha256"])
-    except FileNotFoundError:
-        raise ModelError(f"Local model {model_id} is missing. Run `{PULL_MODEL}`.") from None
-    except ModelError as exc:
-        raise ModelError(f"{exc} Run `{PULL_MODEL}`.") from None
-    except (OSError, RuntimeError):
-        raise ModelError(f"Cannot read local model {model_id}. Run `{PULL_MODEL}`.") from None
+def _active_snapshot(model_id: str, cache: Path) -> tuple[dict[str, Any], str, _SnapshotLease]:
+    # Pair the manifest read with acquisition of the snapshot lock so a writer
+    # cannot delete the generation between those operations.
+    with _open_cache_directory(cache, cache / model_id) as root_fd:
+        fcntl.flock(root_fd, fcntl.LOCK_SH)
+        manifest, digest = _read_manifest(model_id, cache)
+        return manifest, digest, _SnapshotLease(cache, cache / model_id / manifest["generation"])
+
+
+def _verified_snapshot(
+    cache: Path, manifest: dict[str, Any], manifest_sha256: str, lease: _SnapshotLease
+) -> VerifiedModel:
+    model_id = manifest["model_id"]
+    files = _snapshot_paths(cache / model_id / manifest["generation"])
+    hashes = manifest["sha256"]
+    size = _verify_hashes(cache, files, hashes)
+    inference_hashes = {name: hashes[name] for name in _INFERENCE_FILES}
+    digest = hashlib.sha256(json.dumps(inference_hashes, sort_keys=True).encode()).hexdigest()
     return VerifiedModel(
         model_id=model_id,
         graph=files[_GRAPH],
         tokenizer=files["tokenizer.json"],
         calibration=files["calibration.json"],
         decision=files["decision.json"],
-        digest=manifest["sha256"][_GRAPH],
+        digest=digest,
         manifest_sha256=manifest_sha256,
         size_bytes=size,
         revision=manifest["revision"],
         _cache=cache,
-        _asset_hashes={file: manifest["sha256"][name] for name, file in files.items()},
+        _asset_hashes={file: hashes[name] for name, file in files.items()},
+        _lease=lease,
     )
 
 
-def _catalog(hub: Any, model_id: str) -> tuple[str, dict[str, Any]]:
+def verify_model(model_id: str, model_dir: str | Path = DEFAULT_MODEL_DIR) -> VerifiedModel:
+    """Verify the published manifest and pin the snapshot for subsequent exact-byte reads."""
+    model_id = canonical_model_id(model_id)
+    try:
+        cache = _cache_directory(model_dir)
+        manifest, digest, lease = _active_snapshot(model_id, cache)
+        try:
+            return _verified_snapshot(cache, manifest, digest, lease)
+        except BaseException:
+            lease.close()
+            raise
+    except FileNotFoundError:
+        raise ModelError(f"Local model {model_id} is missing. Run `{PULL_MODEL}`.") from None
+    except ModelError as exc:
+        raise ModelError(f"{exc} Run `{PULL_MODEL}`.") from None
+    except (OSError, RuntimeError):
+        raise ModelError(f"Cannot read local model {model_id}. Run `{PULL_MODEL}`.") from None
+
+
+def _catalog(hub: Any, model_id: str) -> tuple[str, dict[str, str]]:
     try:
         info = hub.HfApi().model_info(model_id, files_metadata=True, token=False)
     except Exception as exc:
@@ -234,11 +275,16 @@ def _catalog(hub: Any, model_id: str) -> tuple[str, dict[str, Any]]:
     missing = set(_FILES) - siblings.keys()
     if missing:
         raise ModelError(f"{model_id} lacks required artifacts ({', '.join(sorted(missing))}).")
-    return info.sha, siblings
+    hashes = {
+        name: digest
+        for name in _FILES
+        if (digest := getattr(siblings[name].lfs, "sha256", None)) is not None
+    }
+    return info.sha, hashes
 
 
 def _download(
-    hub: Any, model_id: str, revision: str, cache: Path, snapshot: Path, catalog: dict[str, Any]
+    hub: Any, model_id: str, revision: str, cache: Path, snapshot: Path, catalog: dict[str, str]
 ) -> dict[str, str]:
     hashes = {}
     for name, path in _snapshot_paths(snapshot).items():
@@ -251,7 +297,7 @@ def _download(
         if Path(downloaded) != path:
             raise ModelError(f"Hugging Face returned an unexpected path for {name}.")
         digest, _ = _artifact_digest(cache, path)
-        remote_hash = getattr(catalog[name].lfs, "sha256", None)
+        remote_hash = catalog.get(name)
         if remote_hash is not None and digest != remote_hash:
             raise ModelError(f"SHA-256 mismatch for downloaded artifact {name}.")
         hashes[name] = digest
@@ -261,8 +307,37 @@ def _download(
     return hashes
 
 
-def pull_model(model_id: str, model_dir: str | Path = DEFAULT_MODEL_DIR) -> VerifiedModel:
-    """Fetch a pinned revision and publish its manifest only after verification."""
+def _collect_inactive_snapshots(root_fd: int, active: str) -> None:
+    """Reclaim unpinned snapshots created by clients that participate in the locking protocol."""
+    with os.scandir(root_fd) as entries:
+        generations = [
+            entry.name
+            for entry in entries
+            if entry.name != active and _GENERATION.fullmatch(entry.name)
+        ]
+    for generation in generations:
+        try:
+            fd = os.open(generation, _DIRECTORY_FLAGS, dir_fd=root_fd)
+            try:
+                _trusted_permissions(os.fstat(fd))
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                shutil.rmtree(generation, dir_fd=root_fd)
+            finally:
+                os.close(fd)
+        except (OSError, ModelError):
+            # A reader, a staged download, or a cache entry we cannot safely remove.
+            continue
+
+
+def pull_model(
+    model_id: str,
+    model_dir: str | Path = DEFAULT_MODEL_DIR,
+    *,
+    config: ReflexConfig | None = None,
+) -> VerifiedModel:
+    """Fetch and load-check a pinned revision before switching the active manifest."""
+    from .local_evaluator import LocalEvaluationError, LocalONNXModel
+
     model_id = canonical_model_id(model_id)
     cache = _cache_directory(model_dir)
     try:
@@ -277,52 +352,74 @@ def pull_model(model_id: str, model_dir: str | Path = DEFAULT_MODEL_DIR) -> Veri
         installed = verify_model(model_id, cache)
     except ModelError:
         installed = None
-    pinned_graph_digest = getattr(catalog[_GRAPH].lfs, "sha256", None)
     if (
         installed is not None
         and installed.revision == revision
-        and (pinned_graph_digest is None or installed.digest == pinned_graph_digest)
+        and all(
+            installed._asset_hashes[installed.tokenizer.parent / name] == digest
+            for name, digest in catalog.items()
+        )
     ):
         return installed
+    del installed
 
-    generation = f"snapshot-{uuid4().hex}"
+    generation = f"snapshot-v2-{uuid4().hex}"
     root = cache / model_id
     snapshot = root / generation
     pending_manifest = f".{generation}.json"
+    policy = config or ReflexConfig(evaluator=EvaluatorConfig(provider="local"))
     try:
         with _open_cache_directory(cache, root, create=True) as root_fd:
+            fcntl.flock(root_fd, fcntl.LOCK_EX)
             os.mkdir(generation, mode=0o700, dir_fd=root_fd)
             published = False
+            lease = None
             try:
+                lease = _SnapshotLease(cache, snapshot)
+                # Pin the new snapshot while the root lock is released for slow I/O.
+                fcntl.flock(root_fd, fcntl.LOCK_UN)
                 hashes = _download(hub, model_id, revision, cache, snapshot, catalog)
-                _verify_hashes(cache, _snapshot_paths(snapshot), hashes)
                 manifest = {
-                    "version": 1,
+                    "version": 2,
                     "model_id": model_id,
                     "revision": revision,
                     "generation": generation,
                     "sha256": hashes,
                 }
+                manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
+                model = _verified_snapshot(
+                    cache, manifest, hashlib.sha256(manifest_bytes).hexdigest(), lease
+                )
+                try:
+                    LocalONNXModel(policy, assets=model)
+                except LocalEvaluationError as exc:
+                    raise ModelError(
+                        f"Downloaded model failed the runtime compatibility check. {exc}"
+                    ) from None
                 manifest_fd = os.open(
                     pending_manifest,
                     os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
                     0o600,
                     dir_fd=root_fd,
                 )
-                with os.fdopen(manifest_fd, "w", encoding="utf-8") as stream:
-                    json.dump(manifest, stream, indent=2, sort_keys=True)
-                    stream.write("\n")
-                # Readers with the old manifest can still open that immutable snapshot.
+                with os.fdopen(manifest_fd, "wb") as stream:
+                    stream.write(manifest_bytes)
+                fcntl.flock(root_fd, fcntl.LOCK_EX)
                 os.replace(pending_manifest, _MANIFEST, src_dir_fd=root_fd, dst_dir_fd=root_fd)
                 published = True
+                # Collection is best-effort once the active manifest has switched.
+                with suppress(OSError):
+                    _collect_inactive_snapshots(root_fd, generation)
+                return model
             finally:
                 if not published:
                     with suppress(FileNotFoundError):
                         os.unlink(pending_manifest, dir_fd=root_fd)
                     shutil.rmtree(generation, dir_fd=root_fd, ignore_errors=True)
+                    if lease is not None:
+                        lease.close()
     except OSError:
         raise ModelError(f"Cannot write the local model cache for {model_id}.") from None
-    return verify_model(model_id, cache)
 
 
 def _cache_subdirectories(cache: Path, directory: Path) -> list[str]:
@@ -360,11 +457,13 @@ def installed_models(model_dir: str | Path = DEFAULT_MODEL_DIR) -> list[dict[str
             "verified": False,
         }
         try:
-            manifest, digest = _read_manifest(model_id, directory)
-            entry.update(manifest_sha256=digest, revision=manifest["revision"])
-            files = _snapshot_paths(directory / model_id / manifest["generation"])
-            entry["size_bytes"] = _verify_hashes(directory, files, manifest["sha256"])
-            entry["verified"] = True
+            manifest, digest, lease = _active_snapshot(model_id, directory)
+            try:
+                entry.update(manifest_sha256=digest, revision=manifest["revision"])
+                model = _verified_snapshot(directory, manifest, digest, lease)
+                entry.update(size_bytes=model.size_bytes, model_digest=model.digest, verified=True)
+            finally:
+                lease.close()
         except FileNotFoundError:
             if entry["manifest_sha256"] is None:
                 continue

@@ -25,10 +25,11 @@ from .config import ReflexConfig, parse_local_base_url
 from .logging_config import debug as debug
 from .logging_config import log_structured, setup_logging
 from .metrics import BrokerMetrics, get_registry, jev_signal_latency_seconds
-from .models import EvaluationContext, RiskInfo, SemanticSignals
+from .models import EvaluationContext, RiskInfo, SemanticContributor, SemanticSignals
 from .redaction import redact_text
 
 PROTOCOL_VERSION = 1
+HYBRID_PROTOCOL_VERSION = 2
 MAX_BYTES = 262_144
 MAX_CLOCK_SKEW_SECONDS = 300
 MAX_METRICS_HEADER_BYTES = 8192
@@ -99,10 +100,12 @@ def encode(value: dict[str, Any]) -> bytes:
     return data
 
 
-def _validate_response(result: Any, request_id: str) -> dict[str, Any]:
+def _validate_response(
+    result: Any, request_id: str, version: int = PROTOCOL_VERSION
+) -> dict[str, Any]:
     if (
         not isinstance(result, dict)
-        or result.get("protocol_version") != PROTOCOL_VERSION
+        or result.get("protocol_version") != version
         or result.get("request_id") != request_id
     ):
         raise ValueError("invalid broker response")
@@ -132,8 +135,9 @@ class BrokerClient:
         path = socket_path(self.config)
         verify_socket(path)
         request_id = uuid.uuid4().hex
+        version = fields.pop("protocol_version", PROTOCOL_VERSION)
         message = encode(
-            dict(protocol_version=1, request_id=request_id, operation=operation, **fields)
+            dict(protocol_version=version, request_id=request_id, operation=operation, **fields)
         )
         started = time.monotonic()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
@@ -159,7 +163,7 @@ class BrokerClient:
                 if len(data) > MAX_BYTES:
                     raise ValueError("oversized broker response")
         result = json.loads(data)
-        result = _validate_response(result, request_id)
+        result = _validate_response(result, request_id, version)
         debug(
             request_id=request_id, broker_latency_ms=round((time.monotonic() - started) * 1000, 2)
         )
@@ -196,8 +200,9 @@ class BrokerClient:
         ssl_context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
 
         request_id = uuid.uuid4().hex
+        version = fields.pop("protocol_version", PROTOCOL_VERSION)
         message = encode(
-            dict(protocol_version=1, request_id=request_id, operation=operation, **fields)
+            dict(protocol_version=version, request_id=request_id, operation=operation, **fields)
         )
         started = time.monotonic()
 
@@ -226,7 +231,7 @@ class BrokerClient:
                         raise ValueError("oversized broker response")
 
         result = json.loads(data)
-        result = _validate_response(result, request_id)
+        result = _validate_response(result, request_id, version)
         debug(
             request_id=request_id, broker_latency_ms=round((time.monotonic() - started) * 1000, 2)
         )
@@ -282,8 +287,13 @@ class BrokerClient:
                 }
                 if endpoint := _local_endpoint_digest(self.config):
                     fields["local_endpoint_digest"] = endpoint
-                if provider == "hybrid" and self.config.semantic_required:
-                    fields["require_semantic"] = True
+                if provider == "hybrid":
+                    fields.update(
+                        protocol_version=HYBRID_PROTOCOL_VERSION,
+                        hybrid_uncertain_low=self.config.evaluator.hybrid_uncertain_low,
+                        hybrid_uncertain_high=self.config.evaluator.hybrid_uncertain_high,
+                        require_semantic=self.config.semantic_required,
+                    )
             action = state.pop("proposed_action")
             response = self.request("evaluate", action=action, context=state, **fields)
             count = response.get("api_requests", 0)
@@ -302,8 +312,8 @@ class BrokerClient:
                     for name in ("input_tokens", "output_tokens", "billing_units")
                     if type(usage.get(name)) is int and usage[name] >= 0
                 } or None
-            if response.get("status") == "ok" and response.get("source") == "local":
-                if provider == "jev":
+            if response.get("status") == "ok" and response.get("source") in {"local", "hybrid"}:
+                if provider == "jev" or (response["source"] == "hybrid" and provider != "hybrid"):
                     raise ValueError("unexpected local evaluator")
                 return self._local_signals(response, context)
             if (
@@ -348,6 +358,7 @@ class BrokerClient:
         warnings = response["warnings"]
         degraded = response["degraded"]
         digest = response.get("model_digest")
+        source = response["source"]
         if (
             not isinstance(signals, dict)
             or signals.keys() - RISK_QUESTIONS.keys() - {"tests_needed"}
@@ -355,7 +366,12 @@ class BrokerClient:
             or type(response["truncated"]) is not bool
             or not isinstance(warnings, list)
             or any(not isinstance(item, str) or item not in LOCAL_WARNINGS for item in warnings)
-            or (not degraded and not self.config.evaluator.local_base_url and digest is None)
+            or (
+                source == "local"
+                and not degraded
+                and not self.config.evaluator.local_base_url
+                and digest is None
+            )
         ):
             raise ValueError("invalid local evaluator response")
         expected = set(_questions(context, self.config))
@@ -364,10 +380,35 @@ class BrokerClient:
         probabilities = {name: value for name, value in signals.items() if name in expected}
         if "tests_needed" in active_local_signals(self.config) and "needs_tests" in probabilities:
             probabilities["tests_needed"] = probabilities["needs_tests"]
+        settings = self.config.evaluator
+        if source == "hybrid":
+            raw_contributors = response["contributors"]
+            if not isinstance(raw_contributors, list) or len(raw_contributors) != 2:
+                raise ValueError("invalid hybrid provenance")
+            contributors = tuple(
+                SemanticContributor.model_validate(item) for item in raw_contributors
+            )
+            local = next((item for item in contributors if item.source == "local"), None)
+            digests = {item.model_digest for item in contributors}
+            if (
+                {item.source for item in contributors} != {"local", "jev"}
+                or local is None
+                or local.model_id not in {settings.local_model, None}
+                or (not degraded and not settings.local_base_url and local.model_digest is None)
+                or digest != (next(iter(digests)) if len(digests) == 1 else None)
+            ):
+                raise ValueError("invalid hybrid provenance")
+        else:
+            contributors = (
+                SemanticContributor(
+                    source="local", model_digest=digest, model_id=settings.local_model
+                ),
+            )
         return SemanticSignals(
             probabilities=probabilities,
             risk=RiskInfo.model_validate(response["risk"]),
-            source="local",
+            source=source,
+            contributors=contributors,
             model_digest=digest,
             truncated=response["truncated"],
             degraded=degraded,
@@ -405,17 +446,7 @@ class BrokerServer:
             if isinstance(self.evaluator, LocalSemanticEvaluator):
                 self.local_evaluator = self.evaluator
                 self.local_evaluator.warm()
-                health = self.local_evaluator.health()
-                metric = get_registry().get_gauge(
-                    "jrx_local_model_warm",
-                    "Whether the local ONNX model is warm",
-                    labels=["model_id", "model_digest"],
-                )
-                metric.set(
-                    float(health["warm"]),
-                    model_id=health["model_id"],
-                    model_digest=health["model_digest"] or "",
-                )
+                self._local_health()
         # Only the host service reads credential presence. The value is never returned.
         self.configured = (
             configured
@@ -448,6 +479,17 @@ class BrokerServer:
                 "metrics_endpoint": f"http://{metrics_host}:{metrics_port}/metrics",
             },
         )
+
+    def _local_health(self) -> dict[str, Any]:
+        assert self.local_evaluator is not None
+        health = self.local_evaluator.health()
+        if health["warm"]:
+            get_registry().get_gauge(
+                "jrx_local_model_warm",
+                "Whether the local ONNX model is warm",
+                labels=["model_id", "model_digest"],
+            ).set(1.0, model_id=health["model_id"], model_digest=health["model_digest"])
+        return health
 
     async def evaluate(self, context: EvaluationContext) -> _EvaluationResult:
         if not self.worker_lock.acquire(blocking=False):
@@ -488,6 +530,7 @@ class BrokerServer:
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         self.clients += 1
         request_id = ""
+        version = PROTOCOL_VERSION
         response: dict[str, Any] = {}
         evaluating = False
         api_requests: int | None = 0
@@ -512,15 +555,21 @@ class BrokerServer:
             ):
                 raise ValueError
             request_id = candidate
-            if type(request.get("protocol_version")) is not int or request["protocol_version"] != 1:
+            requested_version = request.get("protocol_version")
+            operation = request.get("operation", "evaluate")
+            hybrid_request = operation == "evaluate" and request.get("provider") == "hybrid"
+            if (
+                type(requested_version) is int
+                and requested_version == HYBRID_PROTOCOL_VERSION
+                and hybrid_request
+            ):
+                version = HYBRID_PROTOCOL_VERSION
+            if type(requested_version) is not int or requested_version != version:
                 response = {"error_code": "UNSUPPORTED_PROTOCOL"}
-            elif request.get("operation", "evaluate") == "health":
+            elif operation == "health":
                 response = {"status": "ok", "jev_configured": self.configured, "pid": os.getpid()}
                 if self.local_evaluator is not None:
-                    local = self.local_evaluator.health()
-                    if warning := local.get("warning"):
-                        local["warning"] = f"{warning} Restart the broker after completing the fix."
-                    response["local_evaluator"] = local
+                    response["local_evaluator"] = self._local_health()
             elif request.get("operation") == "stop":
                 if writer.get_extra_info("ssl_object") is not None:
                     response = {"error_code": "FORBIDDEN"}
@@ -530,10 +579,19 @@ class BrokerServer:
             elif request.get("operation", "evaluate") == "evaluate":
                 from .evaluator import JUDGMENT_NAMES, _redacted_context
 
-                provider = self.config.evaluator.provider
+                settings = self.config.evaluator
+                provider = settings.provider
                 supplied_provider = request.get("provider", "jev")
                 if provider != supplied_provider:
                     raise ValueError("semantic provider mismatch")
+                if provider == "hybrid" and (
+                    version != HYBRID_PROTOCOL_VERSION
+                    or request.get("hybrid_uncertain_low") != settings.hybrid_uncertain_low
+                    or request.get("hybrid_uncertain_high") != settings.hybrid_uncertain_high
+                    or type(request.get("hybrid_uncertain_low")) not in {int, float}
+                    or type(request.get("hybrid_uncertain_high")) not in {int, float}
+                ):
+                    raise ValueError("hybrid uncertainty bounds mismatch")
                 if request.get("require_semantic") is True and not self.config.semantic_required:
                     raise ValueError("broker semantic policy is weaker than the client policy")
                 if provider != "jev":
@@ -559,7 +617,9 @@ class BrokerServer:
                 semantic = outcome.signals
                 if semantic is None:
                     raise ValueError("unavailable")
-                if semantic.source == "local" and provider != "jev":
+                if self.local_evaluator is not None:
+                    self._local_health()
+                if semantic.source in {"local", "hybrid"} and provider != "jev":
                     from .local_evaluator import LOCAL_WARNINGS, RISK_QUESTIONS
 
                     signals = {
@@ -568,12 +628,16 @@ class BrokerServer:
                         if name in RISK_QUESTIONS or name == "tests_needed"
                     }
                     response = {
-                        "source": "local",
+                        "source": semantic.source,
                         "degraded": semantic.degraded,
                         "model_digest": semantic.model_digest,
                         "truncated": semantic.truncated,
                         "warnings": [item for item in semantic.warnings if item in LOCAL_WARNINGS],
                     }
+                    if semantic.source == "hybrid":
+                        response["contributors"] = [
+                            item.model_dump(exclude_none=True) for item in semantic.contributors
+                        ]
                 elif semantic.source == "jev" and provider != "local" and not semantic.degraded:
                     # Never forward SDK prose, warnings, errors or unknown signals.
                     signals = {name: semantic.probabilities[name] for name in JUDGMENT_NAMES}
@@ -633,7 +697,9 @@ class BrokerServer:
             response["api_requests"] = api_requests
             if "error_code" in response:
                 response.update(status="error", degraded=True)
-            response.update(protocol_version=1, request_id=request_id, server_time=time.time())
+            response.update(
+                protocol_version=version, request_id=request_id, server_time=time.time()
+            )
             try:
                 writer.write(encode(response))
                 await asyncio.wait_for(writer.drain(), 1)
