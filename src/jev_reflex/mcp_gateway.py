@@ -609,7 +609,7 @@ class MCPGateway:
             binding = mcp_action_binding(self.config, scope.repository, environment, scope.summary)
             store = ApprovalStore(access)
             if self.approval_id is not None:
-                store.consume(self.approval_id, scope.identity, binding)
+                store.consume(self.approval_id, scope.identity, binding, config=self.config)
                 if self.config.session.enabled:
                     SessionStore(self.config.session).reserve(
                         self.session_id, semantic=0, tool_calls=0
@@ -637,7 +637,7 @@ class MCPGateway:
         return False
 
     def run(self) -> int:
-        child_env = sanitized_child_env()
+        child_env = sanitized_child_env(strict=self.config.strict_review_required)
         with subprocess.Popen(
             self.command,
             stdin=subprocess.PIPE,

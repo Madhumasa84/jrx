@@ -85,7 +85,7 @@ JEV Reflex has explicit limitations and does not claim to protect against the fo
 
 ### 6. Hook Bypass
 - **Limitation**: Commands executed outside the configured agent hook or wrapper bypass local inspection entirely.
-- **Mitigation**: Documented as a limitation. Retain the host sandbox/permission system and use wrappers for surfaces without supported hooks. Enforce mode should be paired with host permission controls.
+- **Mitigation**: Isolate the agent from deployment endpoints and credentials at the OS boundary. Route privileged tool requests through the host-controlled `jrx exec` path. [Controlled Linux Agent Runner](security.md#controlled-linux-agent-runner)
 - **See**: [docs/security.md](security.md#threats-and-mitigations) - "Hook bypass" row
 
 ### 7. Model Non-Determinism

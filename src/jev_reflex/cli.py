@@ -19,7 +19,7 @@ from typing import Any, Literal, cast
 import typer
 
 from .agent_cli import authority_app, intent_app
-from .audit import AuditLog
+from .audit import AuditLog, AuditWriteError
 from .broker_cli import app as broker_app
 from .calibration import CalibrationStore
 from .config import JEVConfig, Mode, ReflexConfig, load_config
@@ -238,7 +238,9 @@ def workspace_setup(
 
 @app.command("init")
 def init_policy(
-    preset: str = typer.Option(..., "--preset", help="dev-safe, strict-ci, or enterprise."),
+    preset: str = typer.Option(
+        ..., "--preset", help="dev-safe, strict-ci, enterprise, or production."
+    ),
     output: Path = typer.Option(Path("reflex.yaml"), "--output", help="Policy file to write."),
     force: bool = typer.Option(False, "--force", help="Replace an existing policy file."),
 ) -> None:
@@ -262,6 +264,10 @@ def init_policy(
     if preset == "enterprise":
         typer.echo(
             "Set your OIDC and role details and install the audit signing keys before starting the broker."
+        )
+    if preset == "production":
+        typer.echo(
+            "Fill the OIDC, checkout, and image placeholders, then run jrx policy lint --profile production."
         )
 
 
@@ -414,6 +420,8 @@ def _evaluate(
     aggregation: str | None = None,
     record_calibration: bool = True,
 ) -> EvaluationResult:
+    if config.profile == "production" and (samples is not None or aggregation is not None):
+        raise ValueError("Semantic sampling overrides are disabled by the production profile")
     effective = _effective_config(config, samples=samples, aggregation=aggregation)
     if no_jev:
         result = evaluate_context(context, config=effective, use_jev=False)
@@ -442,11 +450,16 @@ def _emit_result(result: EvaluationResult, *, json_output: bool) -> None:
 def _check_exit_code(result: EvaluationResult, config: ReflexConfig) -> int:
     if host_guard_denied(result):
         return 2
-    if config.mode == "review" and result.decision != "ALLOW":
-        return 2
-    if config.mode == "enforce" and (result.decision == "HOLD" or result.degraded):
-        return 2
-    return 0
+    return (
+        0
+        if execution_allowed(
+            result.decision,
+            mode=config.mode,
+            degraded=result.degraded,
+            strict_review=config.strict_review_required,
+        )
+        else 2
+    )
 
 
 def _read_diff(enabled: bool) -> str:
@@ -571,6 +584,8 @@ def check(
     try:
         loaded = _load(config, mode, cwd)
         if transport is not None:
+            if loaded.profile == "production":
+                raise ValueError("Transport overrides are disabled by the production profile")
             if transport not in {"direct", "broker", "broker-tls"}:
                 raise typer.BadParameter("transport must be direct, broker, or broker-tls")
             loaded.jev.transport = cast(Literal["direct", "broker", "broker-tls"], transport)
@@ -662,7 +677,7 @@ def _execute_argv(argv: list[str], cwd: Path, config: ReflexConfig) -> int:
         check_liveness(config)
     sandbox_container: str | None = None
     command = argv
-    child_env = sanitized_child_env()
+    child_env = sanitized_child_env(strict=config.strict_review_required)
     if config.sandbox.enabled:
         command, sandbox_container = build_sandbox_command(argv, cwd, config.sandbox)
     store = None
@@ -759,7 +774,7 @@ def exec_action(
         None, "--justification", help="Justification for human override."
     ),
     environment: str | None = typer.Option(None, "--environment"),
-    approval_id: str | None = typer.Option(None, "--approval-id"),
+    approval_id: str | None = typer.Option(None, "--approval-id", envvar="JRX_APPROVAL_ID"),
     yes: bool = typer.Option(
         False, "-y", "--yes", help="Automatically confirm prompts without interactive input."
     ),
@@ -769,6 +784,20 @@ def exec_action(
     try:
         argv = _resolve_exec_argv(command, _trailing_argv(ctx))
         loaded = _load(config, mode, cwd)
+        if loaded.strict_review_required and (
+            yes or approver is not None or argv[0].startswith("-")
+        ):
+            typer.echo(
+                "Strict review rejects --yes, self-reported --approver labels, and unsupported runner flags.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        if loaded.semantic_required and (demo or no_jev):
+            typer.echo(
+                "This policy requires live semantic evaluation. --demo and --no-jev are disabled.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
         enterprise_identity = None
         enterprise_binding = None
         if loaded.access is not None:
@@ -801,11 +830,14 @@ def exec_action(
         )
     except typer.BadParameter:
         raise
-    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+    except (OSError, RuntimeError, ValueError, sqlite3.Error, subprocess.SubprocessError):
         typer.echo("Configuration, input, or command error. No action was executed.", err=True)
         raise typer.Exit(code=2) from None
 
     _emit_result(result, json_output=json_output)
+    if "audit_unavailable" in result.triggered_rules:
+        typer.echo("Execution blocked: required decision audit write failed.", err=True)
+        raise typer.Exit(code=2)
     if host_guard_denied(result):
         typer.echo("Execution blocked by host agent controls.", err=True)
         raise typer.Exit(code=2)
@@ -822,9 +854,6 @@ def exec_action(
         except AccessDenied:
             typer.echo("Verified identity expired or changed.", err=True)
             raise typer.Exit(code=2) from None
-        if result.degraded and loaded.mode == "enforce":
-            typer.echo("Execution blocked: semantic evaluation is unavailable.", err=True)
-            raise typer.Exit(code=2)
         if result.decision == "HOLD" and not loaded.policy.allow_hold_override:
             typer.echo("Execution blocked: HOLD override is disabled.", err=True)
             raise typer.Exit(code=2)
@@ -844,27 +873,33 @@ def exec_action(
                 if current_binding != enterprise_binding:
                     raise AccessDenied("Repository state changed during evaluation")
                 ApprovalStore(loaded.access).consume(
-                    approval_id, enterprise_identity, current_binding
+                    approval_id,
+                    enterprise_identity,
+                    current_binding,
+                    config=loaded,
+                    original_decision=result.decision,
                 )
-            except (AccessDenied, OSError, sqlite3.Error, subprocess.SubprocessError):
+            except AuditWriteError as exc:
+                typer.echo(f"Execution blocked: {exc}.", err=True)
+                raise typer.Exit(code=2) from None
+            except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
                 typer.echo("Approval is invalid or incomplete.", err=True)
                 raise typer.Exit(code=2) from None
         elif approval_id:
             typer.echo("Approval ID was supplied for an allowed action.", err=True)
             raise typer.Exit(code=2)
-        try:
-            exit_code = _execute_argv(argv, _provider(loaded, cwd).working_directory, loaded)
-        except SessionLimitError as exc:
-            typer.echo(f"Execution stopped: {exc}", err=True)
-            raise typer.Exit(code=124) from None
-        except subprocess.TimeoutExpired:
-            typer.echo("Execution stopped: sandbox time limit reached", err=True)
-            raise typer.Exit(code=124) from None
-        except (OSError, RuntimeError, ValueError):
-            typer.echo("Command could not be started.", err=True)
-            raise typer.Exit(code=127) from None
-        raise typer.Exit(code=exit_code)
-    if not execution_allowed(result.decision, mode=loaded.mode, degraded=result.degraded):
+    elif not execution_allowed(
+        result.decision,
+        mode=loaded.mode,
+        degraded=result.degraded,
+        strict_review=loaded.strict_review_required,
+    ):
+        if loaded.strict_review_required:
+            typer.echo(
+                "Execution blocked: strict review requires enterprise access and a verified approval ID for exceptions.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
         # In enforce mode specifically, check policy.allow_hold_override
         if loaded.mode == "enforce" and result.decision == "HOLD":
             if not loaded.policy.allow_hold_override:
@@ -922,8 +957,11 @@ def exec_action(
                 action_summary=result.action or " ".join(argv),
                 justification=override_justification,
             )
-        except Exception as exc:
-            typer.echo(f"Warning: could not write override to audit log: {exc}", err=True)
+        except Exception:
+            if loaded.audit_required:
+                typer.echo("Execution blocked: required override audit write failed.", err=True)
+                raise typer.Exit(code=2) from None
+            typer.echo("Warning: could not write override to audit log.", err=True)
 
         log_structured(
             level="WARNING",
@@ -1280,6 +1318,8 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
             hooks.ingest_post_tool_use(payload, loaded)
             typer.echo("{}")
             return
+        approval_id = os.environ.get("JRX_APPROVAL_ID", "")
+        initial_binding = None
         if loaded.access is not None:
             if demo or mode is not None:
                 raise AccessDenied("Enterprise hooks require normal evaluation")
@@ -1289,6 +1329,11 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
             identity = verified_identity(loaded.access)
             hook_context = hooks.context_from_hook_payload(payload, config=loaded)
             authorize(identity, loaded.access, "execute", hook_context.repository_root, environment)
+            command = hook_context.proposed_action.command
+            if approval_id and command:
+                _, initial_binding = action_binding(
+                    loaded, Path(hook_context.working_directory), [command], environment
+                )
         evaluate = getattr(hooks, f"evaluate_{_HOOK_MODULES[kind]}_hook")
         _result, output = evaluate(payload, config=loaded, demo=demo)
         if any(rule.startswith("agent_control:") for rule in _result.triggered_rules):
@@ -1299,19 +1344,25 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
         if loaded.access is not None:
             if verified_identity(loaded.access) != identity:
                 raise AccessDenied("Identity changed during evaluation")
-            if _result.degraded and loaded.mode == "enforce":
+            if _result.degraded and loaded.mode != "advisory":
                 raise AccessDenied("Semantic evaluation is unavailable")
             if _result.decision == "HOLD" and not loaded.policy.allow_hold_override:
                 raise AccessDenied("HOLD override is disabled")
             if _result.decision != "ALLOW" or _result.degraded:
-                approval_id = os.environ.get("JRX_APPROVAL_ID", "")
-                command = hook_context.proposed_action.command
-                if not approval_id or not command:
+                if initial_binding is None or not command:
                     raise AccessDenied("Hook action requires a matching approval")
                 _, binding = action_binding(
                     loaded, Path(hook_context.working_directory), [command], environment
                 )
-                ApprovalStore(loaded.access).consume(approval_id, identity, binding)
+                if binding != initial_binding:
+                    raise AccessDenied("Action changed during evaluation")
+                ApprovalStore(loaded.access).consume(
+                    approval_id,
+                    identity,
+                    binding,
+                    config=loaded,
+                    original_decision=_result.decision,
+                )
                 if kind == "antigravity":
                     output = {"decision": "allow"}
                 elif kind == "openrouter" and any(
@@ -1940,13 +1991,18 @@ def policy_lint(
         Path("reflex.yaml"), "-c", "--config", help="Candidate policy file to check offline."
     ),
     strict: bool = typer.Option(False, "--strict", help="Also fail on warnings."),
+    profile: str = typer.Option("standard", "--profile", help="standard or production."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable diagnostics."),
 ) -> None:
     """Find policy mistakes without activating the policy or calling external services."""
     from .policy_lint import lint_policy
     from .redaction import redact_obj
 
-    report = redact_obj(lint_policy(config))
+    if profile not in {"standard", "production"}:
+        raise typer.BadParameter("profile must be standard or production")
+    report = redact_obj(
+        lint_policy(config, profile=cast(Literal["standard", "production"], profile))
+    )
     if json_output:
         typer.echo(json.dumps(report, indent=2, sort_keys=True))
     else:

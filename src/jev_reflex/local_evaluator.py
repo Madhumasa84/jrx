@@ -493,6 +493,8 @@ class LocalSemanticEvaluator:
         self.last_usage = None
         result = self._evaluate_local(context)
         settings = self.config.evaluator
+        if self.config.semantic_required and (result.degraded or result.truncated):
+            return result.model_copy(update={"degraded": True})
         if settings.provider != "hybrid":
             return result
         uncertain = {

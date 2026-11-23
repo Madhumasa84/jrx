@@ -37,7 +37,7 @@ def should_block(result: EvaluationResult, config: ReflexConfig, *, review_suppo
         return False
     if result.degraded or result.decision == "HOLD":
         return True
-    return result.decision == "REVIEW" and not review_supported
+    return result.decision == "REVIEW" and (config.strict_review_required or not review_supported)
 
 
 def permission_decision(result: EvaluationResult, config: ReflexConfig) -> str:
@@ -47,7 +47,7 @@ def permission_decision(result: EvaluationResult, config: ReflexConfig) -> str:
         return "deny"
     if config.mode == "advisory":
         return "allow"
-    if result.degraded or result.decision == "HOLD":
+    if should_block(result, config, review_supported=True):
         return "deny"
     if result.decision == "REVIEW":
         return "ask"

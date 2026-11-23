@@ -408,3 +408,42 @@ Control-file and taint HOLDs also block through advisory hooks and execution.
 These checks use bounded inspection of supported commands, payloads, and
 workspaces. Use OS-level egress enforcement when the host must restrict what
 arbitrary programs can send. [Execution sandbox](execution-sandbox.md)
+
+## Controlled Linux Agent Runner
+
+Run the agent as an untrusted process in a separate container or OS account.
+Keep the Host Broker and a trusted runner outside that boundary. The runner
+accepts structured tool requests, supplies the checkout, policy, deployment
+environment, OIDC identity and session ID from host-controlled state, and routes
+commands through `jrx exec`. Feed tool results through `jrx post-tool-use`
+with the same policy and host session ID before accepting the next request.
+
+Keep deployment credentials, `TYPESAFE_API_KEY`, broker and OIDC credentials,
+audit and approval stores, and the policy outside every writable agent mount.
+Give the agent and command container only the workspace access they need. Keep
+host controls read-only, withhold the Docker socket and broker socket from the
+agent, and deny direct access to deployment endpoints. The Host Broker returns
+semantic judgments to the runner. The runner launches approved commands in
+short-lived Docker containers with a read-only root, no inherited credentials,
+and no network by default. If an agent skips its hooks and runs a command
+directly, OS confinement still keeps host credentials and deployment capabilities
+out of reach.
+
+Generate the host policy with `jrx init --preset production`. Supply real OIDC
+issuer and JWKS URLs, role mappings for the canonical host checkout, and a
+preloaded worker image pinned by SHA-256 digest. Use
+`jrx policy lint --profile production --config PATH --json` to validate enforce
+mode, strict REVIEW, required audit writes, bounded sessions, file drift and
+PostToolUse taint tracking, protected-file rules, OIDC and two independent
+reviewers, Docker and broker configuration, and required semantic evaluation
+without non-loopback cleartext HTTP. Lint checks policy configuration offline.
+`jrx doctor --config PATH` also reports the production controls.
+
+REVIEW requires a single-use approval ID tied to the requester, command,
+checkout, execution environment, Git state, and policy. The runner records
+approval consumption before dispatch. Semantic degradation and audit write
+failure stop execution regardless of approval. HOLD overrides require an
+explicitly configured and documented exception, and host guard denials remain
+binding. After credential exposure, production blocks further shell and tool
+execution in the tainted session, including indirect invocations. Start a new
+host-assigned session after resolving the exposure.

@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 from .config import SandboxConfig
+from .context import sanitized_child_env
 from .git_inspection import inspect_git
 
 
@@ -112,6 +113,7 @@ def _docker(config: SandboxConfig, *arguments: str, timeout: float = 30) -> str:
     try:
         result = subprocess.run(
             [config.docker_binary, *arguments],
+            env=sanitized_child_env(strict=True),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -137,6 +139,7 @@ def _docker_cleanup(
         try:
             result = subprocess.run(
                 [config.docker_binary, *arguments],
+                env=sanitized_child_env(strict=True),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -296,6 +299,7 @@ def remove_sandbox_container(config: SandboxConfig, container_name: str) -> None
         try:
             result = subprocess.run(
                 [config.docker_binary, "rm", "--force", container_name],
+                env=sanitized_child_env(strict=True),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,

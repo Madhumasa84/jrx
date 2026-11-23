@@ -445,6 +445,10 @@ def evaluate_context(
 ) -> EvaluationResult:
     """Run deterministic checks, optional semantic evaluation, and pure policy."""
 
+    if config.semantic_required and (
+        not use_jev or isinstance(semantic_evaluator, DemoSemanticEvaluator)
+    ):
+        raise ValueError("Policy requires live semantic evaluation")
     if samples < 1:
         raise ValueError("samples must be at least 1")
     aggregation = aggregation or config.jev.aggregation
@@ -511,7 +515,9 @@ def evaluate_context(
         samples = 1
         aggregation_used = None
     elif guarded or (
-        skip_jev_on_hard and any(is_hard_deterministic_finding(item, config) for item in findings)
+        skip_jev_on_hard
+        and not (config.semantic_required and config.policy.allow_hold_override)
+        and any(is_hard_deterministic_finding(item, config) for item in findings)
     ):
         semantic = _zero_semantic(
             source="none",
@@ -532,6 +538,9 @@ def evaluate_context(
         # Track JEV latency if available
         if hasattr(evaluator, "last_jev_latency_ms") and evaluator.last_jev_latency_ms is not None:
             jev_signal_latency_seconds.observe(evaluator.last_jev_latency_ms / 1000.0)
+
+    if config.semantic_required and semantic.truncated:
+        semantic = semantic.model_copy(update={"degraded": True})
 
     policy = deterministic_decide(
         findings,
@@ -626,9 +635,11 @@ def evaluate_context(
             hook_correlation=context.hook_audit,
             local_provenance=local_provenance,
         )
-    except (OSError, ValueError, TypeError):
-        audit_failed = config.audit.enabled or config.privacy.store_requests
-        if audit_failed and config.mode != "advisory":
+    except (OSError, RuntimeError, ValueError, TypeError):
+        audit_failed = config.audit_required or (
+            config.mode != "advisory" and (config.audit.enabled or config.privacy.store_requests)
+        )
+        if audit_failed:
             from .policy import PolicyDecision
 
             policy = PolicyDecision(
@@ -658,9 +669,7 @@ def evaluate_context(
         model_digest=semantic.model_digest,
         samples=samples,
         aggregation=aggregation_used,
-        degraded=(semantic.degraded and use_jev)
-        or gitleaks_failed
-        or (audit_failed and config.mode != "advisory"),
+        degraded=(semantic.degraded and use_jev) or gitleaks_failed or audit_failed,
         action=safe_action,
     )
     if session_store is not None:

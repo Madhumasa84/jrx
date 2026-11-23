@@ -282,6 +282,8 @@ class BrokerClient:
                 }
                 if endpoint := _local_endpoint_digest(self.config):
                     fields["local_endpoint_digest"] = endpoint
+                if provider == "hybrid" and self.config.semantic_required:
+                    fields["require_semantic"] = True
             action = state.pop("proposed_action")
             response = self.request("evaluate", action=action, context=state, **fields)
             count = response.get("api_requests", 0)
@@ -532,6 +534,8 @@ class BrokerServer:
                 supplied_provider = request.get("provider", "jev")
                 if provider != supplied_provider:
                     raise ValueError("semantic provider mismatch")
+                if request.get("require_semantic") is True and not self.config.semantic_required:
+                    raise ValueError("broker semantic policy is weaker than the client policy")
                 if provider != "jev":
                     if request.get("model_id") != self.config.evaluator.local_model:
                         raise ValueError("semantic model mismatch")

@@ -12,7 +12,10 @@ GUARD_CHECKS = HOST_GUARD_CHECKS - {"agent_control"}
 
 
 def host_guard_denied(result: EvaluationResult) -> bool:
-    return any(rule.startswith("agent_control:") for rule in result.triggered_rules) or any(
+    return any(
+        rule == "audit_unavailable" or rule.startswith("agent_control:")
+        for rule in result.triggered_rules
+    ) or any(
         item.triggered and item.blocking and item.check in GUARD_CHECKS
         for item in result.deterministic_findings
     )
@@ -325,7 +328,9 @@ class Policy(DeterministicPolicyEngine):
 PolicyEngine = DeterministicPolicyEngine
 
 
-def execution_allowed(decision: Decision, *, mode: str, degraded: bool = False) -> bool:
+def execution_allowed(
+    decision: Decision, *, mode: str, degraded: bool = False, strict_review: bool = False
+) -> bool:
     """Return whether the requested CLI mode permits the side effect."""
 
     if mode == "advisory":
@@ -333,7 +338,7 @@ def execution_allowed(decision: Decision, *, mode: str, degraded: bool = False) 
     if degraded:
         # A missing or malformed judge cannot silently pass an execution boundary.
         return False
-    if mode == "review":
+    if mode == "review" or strict_review:
         return decision == "ALLOW"
     # Enforce mode blocks HOLD while allowing a non-degraded REVIEW to reach the
     # agent's normal permission system.

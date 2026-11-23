@@ -25,6 +25,7 @@ from pydantic_core import PydanticCustomError
 from .serialization import read_config_bytes, safe_yaml_load
 
 Mode = Literal["advisory", "review", "enforce"]
+PolicyProfile = Literal["standard", "production"]
 
 DEFAULT_MODEL_ID = "ollaya-dev/coba-68m-ternary"
 DEFAULT_MODEL_DIR = "~/.jev-reflex/models"
@@ -113,8 +114,16 @@ class AuditConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
+    fail_closed: bool = False
     path: str = "~/.jev-reflex/audit.log"
     rotate_mb: int = 100
+
+    @model_serializer(mode="wrap")
+    def _omit_new_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if not self.fail_closed:
+            data.pop("fail_closed", None)
+        return data
 
     @model_validator(mode="after")
     def _validate_rotate_mb(self) -> AuditConfig:
@@ -318,6 +327,14 @@ class EvaluatorConfig(BaseModel):
     hybrid_uncertain_low: float = Field(default=0.35, ge=0, le=1)
     hybrid_uncertain_high: float = Field(default=0.65, ge=0, le=1)
     allow_non_loopback_http: bool = False
+    require_semantic: bool = False
+
+    @model_serializer(mode="wrap")
+    def _omit_new_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if not self.require_semantic:
+            data.pop("require_semantic", None)
+        return data
 
     @field_validator("local_model")
     @classmethod
@@ -377,6 +394,17 @@ class PolicyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     allow_hold_override: bool = False
+    strict_review: bool = False
+    hold_override_exception: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_new_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if not self.strict_review:
+            data.pop("strict_review", None)
+        if self.hold_override_exception is None:
+            data.pop("hold_override_exception", None)
+        return data
 
 
 class MCPToolRule(BaseModel):
@@ -628,6 +656,7 @@ class ReflexConfig(BaseModel):
     _source_path: Path | None = PrivateAttr(default=None)
 
     mode: Mode = "advisory"
+    profile: PolicyProfile = "standard"
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     thresholds: ThresholdConfig = Field(default_factory=ThresholdConfig)
     hold_on: list[str] = Field(default_factory=lambda: list(DEFAULT_HOLD_ON))
@@ -651,6 +680,28 @@ class ReflexConfig(BaseModel):
     stability: StabilityConfig = Field(default_factory=StabilityConfig)
     stability_policy: StabilityPolicyConfig = Field(default_factory=StabilityPolicyConfig)
 
+    @property
+    def strict_review_required(self) -> bool:
+        return self.policy.strict_review or self.access is not None or self.profile == "production"
+
+    @property
+    def semantic_required(self) -> bool:
+        return self.evaluator.require_semantic or (
+            self.mode == "enforce" and self.strict_review_required
+        )
+
+    @property
+    def audit_required(self) -> bool:
+        return (
+            (self.audit.enabled and self.audit.fail_closed)
+            or self.profile == "production"
+            or (
+                self.mode == "enforce"
+                and self.access is not None
+                and self.access.environment in self.access.production_environments
+            )
+        )
+
     @model_serializer(mode="wrap")
     def _omit_new_defaults(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         data = handler(self)
@@ -660,6 +711,8 @@ class ReflexConfig(BaseModel):
             data.pop("evaluator", None)
         if not self.rule_modes:
             data.pop("rule_modes", None)
+        if self.profile == "standard":
+            data.pop("profile", None)
         return data
 
     @field_validator("rule_modes")
@@ -722,6 +775,7 @@ def load_config(
     mode_override: Mode | None = None,
     scope: str | None = None,
     default_if_missing: bool = False,
+    validate_production: bool = True,
 ) -> ReflexConfig:
     """Load config, defaulting only when the implicit ``reflex.yaml`` is absent."""
 
@@ -750,7 +804,17 @@ def load_config(
             config = selected
 
     if mode_override is not None:
+        if config.strict_review_required:
+            raise ValueError("Mode overrides are disabled by strict review")
         config = config.model_copy(update={"mode": mode_override})
+
+    if config.profile == "production" and validate_production:
+        from .production import production_issues
+
+        issues = production_issues(config)
+        if issues:
+            paths = ", ".join(issue["path"] for issue in issues)
+            raise ValueError(f"Production policy controls are invalid: {paths}")
 
     config._source_path = config_path.absolute()
     return config

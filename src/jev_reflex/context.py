@@ -9,14 +9,28 @@ from typing import Protocol
 from .git_inspection import inspect_git, status_paths
 from .models import EvaluationContext, ProposedAction
 
+_HOST_PROVIDER_KEYS = (
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENROUTER_API_KEY",
+    "DEEPSEEK_API_KEY",
+)
+
 
 def sanitized_child_env(
     base_env: Mapping[str, str] | None = None,
     extra_strip: Sequence[str] = (),
+    *,
+    strict: bool = False,
 ) -> dict[str, str]:
     """Strip JRX credentials and sensitive API keys before launching child processes."""
     source = os.environ if base_env is None else base_env
-    stripped = {"JRX_ID_TOKEN", "TYPESAFE_API_KEY", *extra_strip}
+    stripped = {"JRX_ID_TOKEN", "JRX_APPROVAL_ID", "TYPESAFE_API_KEY", *extra_strip}
+    if strict:
+        stripped.update(_HOST_PROVIDER_KEYS, ("SHLVL", "_"))
     return {
         key: value
         for key, value in source.items()

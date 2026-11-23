@@ -23,6 +23,10 @@ from .signing import CosignSigner, Ed25519Signer, Signer
 GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000"
 
 
+class AuditWriteError(ValueError):
+    """A required audit record could not be persisted."""
+
+
 def _chain_tip(lines: Iterable[str]) -> tuple[str, int]:
     """Refuse to append to a damaged chain; leave recovery to its owner."""
     previous = GENESIS_HASH
@@ -72,6 +76,7 @@ class AuditEntry:
         forced_review: bool | None = None,
         hook_correlation: dict[str, Any] | None = None,
         local_provenance: dict[str, str | None] | None = None,
+        approval_id: str | None = None,
     ) -> None:
         self.seq = seq
         self.timestamp_utc = timestamp_utc
@@ -92,6 +97,7 @@ class AuditEntry:
         self.forced_review = forced_review
         self.hook_correlation = hook_correlation
         self.local_provenance = local_provenance
+        self.approval_id = approval_id
         self.entry_hash = self._compute_hash()
 
     def _get_hash_dict(self) -> dict[str, Any]:
@@ -108,6 +114,7 @@ class AuditEntry:
                 "seq": self.seq,
                 "timestamp": self.timestamp_utc,
                 "timestamp_utc": self.timestamp_utc,
+                **({"approval_id": self.approval_id} if self.approval_id is not None else {}),
             }
         data = {
             "seq": self.seq,
@@ -232,6 +239,7 @@ class AuditLog:
                     identity=data.get("identity"),
                     original_decision=data.get("original_decision"),
                     justification=data.get("justification"),
+                    approval_id=data.get("approval_id"),
                     hook_correlation=data.get("hook_correlation"),
                     local_provenance=(
                         {key: data[key] for key in ("source", "model_digest", "decision_id")}
@@ -255,7 +263,11 @@ class AuditLog:
 
     def should_log(self) -> bool:
         """Determine if logging should occur based on configuration."""
-        return self.config.audit.enabled or self.config.privacy.store_requests
+        return (
+            self.config.audit.enabled
+            or self.config.privacy.store_requests
+            or self.config.audit_required
+        )
 
     def write_entry(
         self,
@@ -376,6 +388,8 @@ class AuditLog:
         original_decision: str,
         action_summary: str,
         justification: str = "",
+        *,
+        approval_id: str | None = None,
     ) -> AuditEntry:
         """Write a human override entry to the audit log with file locking."""
         redacted_summary = redact_obj(action_summary)
@@ -396,9 +410,10 @@ class AuditLog:
                     policy_version_hash=policy_version_hash,
                     prev_hash=last_hash,
                     event_type="human_override",
-                    identity=identity,
+                    identity=redact_obj(identity),
                     original_decision=original_decision,
                     justification=redacted_justification,
+                    approval_id=approval_id,
                 )
                 entry.decision_signature = self._sign_entry_hash(entry)
 

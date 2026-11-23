@@ -41,13 +41,18 @@ class MockJEV:
 
 
 @contextmanager
-def running_broker(tmp_path=None, evaluator=None, **timeouts):
+def running_broker(tmp_path=None, evaluator=None, *, config=None, **timeouts):
     base = Path("/tmp").resolve()
     temp_dir = tempfile.TemporaryDirectory(prefix="jrx-", dir=base)
     directory = Path(temp_dir.name)
     directory.chmod(0o700)
     path = directory / "reflex.sock"
-    config = ReflexConfig(jev={"transport": "broker", "socket": str(path), **timeouts})
+    if config is None:
+        config = ReflexConfig(jev={"transport": "broker", "socket": str(path), **timeouts})
+    else:
+        config = config.model_copy(
+            update={"jev": config.jev.model_copy(update={"socket": str(path)})}
+        )
     ready = threading.Event()
     service = BrokerServer(config, evaluator or MockJEV(), configured=True)
     loop = asyncio.new_event_loop()
