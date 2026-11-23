@@ -33,7 +33,7 @@ runner = CliRunner()
 @pytest.fixture
 def directory(monkeypatch):
     with TemporaryDirectory(prefix="jrx-production-") as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         monkeypatch.setenv("HOME", str(root))
         monkeypatch.setenv("JRX_SESSION_ID", "runner-session")
         monkeypatch.delenv("JRX_APPROVAL_ID", raising=False)

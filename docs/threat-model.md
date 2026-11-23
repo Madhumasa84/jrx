@@ -8,7 +8,7 @@ JEV Reflex is designed to protect against specific classes of threats in autonom
 
 ### 1. Destructive Local Commands
 - **Threat**: Autonomous agents executing destructive commands like `rm -rf`, disk wipes, or other destructive operations before human review.
-- **Protection**: Deterministic hard rules identify obvious destructive patterns (recursive deletions, destructive commands through common wrappers). Semantic evaluation via TypeSafe JEV provides probabilistic assessment of destructive intent. Policy engine can block (HOLD) or require review (REVIEW) based on configured thresholds.
+- **Protection**: Deterministic hard rules identify obvious destructive patterns such as recursive deletions. Local CPU ONNX or hosted TypeSafe JEV provides probabilistic assessment of destructive intent. The policy engine can block (HOLD) or require review (REVIEW) based on configured thresholds.
 - **See**: [docs/security.md](security.md#threats-and-mitigations) - "Destructive command" row
 
 ### 2. Credential Leakage in Agent-Generated Diffs
@@ -33,7 +33,7 @@ JEV Reflex is designed to protect against specific classes of threats in autonom
 
 ### 6. Semantic Evaluation Failures (Fail-Closed Behavior)
 - **Threat**: Degraded or unavailable semantic evaluation silently downgrading security posture.
-- **Protection**: Confirmed fail-closed behavior for TypeSafe API failures (timeout, 5xx errors, malformed JSON, missing keys, network issues, revoked API key) and broker failures (socket issues, connection refused, timeouts). Advisory mode surfaces warnings; review/enforce modes never return ALLOW on degraded evaluations.
+- **Protection**: Local model verification or inference failures, malformed semantic responses, and unreachable brokers can degrade evaluation. Advisory mode surfaces warnings. Production blocks execution after degraded evaluation even when the requester supplies an approval ID.
 - **See**: [docs/security.md](security.md#fail-closed-semantic-evaluation)
 
 ### 7. Unauthorized Policy Modifications

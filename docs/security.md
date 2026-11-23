@@ -353,6 +353,11 @@ Audit append rejects symlinks and unsafe file ownership/permissions; enabled aud
 failure produces a degraded HOLD in non-advisory modes. Ordinary semantic degradation
 cannot be bypassed with `exec --yes` in non-advisory modes.
 
+Set `audit.enabled: true` with `audit.fail_closed: true` to require successful
+decision and override records before execution. `policy.strict_review` blocks
+REVIEW until JRX verifies an action-bound approval through enterprise access.
+The production preset enables both controls.
+
 The optional [intent guard](intent-lineage.md) and [authority leases](authority-delegation.md)
 use authenticated host state and atomic transactions. Their denials remain binding
 under advisory mode, ordinary approvals and `--yes`. Both require host protection of

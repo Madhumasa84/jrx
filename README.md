@@ -4,7 +4,7 @@
 
 # JEV Reflex (`jrx`)
 
-**Runtime policy enforcement, an MCP gateway, and policy impact PR checks for AI coding agents**
+**Runtime policy enforcement for AI coding agents with local CPU ONNX**
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=flat-square)](LICENSE)
 [![Python Version](https://img.shields.io/badge/python-3.11+-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
@@ -16,6 +16,7 @@
 
 <p align="center">
   <a href="#quickstart">Quickstart</a> •
+  <a href="#blind-holdout-benchmark-progression">Benchmarks</a> •
   <a href="#policy-impact-on-pull-requests">Policy impact</a> •
   <a href="#architecture">Architecture</a> •
   <a href="#agent-integrations">Supported Agents</a> •
@@ -30,7 +31,7 @@
 
 ## Overview
 
-JEV Reflex (`jrx`) evaluates proposed commands and tool calls before execution. It combines local security checks with semantic risk signals from [TypeSafe JEV](https://typesafe.ai/), then applies a deterministic policy to return **`ALLOW`**, **`REVIEW`**, or **`HOLD`**. The policy is deterministic for identical inputs; semantic model outputs can vary.
+JEV Reflex (`jrx`) evaluates proposed commands and tool calls before execution. It combines local security checks with semantic risk signals from a local CPU ONNX model or hosted TypeSafe JEV, then applies a deterministic policy to return **`ALLOW`**, **`REVIEW`**, or **`HOLD`**. The policy is deterministic for identical inputs; semantic model outputs can vary.
 
 Use it as a CLI wrapper, an agent hook, or a Model Context Protocol (MCP) gateway. Enforcement depends on the configured mode and on routing actions through JRX. An `ALLOW` result is a policy decision, not a guarantee that an action is safe.
 
@@ -47,111 +48,66 @@ Use it as a CLI wrapper, an agent hook, or a Model Context Protocol (MCP) gatewa
 
 ## Quickstart
 
-With uv installed, try an offline policy check without installing the CLI or configuring an API key. `check` evaluates the proposed command without executing it. Demo mode uses fixture signals.
+### Zero-API-Key Local ONNX Quickstart
+
+Use Python 3.11 or newer and uv. The local extra runs ONNX on CPU with zero PyTorch. Model setup downloads the Apache-2.0 licensed `ollaya-dev/coba-68m-ternary` and verifies its SHA-256 digests. After setup, checks combine offline semantic scoring with deterministic rules and need no `TYPESAFE_API_KEY`.
+
+```bash
+uv tool install "jev-reflex[local]==0.3.0"
+jrx init --preset dev-safe
+jrx model pull
+jrx check --command "rm -rf ./cache"
+```
+
+`check` evaluates the proposed command without executing it. The example ends with this decision.
+
+```text
+HOLD
+```
+
+The v0.3.0 package supports both PyPI and source installation. [PyPI](https://pypi.org/project/jev-reflex/0.3.0/) · [v0.3.0 release notes](docs/releases/v0.3.0.md)
+
+### Core-only preview
+
+Try fixture judgments with `--demo` or run only the deterministic rules with `--no-jev`. Both use the core package and require no local model or API key.
 
 ```bash
 uvx --from jev-reflex jrx check --demo --command "rm -rf ./cache"
+uvx --from jev-reflex jrx check --no-jev --command "rm -rf ./cache"
 ```
 
-Example output
+### Hosted TypeSafe JEV
 
-```text
-JEV Reflex
-
-Action:
-  rm -rf ./cache
-
-HARD RULES
-
-  secret_pattern     clear
-  known_destructive  TRIGGERED (RECURSIVE_DELETE)
-  repo_boundary      clear
-  git_risk           clear
-  filesystem         clear
-  safe_command       clear
-
-JEV SIGNALS
-  destructive                0.98  ████████████████████
-  secret_exposure            0.02  ·
-  scope_creep                0.02  ·
-  security_sensitive         0.02  ·
-  irreversible               0.76  ███████████████
-  needs_tests                0.02  ·
-  prompt_injection           0.02  ·
-  dependency_risk            0.02  ·
-  wrong_repo                 0.02  ·
-  human_review               0.94  ███████████████████
-  concurrency_sensitive      0.02  ·
-  persistence_sensitive      0.84  █████████████████
-  backwards_compatibility    0.02  ·
-  untrusted_input_path       0.02  ·
-  fail_open                  0.02  ·
-  wrong_repo_semantic        0.02  ·
-  suspicious_intent          0.02  ·
-  external_side_effect_risk  0.02  ·
-
-Source: demo
-Samples: 1
-Estimated JEV requests: 0
-
-POLICY
-  known_destructive:RECURSIVE_DELETE
-  human_review >= 0.90
-
-FINAL
-  Risk: HIGH
-  HOLD
-
-Decision ID: 6095e696ba2e433cbe61e27f0be0f6db
-```
-
-### 1. Installation
-
-Install the `jrx` CLI with uv or pipx. JRX requires Python 3.11 or newer. [PyPI package](https://pypi.org/project/jev-reflex/) · [v0.2.0 release](https://github.com/Madhumasa84/jrx/releases/tag/v0.2.0)
+With `evaluator.provider: jev` or the default policy, provide `TYPESAFE_API_KEY` through your secret manager or process environment. Supply the key only to the broker process when using the Host Broker. JRX reads the process environment rather than loading `.env`.
 
 ```bash
-uv tool install jev-reflex
-# Or install with pipx
-pipx install jev-reflex
+jrx check --command "git status"
 ```
 
-The installed environment includes a starting policy at `share/jev-reflex/reflex.example.yaml`. Copy it to your working directory to customize or lint it.
+### Hardened Production Profile and Controlled Runner
 
-To develop JRX or try the latest changes on `main`, install from source.
+Generate the policy on the trusted runner. Fill in the OIDC issuer and JWKS URL, checkout scopes, and the pinned Docker image digest before linting. Install the local extra and pull the model on the broker host for the preset’s default local evaluator.
 
 ```bash
-# Clone the repository
+jrx init --preset production --output reflex.production.yaml
+```
+
+```bash
+jrx policy lint --profile production --config reflex.production.yaml
+jrx doctor --config reflex.production.yaml
+```
+
+Strict `REVIEW` requires a single-use, action-bound approval from two independently authenticated reviewers. JRX rejects `--yes` and self-reported approver labels and blocks dispatch if a required decision or approval audit write fails. The controlled runner keeps credentials, policy, and audit state on the host and dispatches commands into an isolated container. [Controlled Linux Agent Runner](docs/security.md#controlled-linux-agent-runner) · [Threat model](docs/threat-model.md)
+
+### Source installation
+
+```bash
 git clone https://github.com/Madhumasa84/jrx.git
 cd jrx
-
-# Create and activate virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install with development dependencies
-python -m pip install --upgrade pip
-pip install -e ".[dev]"
+python -m pip install -e ".[dev,local]"
 ```
-
-Both `jrx` and `jev-reflex` CLI commands will be available in your `$PATH`.
-
-### 2. Configure credentials
-
-For live semantic evaluation, provide a TypeSafe API key through the process environment or your secret manager:
-
-```bash
-export TYPESAFE_API_KEY="YOUR_TYPESAFE_API_KEY"
-```
-
-`.env.example` documents environment settings. JRX does not automatically load a `.env` file. When using the host broker, supply the API key to the broker process.
-
-### 3. Choose an execution mode
-
-```bash
-jrx exec --mode enforce -- python -m pytest
-```
-
-This evaluates the command and runs it when policy permits. Docker isolation is opt-in; see [isolated execution](#isolated-command-execution).
 
 ### Optional host utilities
 
@@ -168,6 +124,25 @@ pip install -e ".[harness]"
 ```
 
 Run `jrx harness --help` to see the available commands. [Managed harness guide](docs/agent-harness.md)
+
+## Blind-holdout benchmark progression
+
+All three runs use the same frozen synthetic holdout. Hard FPR counts benign HOLDs. Friction and attack recall count REVIEW or HOLD.
+
+| Metric | v0.2.0 deterministic | Step 3 deterministic | Step 3 + local ONNX (coba-68m-ternary) |
+| --- | --- | --- | --- |
+| Benign Hard FPR | 16.67% | 3.33% | 3.33% |
+| Benign friction | 25.00% | 5.00% | 23.33% |
+| Overall attack recall | 12.22% | 47.78% | 64.44% |
+| OWASP ASI01–ASI06 recall | 11.67% | 40.00% | 65.00% |
+| **ASI01 goal-hijack recall** | **0.00%** | **10.00%** | **50.00%** |
+| Obfuscation bypass recall | 13.33% | 63.33% | 63.33% |
+| Warm in-process p50 / p95 | 0.461 / 0.727 ms | 0.829 / 1.616 ms | 883.582 / 1034.742 ms |
+| Cold CLI p50 / p95 | 448.433 / 495.154 ms | 516.624 / 858.701 ms | 541.167 / 592.425 ms |
+
+Coba’s 512-token window, the CPU cost of a 12-question batch in the latency probe, and 23.33% benign REVIEW-or-HOLD friction are the current trade-offs, and a single-pass 8K model is next.
+
+The deterministic cold CLI measurements use `--no-jev`. The frozen local result measures ONNX in-process. Warm Unix broker latency, IPC overhead, and dev flip-rate figures await a published benchmark artifact. See the full Wilson 95% confidence intervals, raw artifact, and reproduction commands in the [benchmark results](benchmarks/RESULTS.md).
 
 ## Policy Impact on Pull Requests
 
@@ -198,7 +173,7 @@ v0.2.0 also adds a separate audit verification key option to `jrx policy rollout
 flowchart TD
     Agent["Agent action: command, patch, or tool call"] --> Context["Bound context and redact secrets"]
     Context --> Checks["Local security checks"]
-    Context --> Semantic["Semantic evaluation: direct API or host broker"]
+    Context --> Semantic["Semantic evaluation: local ONNX or hosted JEV, direct or brokered"]
     Checks --> Policy["Deterministic policy: ALLOW / REVIEW / HOLD"]
     Semantic --> Policy
     Policy --> Audit["Optional hash-chained audit log"]
@@ -229,7 +204,7 @@ results and remaining deployment gaps.
 
 ## Policy decisions and modes
 
-The policy combines local findings with 18 semantic risk signals:
+The policy combines local findings with the active evaluator’s semantic risk signals.
 
 | Decision | Meaning |
 | :--- | :--- |
@@ -237,7 +212,7 @@ The policy combines local findings with 18 semantic risk signals:
 | **`REVIEW`** | The configured review threshold or rule was triggered. |
 | **`HOLD`** | A blocking rule or hold threshold was triggered. |
 
-For standard execution without enterprise access controls:
+Standard execution modes apply when strict REVIEW and enterprise access are disabled.
 
 | Mode | Behavior |
 | :--- | :--- |
@@ -245,7 +220,7 @@ For standard execution without enterprise access controls:
 | `review` | Requires confirmation for `REVIEW` or `HOLD` in the CLI; hooks can deny the action for host review. |
 | `enforce` | Blocks `HOLD` by default and fails closed on unavailable or malformed semantic evaluation. A non-degraded `REVIEW` can proceed to the agent host's normal permission system. |
 
-Enforce-mode HOLD overrides require `policy.allow_hold_override: true`. Enterprise access controls and the MCP gateway impose additional authorization requirements, described below.
+Enforce-mode HOLD overrides require `policy.allow_hold_override: true`. Enable `policy.strict_review` to block REVIEW until JRX verifies an approval through the configured OIDC access controls. Enterprise access also activates strict REVIEW.
 
 ### Verified identity and reviewed execution
 
@@ -273,7 +248,7 @@ access:
       environments: [production]
 ```
 
-For a risky action, the developer requests approval and gives its ID to reviewers. Reviewers inspect `jrx approval pending` and each grants independently. Production requires two distinct reviewers; the requester cannot approve their own action. The approval expires, can be used once, and is bound to the exact command, working directory, Git state, effective policy, environment, and requester. Commands that exceed 1,000 characters or contain text requiring secret redaction cannot be submitted for approval. In enforce mode, an unavailable semantic evaluation blocks execution even with approval.
+For a risky action, the developer requests approval and gives its ID to reviewers. Reviewers inspect `jrx approval pending` and each grants independently. Production requires two distinct reviewers; the requester cannot approve their own action. The approval expires, can be used once, and is bound to the exact command, working directory, Git state, effective policy, deployment environment, and requester. Enforce mode also binds the sanitized execution environment. Commands that exceed 1,000 characters or contain text requiring secret redaction cannot be submitted for approval. In enforce mode, an unavailable semantic evaluation blocks execution even with approval.
 
 ```bash
 jrx approval request --config reflex.yaml --cwd /srv/my-project \
@@ -284,7 +259,7 @@ jrx exec --config reflex.yaml --cwd /srv/my-project \
   --environment production --approval-id APPROVAL_ID -- python migrate.py
 ```
 
-Agent hooks use `JRX_ENVIRONMENT` and `JRX_APPROVAL_ID` from the trusted host. For a shell hook, request approval with `--hook-command` to bind the raw shell command. Enterprise execution refuses demo mode, disabled semantic evaluation, and CLI mode overrides. Hooks fail closed if identity or approval checks fail. The stdio MCP gateway also supports [opt-in approvals for write tools](docs/mcp-argument-policy.md#human-approval-for-write-tools) after a live semantic ALLOW.
+Agent hooks use `JRX_ENVIRONMENT` and `JRX_APPROVAL_ID` from the trusted host. For a shell hook, request approval with `--hook-command` to bind the raw shell command. Enterprise execution refuses demo mode, disabled semantic evaluation, CLI mode overrides, `--yes`, and self-reported approvers. Hooks fail closed if identity or approval checks fail. The stdio MCP gateway also supports [opt-in approvals for write tools](docs/mcp-argument-policy.md#human-approval-for-write-tools) after a live semantic ALLOW.
 
 ---
 
@@ -308,24 +283,7 @@ The repository includes the following adapters and setup guides. Confirm hook su
 
 ## Host Broker Architecture
 
-In enterprise sandbox environments (Docker containers, microVMs, Kubernetes pods), passing raw API keys into the untrusted agent environment violates least privilege.
-
-The **JEV Reflex Host Broker** isolates credentials in the host environment while serving evaluations over a restricted Unix domain socket:
-
-```
-┌─────────────────────────────────────────┐         ┌─────────────────────────────────────────┐
-│     Untrusted Agent Sandbox / Pod       │         │        Trusted Host Environment         │
-│                                         │         │                                         │
-│   Agent (Codex / Claude / Custom)       │         │   jrx broker (Background Daemon)        │
-│         │                               │         │         │                               │
-│         ▼                               │         │         ▼                               │
-│   Local Hard Checks                     │  POSIX  │   TypeSafe JEV API Gateway              │
-│         │                               │ Socket  │   (TYPESAFE_API_KEY stored on host)     │
-│         ▼                               │ (0600)  │         │                               │
-│   Unix Socket Client ───────────────────┼─────────┼─────────┘                               │
-│   ~/.jev-reflex/reflex.sock             │         │   Prometheus Metrics Server (:9090)     │
-└─────────────────────────────────────────┘         └─────────────────────────────────────────┘
-```
+The host broker serves semantic evaluations over a private Unix socket or mTLS. It can keep a local CPU ONNX model warm or call hosted TypeSafe JEV with a host-only API key. In the Controlled Linux Agent Runner, the trusted runner connects to the broker and the agent stays outside the credential boundary. [Broker deployment](docs/broker.md) · [Controlled runner](docs/security.md#controlled-linux-agent-runner)
 
 ### Managing the Broker Daemon
 
@@ -347,7 +305,7 @@ jrx broker stop
 
 ## Tamper-evident audit logs and policy signing
 
-Enable `audit.enabled: true` to persist decisions in a SHA-256 hash-chained audit log. Protect the log storage and retention policy separately.
+Enable `audit.enabled: true` to persist decisions in a SHA-256 hash-chained audit log. With `audit.fail_closed: true`, failure to write a decision or override record blocks execution. Protect the log storage and retention policy separately.
 
 ### Verifying Log Integrity
 Verify record hashes and chain continuity. Detecting the loss of an entire log or a valid trailing segment requires a separately trusted checkpoint or retained copy:
@@ -614,7 +572,11 @@ agent hooks or upstream MCP servers.
 | :--- | :--- | :--- |
 | `jrx` | `jrx` | Optional host utility. Open the interactive agent workspace when stdin/stdout are TTYs. |
 | `jrx harness` | `jrx harness [run\|resume\|status\|acp]` | Optional host utility. Run or resume managed agent sessions, inspect checkpoints, or connect an ACP agent. See the [managed harness guide](docs/agent-harness.md). |
-| `jrx doctor` | `jrx doctor [--provider NAME] [--models]` | Inspect installed CLIs, safe authentication status, hook files, JEV status, and policy coverage. |
+| `jrx doctor` | `jrx doctor [--config PATH] [--provider NAME] [--models]` | Inspect installed CLIs, authentication and hook status, broker health, and production policy controls. |
+| `jrx init` | `jrx init --preset <dev-safe\|strict-ci\|enterprise\|production>` | Generate a starter `reflex.yaml`. |
+| `jrx model pull` | `jrx model pull [MODEL]` | Download and verify the configured ONNX model. |
+| `jrx model status` | `jrx model status [--json]` | List installed models and report verification status. |
+| `jrx model verify` | `jrx model verify [MODEL]` | Verify installed model artifacts against their SHA-256 digests. |
 | `jrx setup` | `jrx setup --provider NAME [--apply\|--rollback]` | Preview or apply a merged provider hook configuration, or narrowly remove JRX's entry. |
 | `jrx check` | `jrx check --command "<cmd>"` | Analyze proposed action without executing. Supports `--json`, `--task`, `--stdin-diff`. |
 | `jrx exec` | `jrx exec --mode enforce -- <cmd>` | Evaluate and execute according to mode, access rules, and session limits; optionally use Docker isolation. |
@@ -623,6 +585,7 @@ agent hooks or upstream MCP servers.
 | `jrx stability` | `jrx stability --runs 100 --command "<cmd>"` | Test decision consistency and calculate flip rates over repeated evaluations. |
 | `jrx broker` | `jrx broker [run\|start\|stop\|status]` | Manage the host-side semantic daemon and IPC socket. |
 | `jrx audit` | `jrx audit [verify\|tail\|overrides\|report]` | Audit log verification, override governance, and verified decision reports. |
+| `jrx policy lint` | `jrx policy lint --profile <standard\|production> [--config PATH] [--json]` | Validate policy offline. Production checks deployment controls and returns structured diagnostics with `--json`. |
 | `jrx policy` | `jrx policy [lint\|sign\|verify\|test\|keygen\|simulate\|impact\|rollout]` | Lint, sign and test policies, preview decision changes on PRs, and manage staged rollout. |
 | `jrx dashboard` | `jrx dashboard serve --config dashboard.yaml` | OIDC-protected local operations dashboard. |
 | `jrx mcp` | `jrx mcp serve --config reflex.yaml --server NAME -- <server command>` | Policy-enforcing stdio MCP gateway. |
@@ -633,9 +596,9 @@ agent hooks or upstream MCP servers.
 
 ## Configuration Reference (`reflex.yaml`)
 
-Configure thresholds, hard rules, and evaluation behaviors with `reflex.yaml`:
+Configure thresholds, hard rules, and evaluation behaviors in `reflex.yaml`.
 
-Enterprise identity and approval settings are shown in [Verified identity and reviewed execution](#verified-identity-and-reviewed-execution).
+For deployment settings see [Verified identity and reviewed execution](#verified-identity-and-reviewed-execution) and the [production profile](#hardened-production-profile-and-controlled-runner).
 
 ```yaml
 # Execution mode: advisory | review | enforce
@@ -663,7 +626,14 @@ review_on:
   - backwards_compatibility
   - human_review
 
-# JEV Semantic Settings
+# Semantic backend and transport are configured independently
+evaluator:
+  provider: jev          # jev | local | hybrid
+  require_semantic: false
+
+rule_modes:              # advisory | review | enforce per rule
+  tamper_guard: enforce
+
 jev:
   transport: direct      # direct | broker | broker-tls
   socket: ~/.jev-reflex/reflex.sock
@@ -674,34 +644,35 @@ jev:
 # Persist tamper-evident decision records
 audit:
   enabled: true
+  fail_closed: false
 
-# Enforce-mode HOLD overrides are disabled by default
 policy:
+  strict_review: false
   allow_hold_override: false
 ```
 
 ### Semantic backend, latency and privacy
 
-TypeSafe JEV is the hosted evaluator that scores a proposed action for risk. A live evaluation sends a bounded, redacted description of the action and its context, directly or through the host broker. This can include command arguments, repository and working paths, changed files, diff excerpts, test results, and supplied task or external text. Redaction removes recognized secrets. Review which context your deployment permits leaving the machine.
+Use `evaluator.provider: local` for CPU ONNX in the CLI or warm in the broker, and `jev` for hosted TypeSafe JEV. `hybrid` starts with local scoring and can send uncertain results for hosted evaluation when a key is available. Hosted requests carry bounded, redacted action and repository context. `jev.samples` controls sequential evaluations, and `jev.api_timeout` sets the request timeout.
 
-Live checks incur network and provider latency. `jev.samples` controls the number of sequential evaluations and `jev.api_timeout` configures the request timeout. To inspect local rules offline, run `jrx check --no-jev --command "git status"`. Demo mode uses fixture signals. Policy impact reuses the scores already recorded in the audit snapshot and makes no semantic API calls.
+The `production` preset requires live semantic evaluation and durable audit writes. `rule_modes` configures individual rule handling while protected host guards remain enforced. See [broker configuration](docs/broker.md) and [production controls](docs/security.md#controlled-linux-agent-runner).
 
 ---
 
 ## Container deployment
 
 ### Docker Container
-Build and deploy the lightweight, non-root container image:
+Pull and run the published core broker image for hosted TypeSafe JEV.
 
 ```bash
-docker build -t jrx-broker:latest .
+docker pull ghcr.io/madhumasa84/jrx-broker:0.3.0
 
 docker run -d \
   --name jrx-broker \
   -e TYPESAFE_API_KEY \
   -e JRX_METRICS_HOST=0.0.0.0 \
   -p 127.0.0.1:9090:9090 \
-  jrx-broker:latest
+  ghcr.io/madhumasa84/jrx-broker:0.3.0
 ```
 
 This starts the evaluation broker and publishes metrics on host loopback. Client access
@@ -721,7 +692,7 @@ helm install jrx-broker ./helm/jrx-broker \
   --set service.metricsPort=9090
 ```
 
-The chart defaults to `ghcr.io/madhumasa84/jrx-broker:0.2.0`. Both probes run
+The chart defaults to `ghcr.io/madhumasa84/jrx-broker:0.3.0`. Both probes run
 `jrx broker status --local` against the local health socket at
 `/tmp/jrx/reflex.sock` in each pod.
 For remote evaluation, choose `config.jev.transport=broker-tls` and mount the server
@@ -742,11 +713,12 @@ storage with multiple replicas, use a StatefulSet with a claim per pod.
 | **[Managed Agent Harness](docs/agent-harness.md)** | Planning sessions, durable checkpoints, reviewed actions, read-only workers, and ACP agent integration. |
 | **[Harness Integrations](docs/harnesses.md)** | Comprehensive setup guides for Codex, Claude Code, Antigravity, OpenRouter, Pi, and DeepSeek. |
 | **[Security Architecture](docs/security.md)** | Hard check mechanics, secret redaction engine, Ed25519 signing, and boundary traversal defenses. |
-| **[Enterprise Threat Model](docs/threat-model.md)** | Formal security boundaries, 12 attacker personas, and negative security findings. |
+| **[Enterprise Threat Model](docs/threat-model.md)** | Threat assumptions, enforcement limits, and mitigations. |
 | **[Host Broker Daemon](docs/broker.md)** | Unix socket protocol, permissions specification, mTLS transport, and IPC limits. |
 | **[Observability & Metrics](docs/observability.md)** | Prometheus metrics exposition (`:9090/metrics`), structured logging, and calibration. |
 | **[Benchmark Methodology](docs/live-benchmark.md)** | Empirical stability metrics, decision consistency calculation, and live API test suites. |
-| **[Offline Deterministic Benchmark](benchmarks/RESULTS.md)** | v0.2.0 and Step 3 latency, benign false positives, ASI01–ASI06 recall, and obfuscation results. |
+| **[Offline Benchmark](benchmarks/RESULTS.md)** | Deterministic and local ONNX holdout results, latency, and confidence intervals. |
+| **[Changelog](CHANGELOG.md)** | Release changes, security controls, and upgrade notes. |
 | **[Isolated Execution](docs/execution-sandbox.md)** | Docker command isolation, resource limits, setup, and end-to-end verification. |
 | **[MCP Argument Policy](docs/mcp-argument-policy.md)** | Per-tool JSON Schema validation and resource-scoped argument constraints. |
 
@@ -764,10 +736,6 @@ boundary tests cover this check. Secret redaction is heuristic; when Gitleaks is
 unavailable, local checks use a regex fallback.
 Deployment security also depends on protecting host configuration, credentials, and
 state, and ensuring agents cannot bypass the execution gateway.
-
-- **Offline Tier-0 (`--no-jev`) deterministic rules only.** The suite covers 300 frozen cases, with 150 in the blind eval holdout. CI verifies the dataset SHA-256 checksums.
-- On the holdout, benign friction fell fivefold from **25.00% to 5.00%**. Step 3 measured **3.33% Hard FPR** and **63.33% obfuscation recall**. For `git status`, p50 and p95 were **0.829 / 1.616 ms** warm and **516.624 / 858.701 ms** cold.
-- Indirect prompt injection (OWASP ASI01) requires the semantic evaluation layer. [Offline benchmark results](benchmarks/RESULTS.md)
 
 ## Contributing
 
