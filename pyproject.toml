@@ -39,6 +39,7 @@ harness = [
 ]
 dev = [
     "pytest>=8.0",
+    "hypothesis>=6.170",
     "ruff>=0.5",
     "mypy>=1.15",
     "bandit>=1.8",
