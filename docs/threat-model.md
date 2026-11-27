@@ -112,7 +112,7 @@ JEV Reflex implements a defense-in-depth architecture:
 3. **Deterministic Policy Engine**: Pure function over findings + signals, producing ALLOW/REVIEW/HOLD decisions
 4. **Execution Control**: Hooks and wrappers that enforce policy decisions at the execution boundary
 5. **Audit Trail**: Tamper-evident logging with optional cryptographic signing
-6. **Supply Chain Security**: Signed releases with SBOM generation
+6. **Supply Chain Security**: The broker image is signed keylessly by the release workflow and carries an attested SPDX SBOM; the Python wheel and sdist are not signed or attested ([verifying a release](releases/verify.md))
 
 Each layer is designed to fail independently and safely. Compromising any single layer should not be sufficient to bypass security controls.
 
