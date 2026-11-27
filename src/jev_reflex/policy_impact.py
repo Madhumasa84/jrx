@@ -30,9 +30,13 @@ class PolicyImpactReport:
 
     def summary(self) -> str:
         # At most 15 characters per count keeps even the prefixed failure
-        # status under 140 characters. The Markdown report has exact counts.
+        # status under 140 characters; the "enforcement relaxed" marker takes
+        # 21 of them, so counts get 10 when it is shown. The Markdown report
+        # has exact counts.
+        digits = 10 if self.enforcement_relaxations else 15
+
         def count(value: int) -> str:
-            return str(value) if value < 10**15 else "1e15+"
+            return str(value) if value < 10**digits else f"1e{digits}+"
 
         parts = [
             f"{count(self.replayed)}/{count(self.total)} replayed",

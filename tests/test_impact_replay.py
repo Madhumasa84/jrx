@@ -48,8 +48,9 @@ def test_review_to_allow_counts_toward_relaxations(impact_case):
     assert run("--max-relaxations", "-1").exit_code == 2
 
 
-@pytest.mark.parametrize("count", [10**15 - 1, 10**100])
-def test_status_with_all_counts_fits_github_limit(count):
+@pytest.mark.parametrize("relaxed", [(), ("ALLOW", "REVIEW (degraded)")])
+@pytest.mark.parametrize("count", [10**10 - 1, 10**15 - 1, 10**100])
+def test_status_with_all_counts_fits_github_limit(count, relaxed):
     report = PolicyImpactReport(
         total=count * 4,
         replayed=count * 3,
@@ -59,10 +60,15 @@ def test_status_with_all_counts_fits_github_limit(count):
         skipped_policy_mismatch=0,
         skipped_decision_mismatch=0,
         changes={"HOLD_to_REVIEW": count},
+        enforcement_relaxations=relaxed,
     )
+    # The workflow cuts the description at 140 characters; the marker must survive.
     status = "Limit exceeded. " + report.summary()
     assert len(status) < 140
-    assert all(label in status for label in ("replayed", "new ALLOW", "HOLD->REVIEW", "new HOLD"))
+    labels = ["replayed", "new ALLOW", "HOLD->REVIEW", "new HOLD"]
+    assert all(label in status for label in labels + ["enforcement relaxed"] * bool(relaxed))
+    if count < 10**10:
+        assert f"{count} new ALLOW" in status  # exact counts while they fit
 
 
 @pytest.mark.parametrize("command", ["simulate", "impact"])

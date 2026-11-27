@@ -40,6 +40,7 @@
 - Stability threshold crossings also count the review boundary for hold signals. `PolicyReloader` keeps the previous policy when the local override is invalid.
 - Untyped policy reload markers written before reloads carried `event_type` count as reloads again, not as ALLOW decisions, in `jrx audit report`, policy replay (`jrx policy simulate`, `impact`, `rollout stage`) and the dashboard; one without a decision label no longer fails `jrx audit report`. Records that carry risk fields, findings or an explicit `event_type` stay decisions.
 - Security YAML rejects non-finite numbers (`.inf`, `.nan`, overflowing literals such as `1.0e+400`), which JSON cannot represent and the policy hash recorded as `null`; `jrx policy lint` reports them as `invalid_yaml`.
+- The `jrx policy impact` status line shortens very large counts (10 digits or more become `1e10+`) when it reports `enforcement relaxed`, so the 140-character PR status no longer cuts the marker off.
 - `jrx audit report` and the dashboard no longer serialize every audit record a second time after verification.
 - `jrx audit tail` renders records with malformed `hard_rule_findings` items or non-numeric `jev_signals` values instead of exiting 1 after partial output.
 
