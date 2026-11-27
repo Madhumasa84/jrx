@@ -418,6 +418,13 @@ def test_ssh_invocation_parsing(argv, connects, remote, local, files) -> None:
         (("su", "-c"), True, ""),
         (("su", "-V"), False, None),
         (("runuser", "-u", "svc", "-c", "id"), True, "id"),
+        # runuser -u runs the trailing argv directly; it must be inspected as a command.
+        (("runuser", "-u", "svc", "--", "rm", "-rf", "./cache"), True, "rm -rf ./cache"),
+        (("runuser", "-u", "svc", "id", "-u"), True, "id -u"),
+        (("runuser", "--user=svc", "ls", "-la"), True, "ls -la"),
+        (("runuser", "-usvc", "--", "a b"), True, "'a b'"),
+        (("runuser", "-u", "svc"), True, None),  # no command: an interactive shell
+        (("su", "-u", "svc", "id"), True, None),  # su has no -u command form
     ],
 )
 def test_su_invocation_parsing(argv, executes, script) -> None:
