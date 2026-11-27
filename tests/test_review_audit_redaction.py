@@ -1074,5 +1074,38 @@ def test_dashboard_never_lets_an_unsigned_policy_choose_the_audit_key(
     team = snapshot(pinned, identity)["teams"][0]
     assert team["audit_integrity"]["valid"] is False  # only the operator key is trusted
     assert "decisions" not in team
-    assert operator_private.exists()
     assert loaded == [operator_public]  # the source policy's key is never loaded
+    assert operator_private.exists()
+
+
+def test_report_and_dashboard_parse_each_verified_record_once(tmp_path, monkeypatch):
+    import jev_reflex.audit as audit_module
+    import jev_reflex.audit_report as report_module
+    import jev_reflex.dashboard as dashboard_module
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    log = tmp_path / "audit.jsonl"
+    config = ReflexConfig.model_validate({"audit": {"enabled": True, "path": str(log)}})
+    for command in ("ls", "pwd", "id"):
+        AuditLog(config).write_entry(command, [], {}, PolicyDecision("ALLOW", (), ()))
+    policy = tmp_path / "policy.yaml"
+    policy.write_text("mode: enforce\n")
+
+    parsed: list[str] = []
+    real = audit_module.parse_audit_record
+
+    def counting(line: str) -> dict[str, object]:
+        parsed.append(line)
+        return real(line)
+
+    for module in (audit_module, report_module, dashboard_module):
+        monkeypatch.setattr(module, "parse_audit_record", counting, raising=False)
+
+    # Verification parses each record canonically; the readers reuse its framing
+    # without re-serializing every verified record a second time.
+    assert build_audit_report(log, config)["decisions"]["ALLOW"] == 3
+    assert len(parsed) == 3
+    parsed.clear()
+    team = snapshot(_dashboard(tmp_path, policy, log), Identity("operator", frozenset({"ops"})))
+    assert team["teams"][0]["decisions"]["ALLOW"] == 3
+    assert len(parsed) == 3

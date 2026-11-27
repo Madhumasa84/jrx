@@ -16,7 +16,7 @@ from typing import Any
 import requests
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .audit import AuditLog, parse_audit_record, record_event_type
+from .audit import AuditLog, record_event_type
 from .broker import BrokerClient
 from .config import AccessConfig, ReflexConfig, load_bootstrap_config
 from .enterprise import AccessDenied, Identity, authorize, verified_identity
@@ -172,7 +172,8 @@ def snapshot(config: DashboardConfig, identity: Identity) -> dict[str, Any]:
                 continue
             # Use the verifier's framing: only "\n" delimits records, so Unicode
             # line separators inside JSON strings cannot split a verified record.
-            entries = [parse_audit_record(line) for line in io.StringIO(audit_text, newline="\n")]
+            # Verification parsed each line strictly; do not serialize it again.
+            entries = [json.loads(line) for line in io.StringIO(audit_text, newline="\n")]
             decisions = Counter(
                 entry.get("policy_decision")
                 for entry in entries

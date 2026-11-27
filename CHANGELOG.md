@@ -39,6 +39,7 @@
 - `jrx policy status` no longer prints fetch and override fields for a central source the runtime never polls. The docs now describe staged rollout as the only path from a central policy to runtime.
 - Stability threshold crossings also count the review boundary for hold signals. `PolicyReloader` keeps the previous policy when the local override is invalid.
 - Untyped policy reload markers written before reloads carried `event_type` count as reloads again, not as ALLOW decisions, in `jrx audit report`, policy replay (`jrx policy simulate`, `impact`, `rollout stage`) and the dashboard; one without a decision label no longer fails `jrx audit report`. Records that carry risk fields, findings or an explicit `event_type` stay decisions.
+- `jrx audit report` and the dashboard no longer serialize every audit record a second time after verification.
 - `jrx audit tail` renders records with malformed `hard_rule_findings` items or non-numeric `jev_signals` values instead of exiting 1 after partial output.
 
 ### Breaking / Upgrade Notes

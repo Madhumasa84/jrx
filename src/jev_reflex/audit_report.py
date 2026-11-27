@@ -5,13 +5,14 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import io
+import json
 import re
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .audit import GENESIS_HASH, AuditLog, parse_audit_record, record_event_type
+from .audit import GENESIS_HASH, AuditLog, record_event_type
 from .config import ReflexConfig
 from .redaction import redact_text
 
@@ -64,9 +65,11 @@ def build_audit_report(
     first = last = None
     tip = GENESIS_HASH
     # Use the verifier's newline framing. Unicode line separators are valid
-    # inside JSON strings and do not delimit audit records.
+    # inside JSON strings and do not delimit audit records. Verification already
+    # parsed every line strictly (unique members, canonical bytes), so decode
+    # without serializing each record again.
     for line in io.StringIO(snapshot, newline="\n"):
-        entry = parse_audit_record(line)
+        entry = json.loads(line)
         total += 1
         tip = entry["entry_hash"]
         timestamp = entry.get("timestamp_utc") or entry.get("timestamp")
