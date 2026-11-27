@@ -33,7 +33,7 @@
 
 JEV Reflex (`jrx`) evaluates proposed commands and tool calls before execution. It combines local security checks with semantic risk signals from a local CPU ONNX model or hosted TypeSafe JEV, then applies a deterministic policy to return **`ALLOW`**, **`REVIEW`**, or **`HOLD`**. The policy is deterministic for identical inputs; semantic model outputs can vary.
 
-Use it as a CLI wrapper, an agent hook, or a Model Context Protocol (MCP) gateway. Enforcement depends on the configured mode and on routing actions through JRX. An `ALLOW` result is a policy decision, not a guarantee that an action is safe.
+Use it as a CLI wrapper, an agent hook, or a Model Context Protocol (MCP) gateway. Enforcement depends on the configured mode and on routing actions through JRX. An `ALLOW` result is a policy decision, not a guarantee that an action is safe. [Enforcement guarantees](docs/guarantees.md) states, per integration, what is stopped, what the user is asked, and what only the host or operating system can prevent.
 
 | Capability | Implementation |
 | :--- | :--- |
@@ -219,6 +219,8 @@ Standard execution modes apply when strict REVIEW and enterprise access are disa
 | `advisory` (default) | Reports decisions without blocking execution on policy results. Audit persistence must be enabled separately. |
 | `review` | Requires confirmation for `REVIEW` or `HOLD` in the CLI; hooks can deny the action for host review. |
 | `enforce` | Blocks `HOLD` by default and fails closed on unavailable or malformed semantic evaluation. `REVIEW` never runs unattended: hooks ask where the host can ask and deny where it cannot, `jrx exec` asks for confirmation (non-interactive input counts as no), and `jrx check` exits 2. |
+
+What each integration does with every decision and failure, what it covers, and what only the host can prevent: [Enforcement guarantees](docs/guarantees.md).
 
 Enforce-mode HOLD overrides require `policy.allow_hold_override: true`. Enable `policy.strict_review` to block REVIEW until JRX verifies an approval through the configured OIDC access controls. Enterprise access also activates strict REVIEW.
 
