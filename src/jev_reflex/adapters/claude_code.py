@@ -63,13 +63,15 @@ def claude_code_settings_json(command: str = "jev-reflex claude-code-hook") -> d
         "hooks": {
             "PreToolUse": [
                 {
-                    "matcher": "Bash|Edit|Write|mcp__.*",
+                    # Kept equal to workspace.hooks._MATCHERS["claude"] (tested).
+                    "matcher": "Bash|Edit|MultiEdit|Write|NotebookEdit|mcp__.*",
                     "hooks": [{"type": "command", "command": command, "timeout": 30}],
                 }
             ],
             "PostToolUse": [
                 {
-                    "matcher": "Bash|Read|mcp__.*",
+                    # Every tool whose output can surface a secret records taint.
+                    "matcher": "Bash|Read|Grep|WebFetch|mcp__.*",
                     "hooks": [{"type": "command", "command": command, "timeout": 30}],
                 }
             ],

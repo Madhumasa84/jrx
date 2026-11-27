@@ -51,7 +51,7 @@ Create or update `.codex/hooks.json` in the root of your project:
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|apply_patch|mcp__.*",
+        "matcher": "Bash|exec_command|shell_command|apply_patch|mcp__.*",
         "hooks": [
           {
             "type": "command",
@@ -78,7 +78,7 @@ Create or update `.codex/hooks.json` in the root of your project:
 
 ## 2. Anthropic Claude Code
 
-Claude Code supports `PreToolUse` hooks configured in `.claude/settings.json`. The hook receives JSON on `stdin` and responds with an explicit `allow`, `ask`, or `deny` decision.
+Claude Code supports `PreToolUse` hooks configured in `.claude/settings.json`. The hook receives JSON on `stdin` and responds with an `ask` or `deny` decision, or with no decision when the action is allowed.
 
 ### Setup
 
@@ -89,12 +89,12 @@ Add the following to your project's `.claude/settings.json` (or user-level `~/.c
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|Edit|Write|mcp__.*",
+        "matcher": "Bash|Edit|MultiEdit|Write|NotebookEdit|mcp__.*",
         "hooks": [
           {
             "type": "command",
             "command": "jrx claude-code-hook",
-            "timeout": 30000
+            "timeout": 30
           }
         ]
       }
@@ -103,11 +103,14 @@ Add the following to your project's `.claude/settings.json` (or user-level `~/.c
 }
 ```
 
+Claude Code hook timeouts are in seconds.
+
 ### Event Flow & Mapping
-- `ALLOW`: Returns `permissionDecision: "allow"`.
-- `REVIEW`: In `review` mode, returns `permissionDecision: "ask"` to prompt the user interactively before proceeding.
+- `ALLOW`: Returns no `permissionDecision`, so Claude Code's normal permission rules still apply.
+- `REVIEW`: In `review` or `enforce` mode, returns `permissionDecision: "ask"` to prompt the user interactively before proceeding (`deny` when `strict_review_required` is set).
 - `HOLD`: Returns `permissionDecision: "deny"` with audit reasons and warnings.
-- `advisory` mode: Always permits execution while appending advisory recommendations to `additionalContext`.
+- Degraded evaluation: Returns `permissionDecision: "deny"` in `review` and `enforce` mode.
+- `advisory` mode: Permits execution while appending advisory recommendations to `additionalContext`; host guard denials are still denied.
 
 ---
 
@@ -117,20 +120,19 @@ Antigravity command hooks intercept tool calls and expect an `allow`, `force_ask
 
 ### Setup
 
-Copy `examples/antigravity/hooks.json` into `.agents/hooks.json`:
+Copy `examples/antigravity/hooks.json` into `.agents/hooks.json` (`jev-reflex` and `jrx` are the same command):
 
 ```json
 {
-  "description": "JEV Reflex execution control for Antigravity",
-  "hooks": {
+  "jev-reflex": {
     "PreToolUse": [
       {
-        "matcher": ".*",
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "jrx antigravity-hook",
-            "timeout": 30000
+            "command": "jev-reflex antigravity-hook",
+            "timeout": 30
           }
         ]
       }
@@ -217,7 +219,7 @@ registerExtension({
 
 ## 6. DeepSeek Harness
 
-DeepSeek Harness executes command hooks via the `dsh-hooks-codex` bridge protocol.
+DeepSeek Harness executes command hooks via the `dsh-hooks-codex` bridge protocol. Like Codex, that contract has no interactive `ask`, so `REVIEW` returns `permissionDecision: "deny"` in `review` and `enforce` mode; `HOLD` and degraded results are denied too.
 
 ### Setup
 
@@ -225,15 +227,14 @@ Copy `examples/deepseek/hooks.json` to your hook configuration directory:
 
 ```json
 {
-  "description": "JEV Reflex DeepSeek Hook",
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|.*",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",
-            "command": "jrx deepseek-hook",
+            "command": "jev-reflex deepseek-hook",
             "timeout": 30
           }
         ]

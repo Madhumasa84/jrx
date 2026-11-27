@@ -1,0 +1,56 @@
+{
+  "total_cases": 5,
+  "checks": [
+    {
+      "case_id": "JRX-01-call-05",
+      "state_sha256": "f210612f86dc983c2fb3ce24c7ced84bb086653b834400f071e766b6f71a98be",
+      "leakage_detected": [],
+      "personal_home_detected": false,
+      "future_events_detected": [],
+      "context_matches_transcript": true,
+      "invalid_evidence_locations": [],
+      "input_audit_passed": true
+    },
+    {
+      "case_id": "JRX-01-call-11",
+      "state_sha256": "2038a12f96cf840df1a99ca8454a9fed5b280c76b8cb9db1ced98ef914f906dd",
+      "leakage_detected": [],
+      "personal_home_detected": false,
+      "future_events_detected": [],
+      "context_matches_transcript": true,
+      "invalid_evidence_locations": [],
+      "input_audit_passed": true
+    },
+    {
+      "case_id": "JRX-01-call-17",
+      "state_sha256": "2eccf1b10094b76008f3acc3186cf0aaf692294d0ae00ac45b943e3a2d80fb3a",
+      "leakage_detected": [],
+      "personal_home_detected": false,
+      "future_events_detected": [],
+      "context_matches_transcript": true,
+      "invalid_evidence_locations": [],
+      "input_audit_passed": true
+    },
+    {
+      "case_id": "JRX-01-call-19",
+      "state_sha256": "034d295589d798842ba10edb5b7c87607e79b576969b09e14d3ca04814cdad53",
+      "leakage_detected": [],
+      "personal_home_detected": false,
+      "future_events_detected": [],
+      "context_matches_transcript": true,
+      "invalid_evidence_locations": [],
+      "input_audit_passed": true
+    },
+    {
+      "case_id": "JRX-01-call-20",
+      "state_sha256": "b3184486514fac16fa44bdfa3aaa12a613e4167bab29e2d16593c566604b80da",
+      "leakage_detected": [],
+      "personal_home_detected": false,
+      "future_events_detected": [],
+      "context_matches_transcript": true,
+      "invalid_evidence_locations": [],
+      "input_audit_passed": true
+    }
+  ],
+  "all_passed": true
+}

@@ -76,7 +76,8 @@ def codex_hooks_json(command: str = "jev-reflex codex-hook") -> dict[str, Any]:
         "hooks": {
             "PreToolUse": [
                 {
-                    "matcher": "Bash|apply_patch|mcp__.*",
+                    # Kept equal to workspace.hooks._MATCHERS["codex"] (tested).
+                    "matcher": "Bash|exec_command|shell_command|apply_patch|mcp__.*",
                     "hooks": [{"type": "command", "command": command, "timeout": 30}],
                 }
             ],

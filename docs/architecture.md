@@ -140,7 +140,8 @@ each result, and passes the results to `build_report`. It reports:
 - `decision_consistency = max(decision_counts) / runs`
 - `decision_flip_rate = 1 - decision_consistency`
 - per-signal mean, population standard deviation, min, max
-- threshold crossings and crossing rate
+- threshold crossings and crossing rate (runs outside the most common decision band;
+  hold signals count both the review and strong thresholds)
 - high-confidence disagreement rate
 - degraded-run count
 

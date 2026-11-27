@@ -357,11 +357,13 @@ def parse_provider_event(
             request_id = str(request_id) if request_id is not None else None
             raw_params = payload.get("params")
             params: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
+            thread_id = params.get("threadId")
             return _event(
                 provider,
                 "approval_request",
                 raw_type,
-                session=str(params.get("threadId", session_id)) if params else session_id,
+                # A missing or non-string threadId must not become the session "None".
+                session=thread_id if isinstance(thread_id, str) and thread_id else session_id,
                 request=request_id,
                 text=f"Codex requests approval for {raw_type.rsplit('/', 1)[-1]}",
                 action=params,

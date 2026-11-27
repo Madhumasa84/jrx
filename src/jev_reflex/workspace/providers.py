@@ -286,6 +286,17 @@ def detect_providers(cwd: Path | None = None) -> tuple[ProviderStatus, ...]:
     return tuple(detect_provider(provider, cwd) for provider in PROVIDERS)
 
 
+def option_value(value: str, label: str) -> str:
+    """Refuse a flag-shaped value that a provider would parse as an option.
+
+    ``--`` cannot protect option values (``--resume``, ``--conversation``), and
+    provider session references are never legitimately flag-shaped.
+    """
+    if not value or value.startswith("-"):
+        raise ValueError(f"{label} must be non-empty and must not start with '-'")
+    return value
+
+
 def build_native_argv(
     provider: str,
     *,
@@ -302,34 +313,40 @@ def build_native_argv(
         if model:
             argv += ["--model", model]
         if resume:
-            if session_ref:
-                argv += ["resume", session_ref]
-            else:
-                argv += ["resume"]
-            if initial_prompt:
-                argv.append(initial_prompt)
-        elif initial_prompt:
-            argv.append(initial_prompt)
+            argv.append("resume")
+        # Codex (clap) ends option parsing at --: a flag-shaped prompt or
+        # session reference stays a positional value.
+        positionals = [
+            value for value in ((session_ref if resume else None), initial_prompt) if value
+        ]
+        if positionals:
+            argv += ["--", *positionals]
     elif provider == "claude":
         if model:
             argv += ["--model", model]
         if resume:
             if session_ref:
-                argv += ["--resume", session_ref]
+                argv += ["--resume", option_value(session_ref, "session reference")]
             else:
                 argv += ["--continue"]
-            if initial_prompt:
-                argv.append(initial_prompt)
         else:
             # Claude Code documents this as an interactive CLI option.
-            argv += ["--session-id", new_session_id or str(uuid.uuid4())]
-            if initial_prompt:
-                argv.append(initial_prompt)
+            argv += [
+                "--session-id",
+                option_value(new_session_id or str(uuid.uuid4()), "session ID"),
+            ]
+        if initial_prompt:
+            # Claude Code's parser ends option parsing at --.
+            argv += ["--", initial_prompt]
     else:
         if model:
             argv += ["--model", model]
         if resume:
-            argv += ["--conversation", session_ref] if session_ref else ["--continue"]
+            argv += (
+                ["--conversation", option_value(session_ref, "session reference")]
+                if session_ref
+                else ["--continue"]
+            )
         elif initial_prompt:
             # Antigravity documents prompt arguments for headless mode, but
             # does not document an initial-prompt positional form for its TUI.

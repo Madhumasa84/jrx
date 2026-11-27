@@ -38,7 +38,7 @@ JEV Reflex is designed to protect against specific classes of threats in autonom
 
 ### 7. Unauthorized Policy Modifications
 - **Threat**: Attackers with filesystem write access silently modifying policy settings (thresholds, rules, mode) to weaken security controls.
-- **Protection**: Optional cryptographic signing of policy files (ed25519). When `require_signature: true` is set in bootstrap config, JEV Reflex refuses to load unsigned or invalidly signed policy files. Central policy mode with signature verification prevents unauthorized remote policy changes.
+- **Protection**: Optional cryptographic signing of policy files (ed25519). When `require_signature: true` is set in bootstrap config, JEV Reflex refuses to load unsigned or invalidly signed policy files. Staged rollout of a central policy verifies the candidate's signature when it is staged and re-verifies every stored revision's signature whenever the rollout state is read. Because a signature cannot prove which revision is active, signed deployments trust rollout state only where the evaluating user can neither rewrite nor replace it, and fail closed otherwise.
 - **See**: [docs/security.md](security.md#cryptographic-signing)
 
 ### 8. Audit Log Tampering

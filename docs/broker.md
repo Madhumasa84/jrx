@@ -210,7 +210,7 @@ For HA deployments with multiple broker instances, use a simple pattern:
 
 1. **Multiple broker instances**: Run 2-3 broker instances on different hosts
 2. **TCP load balancer**: Place a TCP load balancer (HAProxy, nginx stream, or cloud LB) in front
-3. **Independent policy polling**: Each broker independently polls the central policy source
+3. **Same policy on every host**: Each broker loads its policy at startup (`reflex.yaml`, or the active revision from the host's staged rollout state). Brokers do not poll a central source.
 
 ```
                 ┌─────────────┐
@@ -227,15 +227,15 @@ For HA deployments with multiple broker instances, use a simple pattern:
         └──────────────┼──────────────┘
                        │
                ┌───────▼────────┐
-               │ Central Policy │
-               │    Source      │
+               │ Signed policy, │
+               │ rollout state  │
                └────────────────┘
 ```
 
 **Key points:**
 - No leader election or clustering is needed
-- Each broker independently loads policy from the central source
-- Policy changes propagate via the polling mechanism (from Prompt 2.1)
+- Each broker independently loads the same signed policy or rollout state
+- Policy changes reach a broker when it restarts after `jrx policy rollout promote` or a new signed `reflex.yaml`
 - The load balancer distributes client connections across healthy brokers
 - Clients use the load balancer address as the broker endpoint
 

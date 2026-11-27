@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .providers import build_native_argv, child_environment, provider_by_key
+from .providers import build_native_argv, child_environment, option_value, provider_by_key
 from .state import WorkspaceError, WorkspaceLock, validate_workspace
 from .streaming import NormalizedEvent, parse_provider_event
 
@@ -171,6 +171,9 @@ def structured_argv(
             argv += ["--sandbox", sandbox_mode]
         if model:
             argv += ["--model", model]
+        # Codex's clap parser treats everything after -- as positionals, so a
+        # prompt such as "- fix it" or "--help" is task text, not an option.
+        argv.append("--")
         if resume_session_ref:
             argv.append(resume_session_ref)
         return [*argv, prompt]
@@ -189,13 +192,14 @@ def structured_argv(
         ]
         if model:
             argv += ["--model", model]
-        return [*argv, prompt]
+        # Claude Code's parser ends option parsing at --.
+        return [*argv, "--", prompt]
     # Antigravity takes the next token after bare --print as its prompt, even
     # when options follow. Bind the prompt to the flag so parsing cannot consume
     # --output-format as task text.
     argv = [spec.executable, f"--print={prompt}", "--output-format", "stream-json"]
     if resume_session_ref:
-        argv += ["--conversation", resume_session_ref]
+        argv += ["--conversation", option_value(resume_session_ref, "session reference")]
     if model:
         argv += ["--model", model]
     return argv

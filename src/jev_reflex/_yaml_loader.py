@@ -6,6 +6,13 @@ from typing import Any
 
 import yaml
 
+# JSON-compatible core schema only. ``!!set`` yields hash-seed-dependent order,
+# ``!!omap``/``!!pairs`` yield tuples, ``!!binary`` bytes and ``!!timestamp``
+# dates: none has one canonical JSON form, so none may reach a policy hash.
+_CORE_TAGS = frozenset(
+    "tag:yaml.org,2002:" + name for name in ("null", "bool", "int", "float", "str", "seq", "map")
+)
+
 
 class SecurityLoader(yaml.SafeLoader):
     def __init__(self, stream: str | bytes) -> None:
@@ -24,6 +31,15 @@ class SecurityLoader(yaml.SafeLoader):
             return super().compose_node(parent, index)
         finally:
             self._depth -= 1
+
+    def construct_object(self, node: Any, deep: bool = False) -> Any:
+        # Also rejects merge keys (``<<``) and application-specific tags. The
+        # message carries no input value or source snippet.
+        if node.tag not in _CORE_TAGS:
+            raise yaml.constructor.ConstructorError(
+                None, None, "YAML tag is not supported in security configuration", None
+            )
+        return super().construct_object(node, deep=deep)
 
     def construct_mapping(self, node: Any, deep: bool = False) -> dict[Any, Any]:
         result: dict[Any, Any] = {}

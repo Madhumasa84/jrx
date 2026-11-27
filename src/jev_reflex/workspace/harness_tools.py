@@ -25,7 +25,7 @@ from ..config import ReflexConfig
 from ..context import sanitized_child_env
 from ..evaluator import DefaultEvaluator
 from ..models import EvaluationContext, ProposedAction
-from ..redaction import redact_text
+from ..redaction import REDACTED_SECRET, redact_text
 from ..sandbox import (
     build_sandbox_command,
     prepare_sandbox_egress,
@@ -225,16 +225,26 @@ def build_tools(
         return {"entries": sorted(entries, key=lambda entry: entry["name"]), "truncated": truncated}
 
     def workspace_read(path: str) -> dict[str, Any]:
-        """Read a UTF-8 workspace file (maximum 1 MiB), returning its write precondition SHA256."""
+        """Read a UTF-8 workspace file (maximum 1 MiB), returning its write precondition SHA256.
+
+        A file whose secrets were redacted returns no SHA256: writing the redacted
+        text back would replace the secret on disk with the redaction marker.
+        """
         begin("workspace_read")
         parts = _parts(path)
         with lock, _directory(root, parts[:-1]) as fd:
             data = _read(fd, parts[-1])
-        return {
-            "path": path,
-            "content": redact_text(data.decode("utf-8")),
-            "sha256": hashlib.sha256(data).hexdigest(),
-        }
+        text = data.decode("utf-8")
+        shown = redact_text(text)
+        if shown != text:
+            return {
+                "path": path,
+                "content": shown,
+                "sha256": None,
+                "redacted": True,
+                "note": "Secrets were redacted; this file cannot be rewritten with workspace_write.",
+            }
+        return {"path": path, "content": shown, "sha256": hashlib.sha256(data).hexdigest()}
 
     def workspace_write(path: str, content: str, expected_sha256: str) -> dict[str, Any]:
         """Write a UTF-8 file after approval and JRX evaluation. Supply its read SHA256, or 'new'."""
@@ -273,6 +283,13 @@ def build_tools(
                     or hashlib.sha256(previous).hexdigest() != expected_sha256
                 ):
                     raise ValueError("file changed; read it again before writing")
+                # Defense in depth: the precondition SHA can be learned elsewhere
+                # (for example a sandboxed sha256sum), so never let redaction
+                # markers replace content that did not contain them.
+                if REDACTED_SECRET.encode() in data and REDACTED_SECRET.encode() not in previous:
+                    raise ValueError(
+                        "content contains redaction markers; secrets cannot be rewritten here"
+                    )
             temporary = f".jrx-write-{uuid.uuid4().hex}"
             out = os.open(
                 temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd

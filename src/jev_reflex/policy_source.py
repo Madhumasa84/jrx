@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ import requests
 from .audit import AuditLog
 from .config import PolicySourceConfig, ReflexConfig
 from .serialization import safe_yaml_load
-from .signing import Ed25519Signer, load_public_key, verify_file
+from .signing import verify_pinned_ed25519
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,20 @@ class PolicySignatureError(Exception):
     """Raised when policy signature verification fails."""
 
     pass
+
+
+class PolicyOverrideError(PolicyFetchError):
+    """Raised when the local tighten-only override cannot be loaded."""
+
+
+@dataclass(frozen=True)
+class FetchedPolicy:
+    """A verified remote policy with the exact bytes and signature it came from."""
+
+    policy: ReflexConfig
+    policy_hash: str
+    raw: bytes
+    signature: bytes
 
 
 class PolicyReloader:
@@ -102,15 +117,17 @@ class PolicyReloader:
                 # Used cached policy, no change
                 return
 
-            # Load local override if present
+            # Load local override if present. A broken tighten-only overlay must
+            # not silently degrade to central-only: keep the last merged policy,
+            # or refuse to start without one.
             local_policy = None
             if self.local_config_path and self.local_config_path.exists():
                 try:
                     with self.local_config_path.open("r", encoding="utf-8") as f:
                         local_data = safe_yaml_load(f.read(1_048_577))
                     local_policy = ReflexConfig.model_validate(local_data)
-                except Exception as e:
-                    logger.warning(f"Failed to load local policy override: {e}")
+                except Exception:
+                    raise PolicyOverrideError("local policy override is invalid") from None
 
             # Merge policies
             merged_policy = PolicyMerger.merge_policies(central_policy, local_policy)
@@ -132,6 +149,7 @@ class PolicyReloader:
                         deterministic_findings=[],
                         jev_signals={},
                         policy_decision=PolicyDecision("ALLOW", (), ()),
+                        event_type="policy_reload",
                     )
                 except Exception as e:
                     logger.warning(f"Failed to log policy reload to audit: {e}")
@@ -323,6 +341,16 @@ class PolicyFetcher:
             PolicyFetchError: If fetching fails.
             PolicySignatureError: If signature verification fails.
         """
+        fetched = self.fetch_signed()
+        return fetched.policy, fetched.policy_hash
+
+    def fetch_signed(self) -> FetchedPolicy:
+        """Fetch and verify policy, keeping the exact signed bytes and signature.
+
+        Raises:
+            PolicyFetchError: If fetching fails.
+            PolicySignatureError: If signature verification fails.
+        """
         if self.config.type is None:
             raise PolicyFetchError("policy_source.type is not configured")
 
@@ -335,7 +363,12 @@ class PolicyFetcher:
         else:
             raise PolicyFetchError(f"Unsupported policy source type: {self.config.type}")
 
-    def _fetch_from_git(self) -> tuple[ReflexConfig, str]:
+    def _signed(self, raw: bytes, signature: bytes) -> FetchedPolicy:
+        """Parse bytes whose signature was already verified."""
+        policy = ReflexConfig.model_validate(safe_yaml_load(raw))
+        return FetchedPolicy(policy, self._compute_policy_hash(policy), raw, signature)
+
+    def _fetch_from_git(self) -> FetchedPolicy:
         """Fetch policy from a git repository."""
         uri = self.config.uri
         ref = self.config.ref
@@ -378,17 +411,18 @@ class PolicyFetcher:
                     "pinned_signature_pubkey is required for signature verification"
                 )
 
-            # Verify signature
+            # Verify the exact signature bytes that are returned with the policy.
+            signature = signature_path.read_bytes()
             self._verify_signature(
-                policy_path, signature_path, self.config.pinned_signature_pubkey, data=raw
+                policy_path,
+                signature_path,
+                self.config.pinned_signature_pubkey,
+                data=raw,
+                signature=signature,
             )
-            policy = ReflexConfig.model_validate(safe_yaml_load(raw))
+            return self._signed(raw, signature)
 
-            policy_hash = self._compute_policy_hash(policy)
-
-            return policy, policy_hash
-
-    def _fetch_from_https(self) -> tuple[ReflexConfig, str]:
+    def _fetch_from_https(self) -> FetchedPolicy:
         """Fetch policy from an HTTPS endpoint."""
         uri = self.config.uri
 
@@ -412,25 +446,26 @@ class PolicyFetcher:
 
         # Authenticate the exact downloaded bytes before parsing. HTTP text
         # decoding can change non-ASCII content even when the signature is valid.
+        signature = sig_response.content
         with tempfile.TemporaryDirectory() as directory:
             policy_file_path = Path(directory) / "policy.yaml"
             sig_file_path = Path(directory) / "policy.yaml.sig"
             policy_file_path.write_bytes(raw)
-            sig_file_path.write_bytes(sig_response.content)
+            sig_file_path.write_bytes(signature)
             if not self.config.pinned_signature_pubkey:
                 raise PolicySignatureError(
                     "pinned_signature_pubkey is required for signature verification"
                 )
             self._verify_signature(
-                policy_file_path, sig_file_path, self.config.pinned_signature_pubkey, data=raw
+                policy_file_path,
+                sig_file_path,
+                self.config.pinned_signature_pubkey,
+                data=raw,
+                signature=signature,
             )
-        policy = ReflexConfig.model_validate(safe_yaml_load(raw))
+        return self._signed(raw, signature)
 
-        policy_hash = self._compute_policy_hash(policy)
-
-        return policy, policy_hash
-
-    def _fetch_from_local(self) -> tuple[ReflexConfig, str]:
+    def _fetch_from_local(self) -> FetchedPolicy:
         """Fetch policy from a local file."""
         uri = self.config.uri
 
@@ -453,32 +488,32 @@ class PolicyFetcher:
                 "pinned_signature_pubkey is required for signature verification"
             )
 
+        signature = signature_path.read_bytes()
         self._verify_signature(
-            policy_path, signature_path, self.config.pinned_signature_pubkey, data=raw
+            policy_path,
+            signature_path,
+            self.config.pinned_signature_pubkey,
+            data=raw,
+            signature=signature,
         )
-        policy = ReflexConfig.model_validate(safe_yaml_load(raw))
-
-        policy_hash = self._compute_policy_hash(policy)
-
-        return policy, policy_hash
+        return self._signed(raw, signature)
 
     def _verify_signature(
-        self, policy_path: Path, signature_path: Path, pubkey: str, *, data: bytes | None = None
+        self,
+        policy_path: Path,
+        signature_path: Path,
+        pubkey: str,
+        *,
+        data: bytes | None = None,
+        signature: bytes | None = None,
     ) -> None:
         """Verify the policy signature using the pinned public key."""
-        # Write the public key to a temporary file
-        with tempfile.NamedTemporaryFile(delete=False, mode="w") as pubkey_file:
-            pubkey_file.write(pubkey)
-            pubkey_file_path = Path(pubkey_file.name)
-
-        try:
-            public_key = load_public_key(pubkey_file_path)
-            signer = Ed25519Signer()
-
-            if not verify_file(policy_path, signature_path, public_key, signer, data=data):
-                raise PolicySignatureError("Policy signature verification failed")
-        finally:
-            pubkey_file_path.unlink()
+        if signature is None:
+            signature = signature_path.read_bytes()
+        if data is None:
+            data = policy_path.read_bytes()
+        if not verify_pinned_ed25519(data, signature, pubkey):
+            raise PolicySignatureError("Policy signature verification failed")
 
     def fetch_with_cache(self) -> tuple[ReflexConfig, str, bool]:
         """Fetch policy, using cached version if available and unchanged.

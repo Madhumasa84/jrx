@@ -5,12 +5,27 @@ from __future__ import annotations
 import ast
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from ..models import DeterministicFinding, EvaluationContext
 from .common import git_command
 from .diff import proposed_changes
-from .shell import SHELLS, Command, inspect, program, xargs_target
+from .shell import (
+    CODE_INTERPRETERS,
+    PREFIX_COMMANDS,
+    SHELLS,
+    Command,
+    ShellPlan,
+    container_exec,
+    inspect,
+    interpreter_code,
+    is_python,
+    program,
+    reads_program_from_stdin,
+    ssh_invocation,
+    su_invocation,
+    xargs_target,
+)
 
 _HTTP_LIBRARIES = {"http", "urllib", "requests", "httpx", "aiohttp", "socket", "ftplib", "smtplib"}
 _PROCESS_LIBRARIES = {"subprocess", "runpy", "importlib", "ctypes", "multiprocessing"}
@@ -31,6 +46,41 @@ _JS_NETWORK = re.compile(
     r"\b(?:fetch|XMLHttpRequest|WebSocket)\s*\(|"
     r"""(?:require\s*\(|from\s+|import\s*\()\s*['"](?:node:)?(?:https?|net|tls|undici|axios)\b"""
 )
+# Builtins and utilities whose behaviour an unresolved argument cannot widen beyond output.
+_EXPANSION_SAFE = frozenset(
+    {
+        "echo",
+        "printf",
+        "test",
+        "[",
+        "[[",
+        "true",
+        "false",
+        ":",
+        "export",
+        "local",
+        "declare",
+        "typeset",
+        "readonly",
+        "unset",
+        "shift",
+        "set",
+        "return",
+        "exit",
+        "read",
+        "sleep",
+        "seq",
+        "basename",
+        "dirname",
+        "pwd",
+        "type",
+        "which",
+        "hash",
+        "wait",
+        "expr",
+        "let",
+    }
+)
 _NETWORK_PROGRAMS = {
     "curl",
     "wget",
@@ -46,26 +96,10 @@ _NETWORK_PROGRAMS = {
 }
 
 
-def is_python(name: str) -> bool:
-    return bool(re.fullmatch(r"python(?:[23](?:\.\d+)?)?|pypy[23]?", name))
-
-
 def inline_code(command: Command) -> str | None:
-    name = program(command.argv[0])
-    flags = {"-c"} if is_python(name) else {"-e", "--eval", "-p", "--print"}
-    for index, arg in enumerate(command.argv[1:], 1):
-        if arg == "--" or not arg.startswith("-"):
-            break
-        if arg in flags and index + 1 < len(command.argv):
-            return command.argv[index + 1]
-        flag, separator, value = arg.partition("=")
-        if separator and flag in flags:
-            return value
-        if is_python(name) and arg.startswith("-c") and len(arg) > 2:
-            return arg[2:]
-        if name in {"perl", "ruby", "node", "nodejs"} and re.match(r"^-[ep].+", arg):
-            return arg[2:]
-    return None
+    """Inline program text given to python/node/perl/ruby, grouped short flags included."""
+    codes, _ = interpreter_code(command.argv)
+    return "\n".join(codes) if codes else None
 
 
 def _python_evidence(code: str) -> tuple[bool, bool]:
@@ -121,12 +155,28 @@ def egress(command: Command) -> bool:
 
 def _command_risk(command: Command) -> str | None:
     name, args = program(command.argv[0]), command.argv[1:]
-    if name in {"sudo", "doas"} and args and "-l" not in args:
+    # Remote hosts and containers are outside what the local checks can observe, so a
+    # command run there needs review even when its own text looks harmless.
+    if command.context == "remote" or (name == "ssh" and ssh_invocation(command.argv).connects):
+        return "REMOTE_EXECUTION"
+    if command.context == "container" or (
+        name in {"docker", "podman"} and container_exec(command.argv) is not None
+    ):
+        return "CONTAINER_EXECUTION"
+    if (name in {"sudo", "doas"} and args and "-l" not in args) or (
+        name in {"su", "runuser"} and su_invocation(command.argv).executes
+    ):
         return "PRIVILEGED_EXECUTION"
     environment = (*command.assignments, *(args if name == "env" else ()))
     if any(item.partition("=")[0] in _LOADER_ENV and "=" in item for item in environment):
         return "EXECUTABLE_ENVIRONMENT"
-    if name in SHELLS and command.piped:
+    if command.piped and (
+        name in SHELLS
+        or (
+            (is_python(name) or name in CODE_INTERPRETERS or name in {"source", "."})
+            and reads_program_from_stdin(command.argv)
+        )
+    ):
         return "PIPE_TO_INTERPRETER"
     if name == "find" and set(args) & {"-exec", "-execdir", "-ok", "-okdir"}:
         return "DELEGATED_EXECUTION"
@@ -203,6 +253,49 @@ def _build_execution(context: EvaluationContext) -> bool:
     return False
 
 
+def _unresolved_expansion(plan: ShellPlan) -> bool:
+    """Arguments whose runtime value the lexer could not resolve.
+
+    Arithmetic contexts (``$((x))``, ``((x))``, ``let``, ``[[ x -eq 1 ]]``) evaluate variable
+    text as code, so any operand that is not a known integer counts. Other unresolved
+    parameter expansions count when they reach a command whose options or operands change
+    what it does; output-only builtins such as ``echo``/``printf`` are exempt, and prefix
+    commands are judged through the command they wrap.
+    """
+    for command in plan.commands:
+        words = [command.word(index) for index in range(len(command.argv))]
+        if any("arithmetic" in word.kinds for word in (*words, *command.assignment_words)):
+            return True
+        if not command.argv:
+            continue
+        name = program(command.argv[0])
+        if name in _EXPANSION_SAFE or name in PREFIX_COMMANDS:
+            continue
+        message_values = _git_message_values(command.argv) if name == "git" else set()
+        if any(
+            "parameter" in word.kinds
+            and (index not in message_values or word.kinds & {"vanishable", "ifs"})
+            for index, word in enumerate(words[1:], start=1)
+        ):
+            return True
+    return False
+
+
+def _git_message_values(argv: Sequence[str]) -> set[int]:
+    """Indices of git ``-m``/``--message`` values: commit text, never options or paths.
+
+    Only the flag's own value is exempt; a word the shell can split or drop (an unquoted
+    expansion) is still judged by the caller because its pieces could become new options.
+    """
+    values = set()
+    for index, arg in enumerate(argv):
+        if arg in {"-m", "--message"} and index + 1 < len(argv):
+            values.add(index + 1)
+        elif arg.startswith("--message=") or (arg.startswith("-m") and len(arg) > 2):
+            values.add(index)
+    return values
+
+
 def evaluate(context: EvaluationContext) -> list[DeterministicFinding]:
     plan = inspect(context.proposed_action)
     reason = next(
@@ -211,6 +304,8 @@ def evaluate(context: EvaluationContext) -> list[DeterministicFinding]:
     )
     if reason is None and plan.opaque:
         reason = "OPAQUE_SHELL_EXECUTION"
+    if reason is None and _unresolved_expansion(plan):
+        reason = "UNRESOLVED_EXPANSION"
     if reason is None and (
         _tool_execution(context.proposed_action.input) or _build_execution(context)
     ):

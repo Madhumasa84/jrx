@@ -88,7 +88,9 @@ mcp:
     assert paths == {"mod", "privacy.redact_secret", "access.rules[0].typo"}
 
 
-def test_yaml_merge_and_nonrecursive_alias_are_supported(tmp_path):
+def test_yaml_merge_keys_are_rejected_like_the_runtime_loader(tmp_path):
+    # The runtime loader rejects merge keys, so a lint-clean policy using one
+    # would stop enforcement once signed and deployed.
     report = lint(
         tmp_path,
         """
@@ -99,7 +101,8 @@ thresholds:
   strong: 0.95
 """,
     )
-    assert report["valid"], report
+    assert not report["valid"]
+    assert codes(report) == {"invalid_yaml"}
 
 
 def test_warnings_and_duplicate_authorization_rules(tmp_path):
@@ -188,7 +191,7 @@ def test_duplicate_keys_are_detected_before_yaml_merge_flattening(tmp_path, text
     assert "duplicate_key" in codes(report)
 
 
-def test_aliases_and_explicit_merge_overrides_remain_valid(tmp_path):
+def test_aliases_and_explicit_merge_overrides_are_rejected_like_the_runtime_loader(tmp_path):
     report = lint(
         tmp_path,
         """
@@ -201,7 +204,13 @@ mcp:
       name: second
 """,
     )
-    assert report["valid"], report
+    assert not report["valid"]
+    aliases_only = lint(
+        tmp_path,
+        "mode: enforce\nhold_on: &h [destructive]\nreview_on: *h\naudit: {enabled: true}\n",
+    )
+    assert not aliases_only["valid"]
+    assert codes(aliases_only) == {"invalid_structure"}
 
 
 def test_merge_alias_expansion_is_bounded_before_construction(tmp_path):
@@ -236,9 +245,19 @@ def test_malformed_typed_scalars_are_rejected_without_exposing_values(tmp_path, 
     assert "private-fixture" not in result.output
 
 
-@pytest.mark.parametrize("tag", ["seq", "map", "set", "pairs", "omap"])
-def test_collection_tags_cannot_turn_scalar_keys_into_unhashable_values(tmp_path, tag):
+@pytest.mark.parametrize(
+    "tag, code",
+    [
+        ("seq", "invalid_structure"),
+        ("map", "invalid_structure"),
+        # Non-core tags are rejected outright, as at runtime.
+        ("set", "invalid_yaml"),
+        ("pairs", "invalid_yaml"),
+        ("omap", "invalid_yaml"),
+    ],
+)
+def test_collection_tags_cannot_turn_scalar_keys_into_unhashable_values(tmp_path, tag, code):
     report = lint(tmp_path, f"!!{tag} password=private-fixture: enforce\n")
     assert not report["valid"]
-    assert codes(report) == {"invalid_structure"}
+    assert codes(report) == {code}
     assert "private-fixture" not in json.dumps(report)

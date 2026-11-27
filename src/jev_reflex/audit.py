@@ -18,6 +18,7 @@ from .config import ReflexConfig
 from .models import DeterministicFinding, HookAuditCorrelation
 from .policy import PolicyDecision
 from .redaction import redact_obj
+from .serialization import unique_object
 from .signing import CosignSigner, Ed25519Signer, Signer
 
 _PROVENANCE_FIELDS = ("source", "model_digest", "decision_id", "semantic_contributors")
@@ -29,18 +30,49 @@ class AuditWriteError(ValueError):
     """A required audit record could not be persisted."""
 
 
+class AuditRecordError(ValueError):
+    """A framed audit line is not a record the audit writer could have produced."""
+
+
+def parse_audit_record(line: str) -> dict[str, Any]:
+    """Parse one newline-framed audit line, accepting only the writer's exact bytes.
+
+    Records are hashed over a canonical re-serialization, so a parser differential
+    (duplicate members where one reader keeps the first value and another the last,
+    alternative whitespace or number spellings) could otherwise show different
+    content to different tools while the chain still verifies.
+    """
+
+    if not line.endswith("\n") or not line.strip():
+        raise AuditRecordError("incomplete or empty record")
+    body = line[:-1]
+    try:
+        data = json.loads(body, object_pairs_hook=unique_object)
+    except json.JSONDecodeError as exc:
+        raise AuditRecordError("invalid JSON") from exc
+    except RecursionError as exc:
+        raise AuditRecordError("invalid JSON") from exc
+    except ValueError as exc:
+        raise AuditRecordError("duplicate JSON object member") from exc
+    if not isinstance(data, dict):
+        raise AuditRecordError("invalid record")
+    # The writer emits json.dumps(record); raw UTF-8 is accepted for logs that
+    # were re-encoded without ASCII escapes.
+    if body != json.dumps(data) and body != json.dumps(data, ensure_ascii=False):
+        raise AuditRecordError("non-canonical record")
+    return data
+
+
 def _chain_tip(lines: Iterable[str]) -> tuple[str, int]:
     """Refuse to append to a damaged chain; leave recovery to its owner."""
     previous = GENESIS_HASH
     seq = 1
     for line in lines:
-        if not line.endswith("\n") or not line.strip():
-            raise ValueError("audit log contains an incomplete or empty record")
         try:
-            data = json.loads(line)
-        except ValueError as exc:
-            raise ValueError("audit log contains invalid JSON") from exc
-        if not isinstance(data, dict) or type(data.get("seq")) is not int:
+            data = parse_audit_record(line)
+        except AuditRecordError as exc:
+            raise ValueError(f"audit log contains an invalid record: {exc}") from exc
+        if type(data.get("seq")) is not int:
             raise ValueError("audit log contains an invalid record")
         if data["seq"] != seq or data.get("prev_hash") != previous:
             raise ValueError("audit log chain is broken")
@@ -139,6 +171,10 @@ class AuditEntry:
             for key in _PROVENANCE_FIELDS:
                 if key in self.local_provenance:
                     data[key] = self.local_provenance[key]
+        # Decision records keep their historical shape; other kinds (policy reloads) name
+        # themselves under the hash so readers never key off agent-controlled summaries.
+        if self.event_type != "policy_decision":
+            data["event_type"] = self.event_type
         return data
 
     def _compute_hash(self) -> str:
@@ -209,7 +245,10 @@ class AuditLog:
                 or details.st_nlink != 1
             ):
                 raise ValueError("audit log must be an owner-only regular file")
-            with os.fdopen(descriptor, "a+", encoding="utf-8", closefd=False) as handle:
+            # Frame records on "\n" only, exactly as verify() does.
+            with os.fdopen(
+                descriptor, "a+", encoding="utf-8", newline="\n", closefd=False
+            ) as handle:
                 yield handle
         finally:
             os.close(descriptor)
@@ -285,8 +324,11 @@ class AuditLog:
         forced_review: bool | None = None,
         hook_correlation: HookAuditCorrelation | dict[str, Any] | None = None,
         local_provenance: dict[str, Any] | None = None,
+        event_type: str = "policy_decision",
     ) -> None:
         """Write a new entry to the audit log with file locking."""
+        if event_type not in {"policy_decision", "policy_reload"}:
+            raise ValueError("unsupported audit event type")
         if not self.should_log():
             return
 
@@ -330,6 +372,7 @@ class AuditLog:
             forced_review,
             safe_hook_correlation,
             local_provenance,
+            event_type,
         )
 
     def _write_with_lock_atomic(
@@ -346,6 +389,7 @@ class AuditLog:
         forced_review: bool | None,
         hook_correlation: dict[str, Any] | None,
         local_provenance: dict[str, Any] | None,
+        event_type: str = "policy_decision",
     ) -> None:
         """Atomically read last entry, compute next sequence, and write with file locking."""
         with self._open_append() as f:
@@ -372,6 +416,7 @@ class AuditLog:
                     forced_review=forced_review,
                     hook_correlation=hook_correlation,
                     local_provenance=local_provenance,
+                    event_type=event_type,
                 )
 
                 # Add signature if signer is configured
@@ -429,12 +474,48 @@ class AuditLog:
 
     write_override_entry = write_human_override
 
-    def get_overrides(self, since: datetime | str | None = None) -> list[dict[str, Any]]:
-        """Return all human override entries, optionally filtered by since date."""
+    def _display_records(self) -> list[dict[str, Any]]:
+        """Read records for display without verifying them; skip malformed lines."""
         log_path = self._get_log_path()
         if not log_path.exists():
             return []
+        records: list[dict[str, Any]] = []
+        try:
+            with log_path.open("r", encoding="utf-8", newline="\n") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        # Reject duplicate members: readers must not disagree on content.
+                        data = json.loads(line, object_pairs_hook=unique_object)
+                    except (ValueError, RecursionError):
+                        continue
+                    if isinstance(data, dict):
+                        records.append(data)
+        except (OSError, UnicodeError):
+            return []
+        return records
 
+    @staticmethod
+    def _record_time(data: dict[str, Any]) -> datetime | None:
+        value = data.get("timestamp_utc") or data.get("timestamp")
+        if not isinstance(value, str):
+            return None
+        try:
+            moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if moment.tzinfo is None:
+                moment = moment.replace(tzinfo=UTC)
+            return moment.astimezone(UTC)
+        except (ValueError, OverflowError):
+            return None
+
+    def get_overrides(self, since: datetime | str | None = None) -> list[dict[str, Any]]:
+        """Return all human override entries, optionally filtered by since date.
+
+        This is an unverified display helper: malformed records are skipped, and
+        with ``since`` a record whose time cannot be read is left out rather than
+        presumed to be in range. Use verify() before trusting the content.
+        """
         since_dt: datetime | None = None
         if since is not None:
             if isinstance(since, str):
@@ -446,31 +527,18 @@ class AuditLog:
                 since_dt = since_dt.replace(tzinfo=UTC)
 
         overrides = []
-        try:
-            with log_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
+        for data in self._display_records():
+            if data.get("event_type") != "human_override":
+                continue
+            if since_dt is not None:
+                entry_dt = self._record_time(data)
+                try:
+                    if entry_dt is None or entry_dt < since_dt:
                         continue
-                    try:
-                        data = json.loads(line)
-                        if data.get("event_type") != "human_override":
-                            continue
-                        if since_dt is not None:
-                            ts_str = data.get("timestamp_utc") or data.get("timestamp")
-                            if ts_str:
-                                clean_ts = ts_str.replace("Z", "+00:00")
-                                entry_dt = datetime.fromisoformat(clean_ts)
-                                if entry_dt.tzinfo is None:
-                                    entry_dt = entry_dt.replace(tzinfo=UTC)
-                                if entry_dt < since_dt:
-                                    continue
-                        overrides.append(data)
-                    except (json.JSONDecodeError, ValueError):
-                        continue
-            return overrides
-        except OSError:
-            return []
+                except (TypeError, OverflowError):
+                    continue
+            overrides.append(data)
+        return overrides
 
     @staticmethod
     def verification_key(config: ReflexConfig, public_key_path: Path | None = None) -> Path | None:
@@ -482,15 +550,21 @@ class AuditLog:
         return public_key_path.expanduser() if public_key_path is not None else None
 
     @classmethod
+    def reader(cls, config: ReflexConfig) -> AuditLog:
+        """An audit log for verification that never loads the producer's private key."""
+        return cls(
+            config.model_copy(
+                update={"signing": config.signing.model_copy(update={"private_key_path": None})}
+            )
+        )
+
+    @classmethod
     def verify_snapshot(
         cls, config: ReflexConfig, snapshot: str, *, public_key_path: Path | None = None
     ) -> bool:
         """Verify a snapshot with trusted reader settings without initializing a writer."""
         public_key_path = cls.verification_key(config, public_key_path)
-        reader_config = config.model_copy(
-            update={"signing": config.signing.model_copy(update={"private_key_path": None})}
-        )
-        valid, _ = cls(reader_config).verify(
+        valid, _ = cls.reader(config).verify(
             public_key_path=public_key_path,
             snapshot=snapshot,
         )
@@ -501,7 +575,12 @@ class AuditLog:
     def verify(
         self, public_key_path: Path | None = None, *, snapshot: str | None = None
     ) -> tuple[bool, str]:
-        """Verify the integrity of the hash chain and optionally decision signatures.
+        """Verify the integrity of the hash chain and decision signatures.
+
+        The trusted key is ``public_key_path`` or, when omitted, the configured
+        ``signing.public_key_path``. When a key is available every record must carry
+        a valid signature. When ``signing.require_signature`` is set and no key is
+        available, verification fails instead of silently checking only the hashes.
 
         Args:
             public_key_path: Optional path to public key for signature verification.
@@ -510,11 +589,12 @@ class AuditLog:
         Returns:
             (is_valid, message) where message describes the result or first broken link.
         """
-        log_path = self._get_log_path() if snapshot is None else None
-        if log_path is not None and not log_path.exists():
-            return True, "chain intact, 0 entries"
+        try:
+            public_key_path = self.verification_key(self.config, public_key_path)
+        except ValueError as exc:
+            return False, f"{exc} Set signing.public_key_path or pass --public-key."
 
-        # Load public key if provided
+        # Load the public key before reading any record.
         verify_signature = None
         if public_key_path is not None:
             try:
@@ -530,23 +610,26 @@ class AuditLog:
             except Exception:
                 return False, f"failed to load public key from {public_key_path}"
 
+        log_path = self._get_log_path() if snapshot is None else None
+        if log_path is not None and not log_path.exists():
+            return True, "chain intact, 0 entries"
+
         try:
             prev_hash = GENESIS_HASH
             count = 0
+            # File and snapshot modes frame records identically: on "\n" only.
             with (
-                log_path.open("r", encoding="utf-8")
+                log_path.open("r", encoding="utf-8", newline="\n")
                 if log_path is not None
-                else io.StringIO(snapshot)
+                else io.StringIO(snapshot, newline="\n")
             ) as f:
                 for i, line in enumerate(f):
-                    if not line.endswith("\n") or not line.strip():
-                        return False, f"incomplete audit record at line {i + 1}"
                     try:
-                        entry_data = json.loads(line)
-                    except json.JSONDecodeError:
-                        return False, f"invalid JSON at line {i + 1}"
-                    if not isinstance(entry_data, dict):
-                        return False, f"invalid audit record at line {i + 1}"
+                        entry_data = parse_audit_record(line)
+                    except AuditRecordError as exc:
+                        if str(exc) == "invalid JSON":
+                            return False, f"invalid JSON at line {i + 1}"
+                        return False, f"{exc} at line {i + 1}"
                     if type(entry_data.get("seq")) is not int or entry_data["seq"] != i + 1:
                         return False, f"sequence mismatch at index {i}: expected {i + 1}"
                     if entry_data.get("prev_hash") != prev_hash:
@@ -592,32 +675,9 @@ class AuditLog:
             n: Number of entries to return (default: 10)
 
         Returns:
-            List of entry dictionaries, most recent first.
+            List of entry dictionaries, most recent first. This is an unverified
+            display helper: lines that are not well-formed audit records are skipped.
         """
-        log_path = self._get_log_path()
-        if not log_path.exists():
+        if n <= 0:
             return []
-
-        try:
-            with log_path.open("r", encoding="utf-8") as f:
-                lines = f.readlines()
-
-            if not lines:
-                return []
-
-            # Get last N non-empty lines
-            non_empty_lines = [line.strip() for line in lines if line.strip()]
-            last_n = non_empty_lines[-n:] if len(non_empty_lines) > n else non_empty_lines
-
-            entries = []
-            for line in reversed(last_n):
-                try:
-                    data = json.loads(line)
-                    entries.append(data)
-                except json.JSONDecodeError:
-                    continue
-
-            return entries
-
-        except OSError:
-            return []
+        return self._display_records()[-n:][::-1]

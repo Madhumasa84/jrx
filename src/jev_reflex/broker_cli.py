@@ -18,6 +18,18 @@ if TYPE_CHECKING:
 
 app = typer.Typer(help="Run the trusted host-side semantic broker.")
 
+STARTUP_SECONDS = 5.0
+# The broker verifies and loads a local ONNX model before it listens, which can
+# take far longer than process startup on a slow or cold host.
+LOCAL_MODEL_STARTUP_SECONDS = 60.0
+
+
+def startup_seconds(config: ReflexConfig) -> float:
+    settings = config.evaluator
+    if settings.provider != "jev" and not settings.local_base_url:
+        return LOCAL_MODEL_STARTUP_SECONDS
+    return STARTUP_SECONDS
+
 
 def configuration(config: Path | None, socket: Path | None) -> ReflexConfig:
     try:
@@ -156,7 +168,8 @@ def start(
             start_new_session=True,
             close_fds=True,
         )
-        deadline = time.monotonic() + 5
+        # A broker that exits early ends the wait; only a live one gets the full window.
+        deadline = time.monotonic() + startup_seconds(loaded)
         while time.monotonic() < deadline:
             health = client.health()
             if health["running"]:

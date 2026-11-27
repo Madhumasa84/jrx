@@ -5,7 +5,9 @@ from __future__ import annotations
 import difflib
 import json
 import os
+import re
 import secrets
+import shlex
 import stat
 import tempfile
 from datetime import UTC, datetime
@@ -18,37 +20,52 @@ from .state import WorkspaceError, WorkspaceLock, validate_workspace
 MAX_CONFIG_BYTES = 2_000_000
 
 
+# Tools each provider hook must intercept. Every name is spelled out because
+# matcher anchoring for simple alternations is not documented consistently;
+# the coverage check below requires a full match for each sample name.
+_MATCHERS = {
+    # Bash is Codex's hook name for shell calls; exec_command/shell_command are
+    # covered too, matching the shell tool names the PostToolUse helper lists.
+    "codex": "Bash|exec_command|shell_command|apply_patch|mcp__.*",
+    "claude": "Bash|Edit|MultiEdit|Write|NotebookEdit|mcp__.*",
+    "antigravity": "*",
+}
+_COVERAGE_SAMPLES = {
+    "codex": ("Bash", "exec_command", "shell_command", "apply_patch", "mcp__server__tool"),
+    "claude": ("Bash", "Edit", "MultiEdit", "Write", "NotebookEdit", "mcp__server__tool"),
+    "antigravity": ("run_command", "write_to_file", "replace_file_content", "mcp__server__tool"),
+}
+
+
 def _hook_entry(provider: str, command: str) -> tuple[str | None, str, dict[str, Any]]:
-    if provider == "codex":
-        return (
-            None,
-            "PreToolUse",
-            {
-                "matcher": "Bash|apply_patch|mcp__.*",
-                "hooks": [{"type": "command", "command": command, "timeout": 30}],
-            },
-        )
-    if provider == "claude":
-        return (
-            None,
-            "PreToolUse",
-            {
-                "matcher": "Bash|Edit|Write|mcp__.*",
-                "hooks": [{"type": "command", "command": command, "timeout": 30}],
-            },
-        )
-    return (
-        "jev-reflex",
-        "PreToolUse",
-        {
-            "matcher": "*",
-            "hooks": [{"type": "command", "command": command, "timeout": 30}],
-        },
-    )
+    group = {
+        "matcher": _MATCHERS.get(provider, "*"),
+        "hooks": [{"type": "command", "command": command, "timeout": 30}],
+    }
+    return ("jev-reflex" if provider == "antigravity" else None), "PreToolUse", group
 
 
-def hook_command(provider: ProviderSpec) -> str:
+def _legacy_hook_command(provider: ProviderSpec) -> str:
+    """The pre-pinning command, which loaded reflex.yaml from the hook's cwd."""
     return "jev-reflex " + " ".join(provider.hook_command)
+
+
+def hook_command(provider: ProviderSpec, workspace: Path) -> str:
+    """Return the hook command, pinned to the workspace policy file.
+
+    Hosts run hooks in the agent's current directory, which moves when the
+    agent changes directory, so the policy path is never left implicit.
+    """
+    if provider.key == "claude":
+        # Claude Code exports the project root to hook commands it runs in a shell.
+        policy = '"$CLAUDE_PROJECT_DIR"/reflex.yaml'
+    else:
+        policy = shlex.quote(str(validate_workspace(workspace) / "reflex.yaml"))
+    return f"{_legacy_hook_command(provider)} --config {policy}"
+
+
+def _jrx_commands(provider: ProviderSpec, workspace: Path) -> set[str]:
+    return {hook_command(provider, workspace), _legacy_hook_command(provider)}
 
 
 def _target(root: Path, provider: ProviderSpec) -> Path:
@@ -92,17 +109,43 @@ def _read_config(path: Path) -> tuple[dict[str, Any], bytes, int]:
     return value, raw, stat.S_IMODE(info.st_mode)
 
 
-def _contains_command(value: Any, command: str) -> bool:
-    if isinstance(value, dict):
-        return value.get("command") == command or any(
-            _contains_command(item, command) for item in value.values()
+def _group_runs(group: Any, command: str) -> bool:
+    return (
+        isinstance(group, dict)
+        and isinstance(group.get("hooks"), list)
+        and any(
+            isinstance(hook, dict) and hook.get("command") == command for hook in group["hooks"]
         )
-    if isinstance(value, list):
-        return any(_contains_command(item, command) for item in value)
-    return False
+    )
 
 
-def _merge_provider_hook(config: dict[str, Any], provider: str, command: str) -> bool:
+def _matcher_covers(matcher: Any, tool: str) -> bool:
+    if matcher is None:
+        return True
+    if not isinstance(matcher, str):
+        return False
+    if matcher in {"", "*"}:
+        return True
+    try:
+        return re.fullmatch(matcher, tool) is not None
+    except re.error:
+        return False
+
+
+def _covers(event_list: Any, provider: str, command: str) -> bool:
+    """True when the groups running ``command`` match every required tool."""
+    if not isinstance(event_list, list):
+        return False
+    matchers = [group.get("matcher") for group in event_list if _group_runs(group, command)]
+    return bool(matchers) and all(
+        any(_matcher_covers(matcher, tool) for matcher in matchers)
+        for tool in _COVERAGE_SAMPLES.get(provider, ("*",))
+    )
+
+
+def _merge_provider_hook(
+    config: dict[str, Any], provider: str, command: str, replaced: set[str] | None = None
+) -> bool:
     namespace, event, group = _hook_entry(provider, command)
     if provider == "antigravity":
         if namespace is None:
@@ -130,13 +173,22 @@ def _merge_provider_hook(config: dict[str, Any], provider: str, command: str) ->
             hooks[event] = event_list
     if not isinstance(event_list, list):
         raise WorkspaceError("provider hook event has an incompatible type")
-    if any(_contains_command(existing, command) for existing in event_list):
+    stale = set(replaced or ())
+    if _covers(event_list, provider, command) and not any(
+        _group_runs(existing, old) for existing in event_list for old in stale
+    ):
         return False
-    event_list.append(group)
+    # Replace JRX's own entries (partial-matcher or unpinned legacy ones) with
+    # one canonical group; other hooks sharing those groups are kept. Removal
+    # rebuilds the event list and may drop an emptied mapping, so re-attach it.
+    _remove_provider_hook(config, provider, {command, *stale})
+    hooks[event] = [*hooks[event], group]
+    config[namespace or "hooks"] = hooks
     return True
 
 
-def _remove_provider_hook(config: dict[str, Any], provider: str, command: str) -> bool:
+def _remove_provider_hook(config: dict[str, Any], provider: str, commands: str | set[str]) -> bool:
+    removed = {commands} if isinstance(commands, str) else commands
     namespace = "jev-reflex" if provider == "antigravity" else None
     hooks = config.get(namespace) if namespace else config.get("hooks")
     if not isinstance(hooks, dict):
@@ -153,7 +205,7 @@ def _remove_provider_hook(config: dict[str, Any], provider: str, command: str) -
         remaining = [
             hook
             for hook in item["hooks"]
-            if not (isinstance(hook, dict) and hook.get("command") == command)
+            if not (isinstance(hook, dict) and hook.get("command") in removed)
         ]
         if len(remaining) == len(item["hooks"]):
             kept.append(item)
@@ -210,6 +262,14 @@ def _write_config(path: Path, payload: bytes, mode: int) -> None:
         os.close(descriptor)
 
 
+def _change(config: dict[str, Any], root: Path, provider: ProviderSpec, *, rollback: bool) -> bool:
+    if rollback:
+        return _remove_provider_hook(config, provider.key, _jrx_commands(provider, root))
+    return _merge_provider_hook(
+        config, provider.key, hook_command(provider, root), {_legacy_hook_command(provider)}
+    )
+
+
 def preview_hook_change(
     workspace: Path, provider: ProviderSpec, *, rollback: bool = False
 ) -> tuple[Path, str, bool]:
@@ -217,12 +277,7 @@ def preview_hook_change(
     path = _target(root, provider)
     config, original, _mode = _read_config(path)
     updated = json.loads(json.dumps(config))
-    command = hook_command(provider)
-    changed = (
-        _remove_provider_hook(updated, provider.key, command)
-        if rollback
-        else _merge_provider_hook(updated, provider.key, command)
-    )
+    changed = _change(updated, root, provider, rollback=rollback)
     if not changed:
         return path, "No JRX hook change is needed.\n", False
     old_text = original.decode("utf-8", errors="replace").splitlines(keepends=True)
@@ -236,28 +291,45 @@ def preview_hook_change(
 
 
 def hook_configured(workspace: Path, provider: ProviderSpec) -> tuple[bool, str]:
-    """Check the local configuration file; this does not prove provider activation."""
+    """Check the local configuration files; this does not prove provider activation."""
     root = validate_workspace(workspace)
     path = _target(root, provider)
     try:
         config, _raw, _mode = _read_config(path)
+        # Claude Code also applies .claude/settings.local.json (hooks and
+        # disableAllHooks); it shares the parent checked by _target.
+        local = (
+            _read_config(path.with_name("settings.local.json"))[0]
+            if provider.key == "claude"
+            else {}
+        )
     except WorkspaceError as exc:
         return False, str(exc)
-    command = hook_command(provider)
-    namespace = config.get("jev-reflex") if provider.key == "antigravity" else config.get("hooks")
-    if provider.key == "claude" and config.get("disableAllHooks") is True:
+    if provider.key == "claude" and any(
+        settings.get("disableAllHooks") is True for settings in (config, local)
+    ):
         return False, "Claude Code settings disable all hooks"
+    namespace = config.get("jev-reflex") if provider.key == "antigravity" else config.get("hooks")
     if (
         provider.key == "antigravity"
         and isinstance(namespace, dict)
         and namespace.get("enabled") is False
     ):
         return False, "Antigravity JRX hook namespace is disabled"
-    configured = isinstance(namespace, dict) and _contains_command(
-        namespace.get("PreToolUse", []), command
-    )
-    if configured:
+    groups: list[Any] = []
+    for hooks in (namespace, local.get("hooks")):
+        event_list = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
+        if isinstance(event_list, list):
+            groups.extend(event_list)
+    if _covers(groups, provider.key, hook_command(provider, root)):
         return True, "configured; provider activation or hook trust is not verifiable by JRX"
+    if any(
+        _group_runs(group, command) for group in groups for command in _jrx_commands(provider, root)
+    ):
+        return False, (
+            "JRX hook is not pinned to the workspace policy or does not cover every "
+            "required tool; preview setup again"
+        )
     return False, "not configured"
 
 
@@ -269,12 +341,7 @@ def apply_hook_change(
         path = _target(root, provider)
         config, original, mode = _read_config(path)
         updated = json.loads(json.dumps(config))
-        command = hook_command(provider)
-        changed = (
-            _remove_provider_hook(updated, provider.key, command)
-            if rollback
-            else _merge_provider_hook(updated, provider.key, command)
-        )
+        changed = _change(updated, root, provider, rollback=rollback)
         if not changed:
             return path, None, False
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

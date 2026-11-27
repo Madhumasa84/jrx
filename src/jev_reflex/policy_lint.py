@@ -8,6 +8,7 @@ from typing import Any, get_args
 import yaml
 from pydantic import BaseModel, ValidationError
 
+from ._yaml_loader import SecurityLoader
 from .config import PolicyProfile, ReflexConfig, known_semantic_rules
 from .production import production_issues
 from .serialization import MAX_CONFIG_BYTES, read_config_bytes
@@ -17,7 +18,13 @@ class _DuplicateKey(ValueError):
     pass
 
 
-class _PolicyLoader(yaml.SafeLoader):
+class _PolicyLoader(SecurityLoader):
+    """The runtime loader's YAML semantics with value-free diagnostics.
+
+    A policy that lints clean must also load at runtime, so aliases, merge keys
+    and non-core tags are rejected here exactly as enforcement rejects them.
+    """
+
     def construct_object(self, node, deep=False):
         try:
             return super().construct_object(node, deep=deep)
@@ -29,8 +36,8 @@ class _PolicyLoader(yaml.SafeLoader):
             ) from None
 
     def construct_document(self, node):
-        # PyYAML flattens merges before constructing their mappings. Validate
-        # the original node graph first, while duplicate source keys remain.
+        # Report duplicate keys with their line before the runtime constructor
+        # rejects them (and any merge key) with a generic error.
         self._check_node(node, set(), {})
         return super().construct_document(node)
 
@@ -161,7 +168,13 @@ def lint_policy(path: Path | bytes, *, profile: PolicyProfile = "standard") -> d
         issues.append(_issue("error", "duplicate_key", "", str(exc)))
     except (yaml.YAMLError, UnicodeError, RecursionError):
         issues.append(
-            _issue("error", "invalid_yaml", "", "Policy YAML is invalid or too deeply nested.")
+            _issue(
+                "error",
+                "invalid_yaml",
+                "",
+                "Policy YAML is invalid, uses an unsupported tag or merge key, "
+                "or is too deeply nested.",
+            )
         )
     except OSError:
         issues.append(_issue("error", "unreadable_file", "", "Policy file cannot be read."))

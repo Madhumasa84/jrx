@@ -1,0 +1,14 @@
+{
+  "source": "agent-prepared transcript",
+  "contributor_id": "contributor-1",
+  "contributor_count": 1,
+  "session_id": "JRX-01",
+  "session_count": 1,
+  "observed_calls_count": 20,
+  "sampled_calls_count": 5,
+  "status": "pilot",
+  "provenance_notes": "one contributor, one session, 20 observed calls, 5 sampled calls, agent-prepared transcript, first-pass development labels supplied by the session contributor, and assistant-assisted rationale wording. Reviewer B is pending. Prior ChatGPT feedback is an exposed AI cross-check.",
+  "synthetic_only": false,
+  "license": "CC0-1.0",
+  "locator": "jrx:session-01"
+}

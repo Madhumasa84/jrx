@@ -17,13 +17,72 @@ from ..redaction import (
     REDACTED_SECRET,
     looks_secret_key,
 )
-from .common import absolute_path, roots
-from .shell import inspect, program
+from .common import absolute_path, inplace_files, roots
+from .shell import Command, inspect, program
 
 _ENV_REFERENCE = re.compile(
     r"(?i)\$\{?(?:[a-z0-9_]*(?:token|secret|password|passwd|api[_-]?key|private[_-]?key)"
     r"|aws_access_key_id|aws_secret_access_key)\b"
 )
+# A variable name that ``$NAME`` would flag through ``_ENV_REFERENCE``.
+_SECRET_NAME = re.compile(
+    r"(?i)[a-z0-9_]*(?:token|secret|password|passwd|api_?key|private_?key)"
+    r"|aws_access_key_id|aws_secret_access_key"
+)
+# Programs that print file contents (all operands are files).
+_READERS = frozenset(
+    {
+        "cat",
+        "tac",
+        "nl",
+        "head",
+        "tail",
+        "bat",
+        "batcat",
+        "less",
+        "more",
+        "most",
+        "view",
+        "base64",
+        "base32",
+        "basenc",
+        "xxd",
+        "od",
+        "hexdump",
+        "hd",
+        "strings",
+        "rev",
+        "fold",
+        "column",
+        "paste",
+        "cut",
+        "sort",
+        "uniq",
+        "diff",
+        "cmp",
+        "comm",
+        "iconv",
+        "expand",
+        "fmt",
+        "pr",
+    }
+)
+# Programs whose first operand is a pattern or program unless an option supplies it.
+_PATTERN_READERS = {
+    "grep": {"-e", "--regexp", "-f", "--file"},
+    "egrep": {"-e", "--regexp", "-f", "--file"},
+    "fgrep": {"-e", "--regexp", "-f", "--file"},
+    "rg": {"-e", "--regexp", "-f", "--file"},
+    "ag": set(),
+    "awk": {"-f", "--file"},
+    "gawk": {"-f", "--file"},
+    "mawk": {"-f"},
+    "nawk": {"-f"},
+    "sed": {"-e", "--expression", "-f", "--file"},
+    "jq": {"-f", "--from-file"},
+    "yq": set(),
+}
+_DECLARATIONS = {"declare", "typeset", "readonly", "local", "export"}
 _PRIVATE_HEADER = re.compile(
     r"-----BEGIN (?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED) )?PRIVATE KEY-----"
     r"|-----BEGIN PGP PRIVATE KEY BLOCK-----",
@@ -67,15 +126,35 @@ def sensitive_credential_path(path: Path, home: Path) -> bool:
     )
 
 
+def _read_paths(command: Command) -> list[str]:
+    """Files whose contents a command prints: reader operands and input redirects."""
+
+    paths = [target for operator, target in command.redirects if operator in {"<", "<>"}]
+    if not command.argv:
+        return paths
+    name, args = program(command.argv[0]), command.argv[1:]
+    if name in _READERS or name in _PATTERN_READERS:
+        if name == "sed" and inplace_files(name, args) is not None:
+            return paths
+        operands = [arg for arg in args if not arg.startswith("-") or arg == "-"]
+        supplied = _PATTERN_READERS.get(name)
+        if supplied is not None and not any(
+            arg.split("=", 1)[0] in supplied
+            or (len(arg) > 2 and arg[0] == "-" and arg[1] in "ef" and name != "jq")
+            for arg in args
+        ):
+            operands = operands[1:]
+        paths += operands
+    return paths
+
+
 def _direct_disclosure(context: EvaluationContext) -> bool:
     from .repo_boundary import input_paths
 
     direct = (
-        arg
+        path
         for command in inspect(context.proposed_action).commands
-        if command.argv and program(command.argv[0]) in {"cat", "head", "tail", "bat"}
-        for arg in command.argv[1:]
-        if not arg.startswith("-")
+        for path in _read_paths(command)
     )
     payload = context.proposed_action.input
     paths = list(direct)
@@ -93,6 +172,50 @@ def _direct_disclosure(context: EvaluationContext) -> bool:
         return any(sensitive_credential_path(absolute_path(path, cwd), home) for path in paths)
     except (OSError, RuntimeError, ValueError):
         return False
+
+
+def _environment_disclosure(context: EvaluationContext) -> str:
+    """``printenv SECRET`` prints a secret; ``env``/``export -p`` print every variable."""
+
+    dump = False
+    for command in inspect(context.proposed_action).commands:
+        if not command.argv:
+            continue
+        name, args = program(command.argv[0]), command.argv[1:]
+        options = [arg for arg in args if arg.startswith(("-", "+")) and arg != "--"]
+        names = [arg.split("=", 1)[0] for arg in args if not arg.startswith(("-", "+"))]
+        if name == "printenv":
+            if any(_SECRET_NAME.fullmatch(item) for item in names):
+                return "SECRET_ENV_REFERENCE"
+            dump |= not names
+        elif name in _DECLARATIONS:
+            printing = any("p" in option[1:] for option in options if not option.startswith("--"))
+            if printing and any(_SECRET_NAME.fullmatch(item) for item in names):
+                return "SECRET_ENV_REFERENCE"
+            # ``declare``/``typeset`` alone list every variable; ``export``,
+            # ``readonly`` and ``local`` list them with no operand or with ``-p``.
+            listing = (
+                printing
+                or not options
+                or (name in {"declare", "typeset"} and not {"-f", "-F"} & set(options))
+            )
+            dump |= not names and listing
+        elif name == "env":
+            index = 0
+            while index < len(args):
+                word = args[index]
+                if word in {"-u", "--unset", "-C", "--chdir"}:
+                    index += 2
+                elif word.startswith("-") or "=" in word:
+                    index += 1
+                else:
+                    break
+            dump |= index >= len(args) and not any(
+                word.startswith(("-S", "--split-string")) for word in args
+            )
+        elif name == "set" and not args:
+            dump = True
+    return "ENVIRONMENT_DISCLOSURE" if dump else ""
 
 
 def credential_values(text: str) -> Iterator[tuple[str, str]]:
@@ -163,13 +286,16 @@ def evaluate(context: EvaluationContext) -> list[DeterministicFinding]:
                 reason = "SECRET_ASSIGNMENT"
             if reason:
                 break
-    if not reason and _direct_disclosure(context):
+    environment = "" if reason else _environment_disclosure(context)
+    if environment == "SECRET_ENV_REFERENCE":
+        reason = environment
+    if not reason and (environment or _direct_disclosure(context)):
         return [
             DeterministicFinding(
                 check="secret_pattern",
                 triggered=True,
                 severity="medium",
-                reason_code="CREDENTIAL_FILE_DISCLOSURE",
+                reason_code=environment or "CREDENTIAL_FILE_DISCLOSURE",
             )
         ]
     return [

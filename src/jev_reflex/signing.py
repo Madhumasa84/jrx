@@ -232,6 +232,15 @@ def load_public_key(public_key_path: Path) -> bytes:
     with public_key_path.open("rb") as f:
         key_data = f.read()
 
+    return _public_key_bytes(key_data)
+
+
+def verify_pinned_ed25519(data: bytes, signature: bytes, public_key_pem: str) -> bool:
+    """Verify an Ed25519 signature against pinned PEM content, as remote fetches do."""
+    return Ed25519Signer.verify(data, signature, _public_key_bytes(public_key_pem.encode()))
+
+
+def _public_key_bytes(key_data: bytes) -> bytes:
     # Try to load as PEM first
     try:
         from cryptography.hazmat.primitives.asymmetric import ed25519

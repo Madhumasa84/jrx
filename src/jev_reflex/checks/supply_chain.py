@@ -7,10 +7,20 @@ from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 
 from ..config import LocalChecksConfig, ReflexConfig
-from ..models import DeterministicFinding, EvaluationContext
+from ..models import DeterministicFinding, EvaluationContext, ProposedAction
 from .diff import proposed_changes
-from .execution import is_python
-from .shell import SHELLS, Command, inspect, program
+from .shell import (
+    CODE_INTERPRETERS,
+    SHELLS,
+    Command,
+    Word,
+    inspect,
+    interpreter_code,
+    is_python,
+    program,
+    reads_program_from_stdin,
+    shell_invocation,
+)
 
 _DOWNLOAD = {"curl", "wget"}
 _URL = re.compile(r"""\b(?:git\+)?(?:https?|ssh|ftp|file)://[^\s"'<>),]+""", re.I)
@@ -22,11 +32,62 @@ _PACKAGE_FLAGS = {
     "--extra-index-url",
     "--registry",
 }
-_INTERPRETERS = SHELLS | {"node", "nodejs", "perl", "ruby"}
+_INTERPRETERS = SHELLS | CODE_INTERPRETERS | {"source", "."}
 
 
 def _interpreter(name: str) -> bool:
     return name in _INTERPRETERS or is_python(name)
+
+
+def _downloads(script: str) -> bool:
+    """Whether a command-substitution body fetches remote content."""
+    return any(
+        command.argv and program(command.argv[0]) in _DOWNLOAD
+        for command in inspect(ProposedAction(command=script)).commands
+    )
+
+
+def _code_words(command: Command) -> list[Word]:
+    """Words a shell or interpreter executes as code rather than passes as data."""
+    words = [command.word(index) for index in range(len(command.argv))]
+    name = program(command.argv[0])
+    here = [
+        word
+        for (operator, _), word in zip(command.redirects, command.redirect_words, strict=False)
+        if operator == "<<<"
+    ]
+    code = words[:1]
+    if name == "eval":
+        code += words[1:]
+    elif name in SHELLS:
+        invocation = shell_invocation(command.argv)
+        code += [word for word in words[1:] if word.text in invocation.scripts]
+        if invocation.command_mode or invocation.reads_stdin:
+            code += here
+    elif is_python(name) or name in {"node", "nodejs", "perl", "ruby"}:
+        scripts, stdin = interpreter_code(command.argv)
+        code += [word for word in words[1:] if word.text in scripts]
+        if stdin:
+            code += here
+    elif name in CODE_INTERPRETERS:
+        code += words[1:] + here
+    elif name in {"source", "."} and reads_program_from_stdin(command.argv):
+        code += here
+    return code
+
+
+def _carries_download(command: Command, *, code_only: bool) -> bool:
+    """Whether downloaded text reaches this command as words (``$(curl ...)``).
+
+    With ``code_only`` only words that are executed as code count (see ``_code_words``).
+    """
+    if not command.argv:
+        return False
+    if code_only:
+        words = _code_words(command)
+    else:
+        words = [command.word(index) for index in range(len(command.argv))]
+    return any(_downloads(body) for word in words for body in word.substitutions)
 
 
 def _package_install(command: Command) -> tuple[str, ...]:
@@ -119,13 +180,15 @@ def evaluate(
         if not command.argv:
             continue
         name, args = program(command.argv[0]), command.argv[1:]
-        if (command.piped and _interpreter(name) and (remote or encoded)) or (
-            process_input and name in _DOWNLOAD
+        if (
+            (command.piped and _interpreter(name) and (remote or encoded))
+            or (process_input and name in _DOWNLOAD)
+            or _carries_download(command, code_only=True)
         ):
             return [_finding("UNTRUSTED_PIPE_TO_INTERPRETER", blocking=True)]
         if not command.piped:
             remote = encoded = False
-        remote |= name in _DOWNLOAD
+        remote |= name in _DOWNLOAD or _carries_download(command, code_only=False)
         encoded |= (
             name in {"base64", "basenc"}
             and bool(set(args) & {"-d", "-D", "--decode"})
