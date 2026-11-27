@@ -266,6 +266,25 @@ def test_collection_tags_cannot_turn_scalar_keys_into_unhashable_values(tmp_path
     assert "private-fixture" not in json.dumps(report)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "!!omap [{git_risk: enforce}]",
+        "!!pairs [{git_risk: enforce}]",
+        "!!omap []",
+        "!!pairs []",
+        "!!set {git_risk: null}",
+    ],
+)
+def test_well_formed_non_core_collections_are_rejected_by_tag(tmp_path, value):
+    # Well-formed values pass the constructors' shape checks, so only the tag
+    # filter itself rejects them; the key-position cases above would also fail
+    # on shape alone.
+    report = lint(tmp_path, f"mode: enforce\naudit: {{enabled: true}}\nrule_modes: {value}\n")
+    assert not report["valid"]
+    assert codes(report) == {"invalid_yaml"}
+
+
 @pytest.mark.parametrize("value", [".inf", "-.Inf", ".NaN", "!!float .inf", "1.0e+400"])
 def test_non_finite_floats_are_rejected_like_the_runtime_loader(tmp_path, value):
     # JSON has no infinity or NaN: such a value would reach the policy hash as null.
