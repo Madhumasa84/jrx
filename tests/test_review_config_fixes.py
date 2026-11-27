@@ -54,10 +54,10 @@ def _operator_controlled(monkeypatch: pytest.MonkeyPatch) -> None:
     """Evaluate as a uid that owns none of the test files (operator-written state)."""
     import os
 
-    from jev_reflex import policy_rollout
+    from jev_reflex import trust
 
     other = os.geteuid() + 100_000
-    monkeypatch.setattr(policy_rollout, "_evaluator_identity", lambda: (other, frozenset()))
+    monkeypatch.setattr(trust, "evaluator_identity", lambda: (other, frozenset()))
 
 
 # Finding 1: unsigned rollout state replaced the signature-verified policy.

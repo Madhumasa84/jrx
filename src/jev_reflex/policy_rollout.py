@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from . import trust
 from .audit import AuditLog
 from .config import BootstrapConfig, ReflexConfig, parse_policy_bytes, verify_policy_signature
 from .models import Decision, DeterministicFinding
@@ -198,67 +199,6 @@ def simulate(
     return report
 
 
-def _evaluator_identity() -> tuple[int, frozenset[int]]:
-    """The effective uid and groups whose writes evaluation cannot trust."""
-    return os.geteuid(), frozenset({os.getegid(), *os.getgroups()})
-
-
-def _writable(details: os.stat_result, uid: int, groups: frozenset[int]) -> bool:
-    if details.st_uid == uid:
-        return True  # an owner can always chmod and then write
-    if details.st_mode & stat.S_IWOTH:
-        return True
-    return bool(details.st_mode & stat.S_IWGRP) and details.st_gid in groups
-
-
-def _protected_location(
-    path: Path, uid: int, groups: frozenset[int], depth: int = 0
-) -> Path | None:
-    """Return the real path when ``uid`` can neither rewrite nor replace it, else None.
-
-    Every component is checked from the root: the uid must not own it, and its directory
-    must not let the uid rename or unlink entries (a sticky directory protects entries
-    the uid does not own). Symlinks are followed only after that check, so the uid cannot
-    re-point them. A missing final component is protected when its directory is, since
-    the uid could then neither have removed it nor create it. Root can change anything,
-    and ACLs or capabilities beyond the mode bits are not modelled.
-    """
-    if uid == 0 or depth > 32 or not path.is_absolute() or ".." in path.parts:
-        return None
-    current = Path(path.anchor)
-    parts = path.parts[1:]
-    for index, name in enumerate(parts):
-        directory = os.stat(current)
-        child_path = current / name
-        if directory.st_uid == uid:
-            return None
-        try:
-            child = os.lstat(child_path)
-        except FileNotFoundError:
-            # Absent, and the uid cannot create it unless the directory is writable.
-            return None if _writable(directory, uid, groups) else Path(current, *parts[index:])
-        if child.st_uid == uid:
-            return None
-        if _writable(directory, uid, groups) and not directory.st_mode & stat.S_ISVTX:
-            return None
-        if stat.S_ISLNK(child.st_mode):
-            target = Path(os.readlink(child_path))
-            resolved = _protected_location(
-                target if target.is_absolute() else current / target, uid, groups, depth + 1
-            )
-            if resolved is None:
-                return None
-            current = resolved
-        else:
-            current = child_path
-    # A symlink target may be an intermediate directory; only the full path names a file.
-    if depth == 0 and current.exists():
-        final = os.stat(current)
-        if not stat.S_ISREG(final.st_mode) or _writable(final, uid, groups):
-            return None
-    return current
-
-
 class RolloutStore:
     """Atomic local activation state for a previously verified remote candidate.
 
@@ -268,7 +208,7 @@ class RolloutStore:
     revision is active, the canary percentage, and rollbacks are trusted only
     because the evaluating user cannot rewrite or replace the state file. While
     ``bootstrap.require_signature`` is true, :meth:`select` therefore refuses
-    state that the evaluating user could change (see ``_protected_location``).
+    state that the evaluating user could change (see ``trust.protected_location``).
     Unsigned snapshots are accepted only when signatures are not required.
     """
 
@@ -381,8 +321,8 @@ class RolloutStore:
         }
 
     def _require_operator_controlled(self) -> None:
-        uid, groups = _evaluator_identity()
-        if _protected_location(self.path, uid, groups) is None:
+        uid, groups = trust.evaluator_identity()
+        if trust.protected_location(self.path, uid, groups) is None:
             raise ValueError(
                 f"rollout state {self.path} can be rewritten or replaced by the evaluating "
                 f"user (uid {uid}), so it cannot authorize which signed policy is active "
