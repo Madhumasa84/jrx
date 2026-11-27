@@ -1350,10 +1350,12 @@ def _discover_hook_policy(start: Path) -> tuple[Path | None, Path]:
 
 
 def _openrouter_permission_request(payload: dict[str, Any] | None) -> bool:
-    return payload is not None and any(
-        str(payload.get(name, "")).replace("_", "").replace("-", "").lower() == "permissionrequest"
-        for name in ("hook_name", "hookName", "event", "event_name", "eventName")
-    )
+    """Whether the OpenRouter adapter reads this event as a PermissionRequest."""
+    if payload is None:
+        return False
+    from .adapters.openrouter import _event_name, _is_permission_request
+
+    return _is_permission_request(_event_name(payload))
 
 
 def _hook_error_output(kind: str, payload: dict[str, Any] | None) -> dict[str, Any]:

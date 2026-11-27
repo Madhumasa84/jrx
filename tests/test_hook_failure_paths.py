@@ -97,3 +97,20 @@ def test_unreadable_openrouter_event_is_denied_in_both_event_shapes(stdin) -> No
     output = json.loads(result.stdout)
     assert output["block"]
     assert output["decision"] == "deny"
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [
+        {"hook_name": "PreToolUse", "event": "PermissionRequest"},
+        {"hookName": "permission_request", "eventName": "PreToolUse"},
+        {"event": "PermissionRequest"},
+        {},
+    ],
+)
+def test_cli_reads_the_openrouter_event_as_the_adapter_does(keys) -> None:
+    # The CLI picks response shapes (error fallback, approved-action rewrite) from the
+    # same event the adapter evaluated, including when a payload names two events.
+    from jev_reflex.adapters.openrouter import _event_name, _is_permission_request
+
+    assert cli._openrouter_permission_request(keys) is _is_permission_request(_event_name(keys))
