@@ -803,6 +803,81 @@ def test_real_policy_reload_record_is_typed_verified_and_kept_out_of_decisions(t
     assert log.verify()[0] is False
 
 
+def _reload_fixture(tmp_path: Path, marker: dict[str, object]) -> tuple[Path, ReflexConfig]:
+    """A replayable decision followed by ``marker``, chained like a writer would."""
+    path = tmp_path / "audit.jsonl"
+    config = ReflexConfig(mode="enforce", audit={"enabled": True, "path": str(path)})
+    AuditLog(config).write_entry(
+        "ls",
+        [],
+        {},
+        _decision("ALLOW"),
+        risk_choice="low",
+        risk_confidence=0.9,
+        degraded=False,
+        forced_review=False,
+    )
+    decision = json.loads(path.read_text())
+    record = {
+        "seq": 2,
+        "timestamp_utc": decision["timestamp_utc"],
+        "action_summary": "policy_reload",
+        "hard_rule_findings": [],
+        "jev_signals": {},
+        "policy_decision": "ALLOW",
+        "policy_version_hash": decision["policy_version_hash"],
+        **marker,
+    }
+    path.write_text(_rechain([decision, {k: v for k, v in record.items() if v is not None}]))
+    assert AuditLog(config).verify()[0] is True
+    return path, config
+
+
+def _decision_counts(path: Path, config: ReflexConfig, tmp_path: Path) -> list[object]:
+    from jev_reflex.policy_rollout import simulate
+
+    report = build_audit_report(path, config)
+    replay = simulate(path, config, config)
+    policy = tmp_path / "policy.yaml"
+    policy.write_text("mode: enforce\n")
+    team = snapshot(_dashboard(tmp_path, policy, path), Identity("operator", frozenset({"ops"})))
+    return [
+        report["decisions"]["ALLOW"],
+        report["other_events"],
+        replay["total"],
+        replay["skipped_legacy"],
+        team["teams"][0]["decisions"]["ALLOW"],
+    ]
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        {},  # the untyped shape PolicyReloader wrote before reloads were typed
+        {"policy_decision": None},  # no decision label at all
+        {"policy_decision": ""},
+    ],
+)
+def test_legacy_untyped_policy_reload_markers_are_reloads_in_every_reader(tmp_path, marker):
+    path, config = _reload_fixture(tmp_path, marker)
+    # One decision and one reload: no false ALLOW, no inflated replay totals, no failure.
+    assert _decision_counts(path, config, tmp_path) == [1, 1, 1, 0, 1]
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        {"event_type": "policy_decision"},  # explicitly typed decisions stay decisions
+        {"risk_choice": "low", "risk_confidence": 0.9, "degraded": False, "forced_review": False},
+        {"hard_rule_findings": [{"check": "git", "triggered": False}]},
+    ],
+)
+def test_decisions_that_only_share_the_reload_summary_stay_decisions(tmp_path, marker):
+    path, config = _reload_fixture(tmp_path, marker)
+    allow, other_events, total, *_, dashboard_allow = _decision_counts(path, config, tmp_path)
+    assert (allow, other_events, total, dashboard_allow) == (2, 0, 2, 2)
+
+
 @pytest.mark.parametrize("event_type", ["human_override", "", "POLICY_RELOAD"])
 def test_write_entry_rejects_other_event_types(tmp_path, event_type):
     config = ReflexConfig(audit={"enabled": True, "path": str(tmp_path / "audit.jsonl")})

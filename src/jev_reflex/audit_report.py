@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .audit import GENESIS_HASH, AuditLog, parse_audit_record
+from .audit import GENESIS_HASH, AuditLog, parse_audit_record, record_event_type
 from .config import ReflexConfig
 from .redaction import redact_text
 
@@ -86,7 +86,7 @@ def build_audit_report(
         ):
             raise ValueError("Audit record has an invalid policy hash.")
         policies[version] += 1
-        event = entry.get("event_type", "policy_decision")
+        event = record_event_type(entry)
         if event == "human_override":
             original = entry.get("original_decision")
             if not isinstance(original, str) or original not in original_decisions:

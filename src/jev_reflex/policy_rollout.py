@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from . import trust
-from .audit import AuditLog
+from .audit import AuditLog, record_event_type
 from .config import BootstrapConfig, ReflexConfig, parse_policy_bytes, verify_policy_signature
 from .models import Decision, DeterministicFinding
 from .policy import decide, execution_allowed
@@ -147,7 +147,7 @@ def simulate(
     with io.StringIO(snapshot) as handle:
         for line in handle:
             entry = json.loads(line)
-            if entry.get("event_type", "policy_decision") != "policy_decision":
+            if record_event_type(entry) != "policy_decision":
                 continue
             report["total"] += 1
             if not all(key in entry for key in ("risk_choice", "degraded", "forced_review")):
