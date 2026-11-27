@@ -43,7 +43,7 @@ Codex CLI exposes native lifecycle hooks via `PreToolUse` events configured in `
 
 ### Setup
 
-Create or update `.codex/hooks.json` in the root of your project:
+Run `jrx setup --provider codex --apply` in the repository, or create `.codex/hooks.json` yourself with the policy path pinned (hooks run in the agent's current directory, which moves):
 
 ```json
 {
@@ -55,7 +55,7 @@ Create or update `.codex/hooks.json` in the root of your project:
         "hooks": [
           {
             "type": "command",
-            "command": "jrx codex-hook",
+            "command": "jrx codex-hook --config /absolute/path/to/repo/reflex.yaml",
             "timeout": 30,
             "statusMessage": "JEV Reflex is validating proposed action"
           }
@@ -82,7 +82,7 @@ Claude Code supports `PreToolUse` hooks configured in `.claude/settings.json`. T
 
 ### Setup
 
-Add the following to your project's `.claude/settings.json` (or user-level `~/.claude/settings.json`):
+Run `jrx setup --provider claude --apply`, or add the following to your project's `.claude/settings.json`. To stop the agent's user from removing or editing the hook, put it in Claude Code's managed settings instead (`/etc/claude-code/managed-settings.json` on Linux, `/Library/Application Support/ClaudeCode/managed-settings.json` on macOS); user and project settings cannot remove managed hooks.
 
 ```json
 {
@@ -93,8 +93,9 @@ Add the following to your project's `.claude/settings.json` (or user-level `~/.c
         "hooks": [
           {
             "type": "command",
-            "command": "jrx claude-code-hook",
-            "timeout": 30
+            "command": "jrx claude-code-hook --config \"$CLAUDE_PROJECT_DIR\"/reflex.yaml",
+            "timeout": 30,
+            "onFailure": "block"
           }
         ]
       }
@@ -103,7 +104,7 @@ Add the following to your project's `.claude/settings.json` (or user-level `~/.c
 }
 ```
 
-Claude Code hook timeouts are in seconds.
+Claude Code hook timeouts are in seconds. Without `"onFailure": "block"` (Claude Code 2.1.295 or later), Claude Code lets the tool call proceed when the hook exits with a status other than 0 or 2, prints invalid JSON, or times out. jrx answers every failure it can catch with a `deny`, but only the host can act when jrx cannot start or is killed.
 
 ### Event Flow & Mapping
 - `ALLOW`: Returns no `permissionDecision`, so Claude Code's normal permission rules still apply.
@@ -183,7 +184,7 @@ hooks.on(HookName.PreToolUse.value, HookEntry(handler=on_pre_tool))
 hooks.on(HookName.PermissionRequest.value, HookEntry(handler=on_permission_request))
 ```
 
-TypeScript applications can utilize the subprocess bridge located in `examples/openrouter/jev-reflex.ts`.
+TypeScript applications can utilize the subprocess bridge located in `examples/openrouter/jev-reflex.ts`. It blocks the call (or denies the permission request) when `jev-reflex` cannot start, exits with a non-zero status, prints anything but a JSON object, or does not answer within `JRX_HOOK_TIMEOUT_MS` (default 30000).
 
 ---
 
@@ -193,27 +194,7 @@ Pi exposes a `tool_call` extension event that intercepts calls prior to dispatch
 
 ### Setup
 
-Install the extension from `examples/pi/jev-reflex.ts` into `.pi/extensions/`:
-
-```typescript
-import { registerExtension } from "@pi/agent";
-import { execFileSync } from "child_process";
-
-registerExtension({
-  name: "jev-reflex",
-  onToolCall: async (event) => {
-    try {
-      const output = execFileSync("jrx", ["pi-hook"], {
-        input: JSON.stringify(event),
-        encoding: "utf-8",
-      });
-      return JSON.parse(output);
-    } catch (err) {
-      return { block: true, reason: "JEV Reflex evaluation failed (fail-closed)" };
-    }
-  },
-});
-```
+Install the extension from `examples/pi/jev-reflex.ts` into `.pi/extensions/`. It sends each `tool_call` to `jev-reflex pi-hook` and blocks the call when jrx blocks it, cannot start, exits with a non-zero status, prints anything but a JSON object, or does not answer within `JRX_HOOK_TIMEOUT_MS` (default 30000). `JRX_CONFIG` and `JRX_MODE` in the environment Pi starts with become `--config` and `--mode`; set them from host configuration, not from anything the agent can change. Its behaviour is tested in `tests/test_typescript_adapters.py`.
 
 ---
 
@@ -295,4 +276,4 @@ printf '%s\n' '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' \
   | jrx deepseek-hook --demo --mode enforce
 ```
 
-All commands output blocking decisions (`deny` or `block: true`) and exit with non-zero status codes where appropriate.
+All commands output blocking decisions (`deny` or `block: true`) and exit with status 0: native hooks always carry the decision, including failures jrx catches, in the JSON on stdout, because hosts disagree about what a non-zero exit means. PostToolUse recording failures exit 2.

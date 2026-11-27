@@ -37,11 +37,18 @@ _COVERAGE_SAMPLES = {
 }
 
 
+# Settings each provider's hook handler needs beyond its command. Claude Code lets a
+# PreToolUse call proceed when a hook exits with a status other than 0 or 2, prints
+# invalid JSON or times out, unless the handler asks to block on failure (v2.1.295+).
+# jrx denies through JSON for every failure it can catch; this covers the rest (an
+# interpreter that cannot start or import jrx, or a host timeout).
+_HANDLER_SETTINGS: dict[str, dict[str, Any]] = {"claude": {"onFailure": "block"}}
+
+
 def _hook_entry(provider: str, command: str) -> tuple[str | None, str, dict[str, Any]]:
-    group = {
-        "matcher": _MATCHERS.get(provider, "*"),
-        "hooks": [{"type": "command", "command": command, "timeout": 30}],
-    }
+    handler = {"type": "command", "command": command, "timeout": 30}
+    handler.update(_HANDLER_SETTINGS.get(provider, {}))
+    group = {"matcher": _MATCHERS.get(provider, "*"), "hooks": [handler]}
     return ("jev-reflex" if provider == "antigravity" else None), "PreToolUse", group
 
 
@@ -132,11 +139,26 @@ def _matcher_covers(matcher: Any, tool: str) -> bool:
         return False
 
 
+def _handler_complete(group: dict[str, Any], provider: str, command: str) -> bool:
+    """True when the handler running ``command`` has every setting this provider needs."""
+    required = _HANDLER_SETTINGS.get(provider, {})
+    return any(
+        isinstance(hook, dict)
+        and hook.get("command") == command
+        and all(hook.get(key) == value for key, value in required.items())
+        for hook in group["hooks"]
+    )
+
+
 def _covers(event_list: Any, provider: str, command: str) -> bool:
-    """True when the groups running ``command`` match every required tool."""
+    """True when complete groups running ``command`` match every required tool."""
     if not isinstance(event_list, list):
         return False
-    matchers = [group.get("matcher") for group in event_list if _group_runs(group, command)]
+    matchers = [
+        group.get("matcher")
+        for group in event_list
+        if _group_runs(group, command) and _handler_complete(group, provider, command)
+    ]
     return bool(matchers) and all(
         any(_matcher_covers(matcher, tool) for matcher in matchers)
         for tool in _COVERAGE_SAMPLES.get(provider, ("*",))
@@ -327,8 +349,9 @@ def hook_configured(workspace: Path, provider: ProviderSpec) -> tuple[bool, str]
         _group_runs(group, command) for group in groups for command in _jrx_commands(provider, root)
     ):
         return False, (
-            "JRX hook is not pinned to the workspace policy or does not cover every "
-            "required tool; preview setup again"
+            "JRX hook is not pinned to the workspace policy, does not cover every "
+            "required tool, or does not block the tool when the hook fails; preview "
+            "setup again"
         )
     return False, "not configured"
 

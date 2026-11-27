@@ -71,10 +71,16 @@ def evaluate_openrouter_hook(
     )
 
 
-def openrouter_hook_error(*, event: str = "PreToolUse") -> dict[str, Any]:
-    """Return a fail-safe OpenRouter hook result."""
+def openrouter_hook_error(*, event: str | None = None) -> dict[str, Any]:
+    """Return a fail-safe OpenRouter hook result.
+
+    When the event could not be read, answer in both shapes: PreToolUse reads
+    ``block`` and PermissionRequest reads ``decision``.
+    """
 
     reason = hook_error_reason()
+    if event is None:
+        return {"block": reason, "decision": "deny", "reason": reason}
     if _is_permission_request(event):
         return {"decision": "deny", "reason": reason}
     return {"block": reason}

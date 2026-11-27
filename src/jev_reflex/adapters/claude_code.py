@@ -65,7 +65,15 @@ def claude_code_settings_json(command: str = "jev-reflex claude-code-hook") -> d
                 {
                     # Kept equal to workspace.hooks._MATCHERS["claude"] (tested).
                     "matcher": "Bash|Edit|MultiEdit|Write|NotebookEdit|mcp__.*",
-                    "hooks": [{"type": "command", "command": command, "timeout": 30}],
+                    # Block the call if the hook cannot answer (crash, timeout).
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": command,
+                            "timeout": 30,
+                            "onFailure": "block",
+                        }
+                    ],
                 }
             ],
             "PostToolUse": [

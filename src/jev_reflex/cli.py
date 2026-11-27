@@ -1373,7 +1373,7 @@ def _hook_error_output(kind: str, payload: dict[str, Any] | None) -> dict[str, A
         ):
             return {"decision": "deny", "reason": reason}
         if kind == "openrouter":
-            return {"block": reason}
+            return {"block": reason, "decision": "deny", "reason": reason}
         if kind == "pi":
             return {"block": True, "reason": reason}
         return {
@@ -1488,13 +1488,16 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
                 else:
                     output = {}
         rendered = json.dumps(output, separators=(",", ":"))
-    except Exception:
+    except BaseException:  # every failure, interrupts included, must deny
         if post:
             typer.echo("PostToolUse evidence could not be recorded.", err=True)
             raise typer.Exit(code=2) from None
         # Hook hosts differ in how they treat non-zero hook exits (Claude Code treats
         # an uncaught traceback's exit 1 as non-blocking). A valid deny response is the
-        # most portable fail-safe for malformed input, configuration, or state.
+        # most portable fail-safe for malformed input, configuration, state, or an
+        # interrupt. Failures before this point (an interpreter that cannot start or
+        # import jrx, or a host timeout) are the host's to handle: `jrx setup` asks
+        # Claude Code to block on hook failure.
         rendered = json.dumps(_hook_error_output(kind, parsed), separators=(",", ":"))
     typer.echo(rendered)
 

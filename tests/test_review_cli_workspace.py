@@ -437,3 +437,49 @@ def test_copyable_hook_helpers_use_the_setup_pre_tool_matcher(provider):
     assert matcher == hooks._MATCHERS[provider]
     for tool in hooks._COVERAGE_SAMPLES[provider]:
         assert hooks._matcher_covers(matcher, tool), tool
+
+
+# Claude Code lets a call proceed when a hook crashes or times out unless the handler
+# asks it to block on failure, so setup installs and upgrades that setting.
+
+
+def _claude_handlers(path: Path) -> list[dict[str, Any]]:
+    return [
+        hook
+        for group in json.loads(path.read_text())["hooks"]["PreToolUse"]
+        for hook in group["hooks"]
+    ]
+
+
+def test_setup_asks_claude_code_to_block_when_the_hook_fails(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "repo")
+    spec = providers.provider_by_key("claude")
+    hooks.apply_hook_change(root, spec)
+    path = root / spec.hooks_path
+    [handler] = _claude_handlers(path)
+    assert handler["onFailure"] == "block"
+    assert handler["command"] == hooks.hook_command(spec, root)
+    assert hooks.hook_configured(root, spec)[0] is True
+
+
+def test_setup_upgrades_a_claude_hook_that_does_not_block_on_failure(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "repo")
+    spec = providers.provider_by_key("claude")
+    path = root / spec.hooks_path
+    path.parent.mkdir()
+    pinned = hooks.hook_command(spec, root)
+    earlier = {
+        "matcher": "Bash|Edit|MultiEdit|Write|NotebookEdit|mcp__.*",
+        "hooks": [{"type": "command", "command": pinned, "timeout": 30}],
+    }
+    other = {"matcher": "Bash", "hooks": [{"type": "command", "command": "other-tool"}]}
+    path.write_text(json.dumps({"hooks": {"PreToolUse": [earlier, other]}}), encoding="utf-8")
+
+    configured, message = hooks.hook_configured(root, spec)
+    assert configured is False
+    assert "does not block the tool when the hook fails" in message
+    hooks.apply_hook_change(root, spec)
+    handlers = _claude_handlers(path)
+    assert [h["command"] for h in handlers] == ["other-tool", pinned]
+    assert handlers[1]["onFailure"] == "block"
+    assert hooks.hook_configured(root, spec)[0] is True
