@@ -94,8 +94,8 @@ JEV Reflex has explicit limitations and does not claim to protect against the fo
 - **See**: [Policy and stability limits](security.md#policy-and-stability-limits)
 
 ### 8. Bootstrap Configuration Protection
-- **Limitation**: The bootstrap configuration file itself is not cryptographically signed. An attacker with filesystem write access could modify bootstrap settings (e.g., disable signature verification).
-- **Mitigation**: Protect bootstrap config files with filesystem permissions (mode 0600, owned by root or a dedicated user). Use filesystem-level immutable attributes where available.
+- **Limitation**: The bootstrap configuration file itself is not cryptographically signed. An attacker who can write or replace it can disable signature verification or point it at another key.
+- **Mitigation**: Evaluation treats a bootstrap as a trust anchor only when the evaluating user can neither rewrite nor replace it, requires its public key and rollout state to be equally protected, and refuses rollout state that could override an operator-owned policy. Install it root-owned with mode `0644` (readable, not writable, by the agent's user). A same-user installation has no independent anchor; see [Trust anchors](security.md#trust-anchors-which-files-the-evaluating-user-must-not-control).
 - **See**: [docs/security.md](security.md#cryptographic-signing) - "Limitations"
 
 ### 9. Perfect Secret Detection
@@ -132,7 +132,7 @@ JEV Reflex makes the following security assumptions:
 1. **Trusted Host**: The host system running JEV Reflex is not compromised with root access
 2. **Independent Semantic Evaluator**: TypeSafe API operates independently and is not controlled by the same attacker attempting to bypass local rules
 3. **Controlled Build Pipeline**: The release build environment is trusted and not compromised before signing
-4. **Filesystem Permissions**: Users protect configuration files with appropriate permissions (mode 0600 for sensitive files)
+4. **Filesystem Permissions**: Operators keep trust inputs (bootstrap, public key, rollout state) in directories the agent's user cannot write, readable by that user (mode 0644); private keys and audit logs stay owner-only (0600)
 5. **Network Security**: Network connections to TypeSafe are not intercepted or modified in transit (TLS is used)
 6. **Agent Sandbox**: The agent itself runs within some form of sandbox or permission boundary (even if minimal)
 

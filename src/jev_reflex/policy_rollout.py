@@ -206,9 +206,10 @@ class RolloutStore:
     it was verified from, and is verified again against the bootstrap trust
     roots on every read. Signatures only authenticate a policy's contents: which
     revision is active, the canary percentage, and rollbacks are trusted only
-    because the evaluating user cannot rewrite or replace the state file. While
-    ``bootstrap.require_signature`` is true, :meth:`select` therefore refuses
-    state that the evaluating user could change (see ``trust.protected_location``).
+    because the evaluating user cannot rewrite or replace the state file.
+    :meth:`select` therefore refuses state the evaluating user could change
+    whenever anything it would override is protected from that user (see
+    ``config.rollout_protection_reason`` and ``trust.protected_location``).
     Unsigned snapshots are accepted only when signatures are not required.
     """
 
@@ -217,14 +218,17 @@ class RolloutStore:
         self.bootstrap = bootstrap if bootstrap is not None else BootstrapConfig()
         self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
 
-    def _load(self) -> tuple[dict[str, Any], dict[str, ReflexConfig]] | None:
+    def _load(
+        self, path: Path | None = None
+    ) -> tuple[dict[str, Any], dict[str, ReflexConfig]] | None:
         """Read the state and every snapshot's verified policy."""
-        if not self.path.exists():
+        path = path or self.path
+        if not path.exists():
             return None
-        details = self.path.lstat()
+        details = path.lstat()
         if not stat.S_ISREG(details.st_mode) or details.st_mode & 0o022:
             raise ValueError("rollout state must be a regular file without group or world write")
-        data = json.loads(self.path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or data.get("schema") not in (1, SCHEMA):
             raise ValueError("unsupported rollout state")
         percent = data.get("percent")
@@ -249,7 +253,8 @@ class RolloutStore:
         return ValueError(
             f"rollout state {self.path} contains a policy snapshot without signature "
             "material, but bootstrap require_signature is true. Remove the rollout state "
-            "file and re-stage the policy with `jrx policy rollout stage`."
+            "file and re-stage the policy with `jrx policy rollout stage --bootstrap <file> "
+            "--baseline <reflex.yaml> --audit <audit.log>`."
         )
 
     def _verify_signature(self, raw: bytes, signature: bytes, trust_root: Any) -> None:
@@ -320,25 +325,35 @@ class RolloutStore:
             "percent": data["percent"],
         }
 
-    def _require_operator_controlled(self) -> None:
-        uid, groups = trust.evaluator_identity()
-        if trust.protected_location(self.path, uid, groups) is None:
+    def _operator_controlled_location(self, reason: str) -> Path:
+        identity = trust.evaluator_identity()
+        location = trust.protected_location(self.path.absolute(), identity)
+        if location is None:
             raise ValueError(
                 f"rollout state {self.path} can be rewritten or replaced by the evaluating "
-                f"user (uid {uid}), so it cannot authorize which signed policy is active "
-                "while bootstrap require_signature is true. Keep it in a directory only the "
-                "operator can write (for example a root-owned /var/lib/jrx with mode 0755), "
-                "set bootstrap rollout_state_path there, and re-run `jrx policy rollout "
-                "stage` as that operator; or remove rollout_state_path to use the signed "
-                "reflex.yaml directly."
+                f"user (uid {identity.uid}), so it cannot choose the active policy while "
+                f"{reason}. Keep it in a directory only the operator can write (for example "
+                "a root-owned /var/lib/jrx with mode 0755), set rollout_state_path there in "
+                "an operator-controlled bootstrap such as /etc/jrx/bootstrap.yaml, and re-run "
+                "`jrx policy rollout stage --bootstrap /etc/jrx/bootstrap.yaml ...` as that "
+                "operator; or remove rollout_state_path to use the policy file directly."
             )
+        return location
 
-    def select(self, scope: str) -> ReflexConfig | None:
-        if self.bootstrap.require_signature:
+    def select(self, scope: str, *, protect_because: str | None) -> ReflexConfig | None:
+        """Return the policy this scope should use, or None to keep the local file.
+
+        ``protect_because`` is why the state must be operator-controlled (see
+        ``config.rollout_protection_reason``); None only when nothing the state could
+        override is protected from the evaluating user.
+        """
+        path = self.path
+        if protect_because is not None:
             # Checked before reading so a missing file is trusted only when the
-            # evaluating user could not have removed it either.
-            self._require_operator_controlled()
-        loaded = self._load()
+            # evaluating user could not have removed it either, and read through
+            # the checked location.
+            path = self._operator_controlled_location(protect_because)
+        loaded = self._load(path)
         if loaded is None:
             return None
         data, policies = loaded

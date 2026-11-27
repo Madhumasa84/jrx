@@ -2572,12 +2572,55 @@ def policy_sign(
         raise typer.Exit(code=1) from None
 
 
-@policy_app.command("status")
-def policy_status() -> None:
-    """Show the configured central policy source and how it reaches runtime."""
-    from .config import load_bootstrap_config
+def _echo_trust(report: dict[str, Any]) -> None:
+    def where(item: dict[str, Any] | None) -> str:
+        if item is None:
+            return "not used"
+        owner = "operator-controlled" if item["operator_controlled"] else "writable by you"
+        missing = "" if item["exists"] else ", missing"
+        return f"{terminal_line(item['path'])} ({owner}{missing})"
 
-    bootstrap = load_bootstrap_config()
+    evaluator = report["evaluator"]
+    privileged = " (privileged: nothing is protected)" if evaluator["privileged"] else ""
+    typer.echo(f"Evaluating user: uid {evaluator['uid']}{privileged}")
+    bootstrap = report["bootstrap"]
+    if bootstrap["path"] is None:
+        typer.echo("Bootstrap: none (signatures not required)")
+    else:
+        owner = "operator-controlled" if bootstrap["operator_controlled"] else "writable by you"
+        typer.echo(f"Bootstrap: {terminal_line(bootstrap['path'])} ({owner})")
+    required = "required" if report["require_signature"] else "not required"
+    typer.echo(f"Policy signature: {required}; public key: {where(report['public_key'])}")
+    typer.echo(f"Policy file: {where(report['policy'])}")
+    typer.echo(f"Rollout state: {where(report['rollout_state'])}")
+    protected = report["policy_protected_from_evaluating_user"]
+    typer.echo(
+        "Effective policy protected from the evaluating user: " + ("yes" if protected else "no")
+    )
+    for issue in report["issues"]:
+        typer.echo(f"Evaluation will refuse: {terminal_line(issue)}")
+
+
+@policy_app.command("status")
+def policy_status(
+    config: Path | None = typer.Option(
+        None, "--config", help="Policy file to assess (default: ./reflex.yaml)."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit the trust report as JSON."),
+) -> None:
+    """Show the configured central policy source and which policy inputs are trusted."""
+    from .config import load_bootstrap_config, trust_report
+
+    try:
+        bootstrap = load_bootstrap_config()
+        report = trust_report(config)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Policy status unavailable: {terminal_line(exc)}", err=True)
+        raise typer.Exit(code=2) from None
+    if json_output:
+        typer.echo(json.dumps(report, indent=2, sort_keys=True))
+        return
+    _echo_trust(report)
 
     if bootstrap.policy_source.type is None:
         typer.echo("Policy source: local (reflex.yaml)")

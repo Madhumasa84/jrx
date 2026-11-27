@@ -111,7 +111,7 @@ def _rollout(deployment, command: str, *extra: str):
 
 def _as_evaluator(monkeypatch: pytest.MonkeyPatch, uid: int = OTHER_UID) -> None:
     """Evaluate as ``uid``; OTHER_UID owns none of the test files (operator-written state)."""
-    monkeypatch.setattr(trust, "evaluator_identity", lambda: (uid, frozenset()))
+    monkeypatch.setattr(trust, "evaluator_identity", lambda: trust.Identity(uid, frozenset()))
 
 
 def _effective(deployment, scope: str = "repository") -> str:
@@ -259,7 +259,9 @@ def test_operator_state_directory_must_not_let_the_user_replace_the_file(
 ) -> None:
     deployment = _staged_and_promoted(tmp_path, monkeypatch)
     group = os.stat(deployment.state.parent).st_gid
-    monkeypatch.setattr(trust, "evaluator_identity", lambda: (OTHER_UID, frozenset({group})))
+    monkeypatch.setattr(
+        trust, "evaluator_identity", lambda: trust.Identity(OTHER_UID, frozenset({group}))
+    )
     deployment.state.parent.chmod(directory_mode)
     try:
         if accepted:

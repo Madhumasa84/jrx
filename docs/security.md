@@ -101,7 +101,7 @@ JEV Reflex provides an optional append-only, tamper-evident audit log for policy
 
 ### What the audit log does NOT guarantee
 
-- **Protection against attackers with write access**: An attacker who can write to the log file and rewrite the entire chain from genesis can successfully tamper with the log. This is a known limitation that will be addressed in a future update by adding cryptographic signatures.
+- **Protection against attackers with write access**: Without decision signing, an attacker who can write to the log file can rewrite the entire chain from genesis. With [decision signing](#decision-signing), rewritten entries fail `jrx audit verify --public-key`, but an attacker can still truncate or delete the log; keep an independent checkpoint or copy.
 - **Protection against log deletion**: An attacker with filesystem access can delete the entire log file. Regular backup and monitoring of the audit log directory is recommended.
 - **Real-time monitoring**: The audit log is a passive record; it does not provide real-time alerts or monitoring capabilities.
 - **Perfect secret detection**: Redaction is heuristic and may miss novel secret patterns. The same limitations that apply to the rest of JEV Reflex's redaction system apply to the audit log.
@@ -189,6 +189,73 @@ This command runs a comprehensive test matrix against mock failure modes and rep
 - Broker responses are bound to request IDs and checked for finite timestamps and bounded clock skew.
   Protect host time synchronization and broker credentials separately.
 - The fail-closed behavior applies to semantic evaluation failures; hard rules (deterministic checks) continue to function independently
+
+## Trust anchors: which files the evaluating user must not control
+
+A signature proves what a policy file says. It cannot prove that a signature was required,
+which key should verify it, or which rollout revision is active: those come from the
+bootstrap file, the public key it names and the rollout state. They are only trustworthy
+when the *evaluating user* (the user the hook, `check` or `exec` runs as, normally the
+agent's user) can neither rewrite them nor replace them through a parent directory.
+`require_signature: true` in a bootstrap the agent's user can edit protects nothing
+against that user, because the same edit can turn it off.
+
+**Discovery.** Evaluation reads `/etc/jrx/bootstrap.yaml` when it exists and
+`~/.jev-reflex/bootstrap.yaml` only otherwise, so an agent cannot shadow a system
+bootstrap with one in its home directory.
+
+**Rules enforced on every `check`, `exec`, hook and broker policy load:**
+
+| Situation | Result |
+| --- | --- |
+| Bootstrap is operator-controlled and `require_signature: true`, but `public_key_path` is writable or replaceable by the evaluating user | Evaluation refuses (hooks deny); the key could be swapped for one that signs anything. |
+| Bootstrap is operator-controlled and names a `rollout_state_path` the evaluating user can change | Evaluation refuses, with or without signatures. |
+| `require_signature: true` and the rollout state is changeable by the evaluating user | Evaluation refuses (unchanged from the previous release). |
+| The policy file passed with `--config` is operator-controlled, but a bootstrap the evaluating user can edit names rollout state that user can change | Evaluation refuses. Before this release such a bootstrap could replace an operator-owned `enforce` policy with an `advisory` one. |
+| Nothing is protected from the evaluating user (same-user installation) | Unchanged: signatures are still verified and unsigned rollout state still applies, but nothing here is an independent trust anchor. |
+
+"Operator-controlled" means: no component of the path, and no symlink on the way, is
+owned by the evaluating user; no directory on the way lets that user rename or delete
+entries (a sticky directory protects entries the user does not own); the file is a
+regular file the user cannot write; the kernel (`access(2)`, which applies POSIX ACLs)
+does not report write access; and the evaluator is neither root nor holding a Linux
+capability that overrides file permissions (`CAP_CHOWN`, `CAP_DAC_OVERRIDE`,
+`CAP_FOWNER`, `CAP_SYS_ADMIN`). Files are read through the location that was checked,
+and the policy bytes that are parsed are the bytes whose signature was verified.
+
+**See what you have.** `jrx policy status --config /path/to/reflex.yaml [--json]` reports
+each input's location, whether it is operator-controlled, whether the effective policy is
+protected from the evaluating user, and every refusal evaluation would raise.
+
+**Operator setup (Linux or macOS, agent runs as a different user than the operator):**
+
+```bash
+sudo install -d -o root -m 0755 /etc/jrx /var/lib/jrx
+sudo install -o root -m 0644 policy.pub /etc/jrx/policy.pub
+printf 'require_signature: true\npublic_key_path: /etc/jrx/policy.pub\n' > bootstrap.yaml
+sudo install -o root -m 0644 bootstrap.yaml /etc/jrx/bootstrap.yaml
+jrx policy status --config /path/to/reflex.yaml   # run as the agent's user
+```
+
+Files must stay readable (`0644`) by the evaluating user; a `0600` root-owned bootstrap
+cannot be read and every evaluation fails closed. Legitimate updates (re-signing the
+policy, rotating the key, staging, promoting or rolling back a rollout) are made by the
+operator and need no change on the agent side.
+
+**Recovery when evaluation refuses.** The error names the path and the reason. Either
+move the named key or state under an operator-controlled directory as above (and stage
+the rollout there again), or remove `rollout_state_path` from the bootstrap to evaluate
+the policy file directly. Removing the bootstrap entirely returns to unsigned, same-user
+behaviour.
+
+**Limits.** Ownership, mode and ACL checks cannot see bind mounts or overlays set up
+outside the evaluator's view, a host that runs the agent with more privileges than the
+evaluator, or mandatory access control that would further restrict writes. They do not
+make a same-user installation safe: if the agent runs as the operator's user and no host
+sandbox stops it writing outside the workspace, there is no independent trust anchor on
+the machine, and only the host's own controls (for example Claude Code managed settings
+and sandboxing) can provide one. A signed policy file the agent can write can be replaced
+by an *older* validly signed copy; keep it operator-controlled if that matters.
 
 ## Central policy source and staged rollout
 
@@ -333,7 +400,7 @@ This checks both hash chain integrity and decision signatures, reporting any mis
   timeout causes signing/verification to fail.
 - **Key rotation**: Manual key rotation is required; there is no automated key rotation mechanism
 - **Audit log performance**: Signing adds a small performance overhead to audit log writes
-- **Bootstrap config protection**: The bootstrap config file itself is not signed; protect it with filesystem permissions (mode 0600, owned by root or a dedicated user)
+- **Bootstrap config protection**: The bootstrap config file itself is not signed. Its location is what makes it trustworthy; see [Trust anchors](#trust-anchors-which-files-the-evaluating-user-must-not-control).
 
 ## Production audit hardening and optional controls
 

@@ -40,6 +40,9 @@ jobs:
         if: runner.os == 'Linux'
         run: docker pull python:3.11-slim
       - run: python -m pytest
+        env:
+          # Real root-owned trust-anchor tests (tests/test_bootstrap_trust_privileged.py).
+          JRX_PRIVILEGED_TESTS: "1"
       - name: Deterministic benchmark regression
         run: python -B benchmarks/run.py --backend deterministic --verify-hashes --skip-latency --baseline benchmarks/results/v0.2.0-step3-deterministic.json --fail-on-regression
       - run: python -m ruff check .

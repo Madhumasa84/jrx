@@ -57,7 +57,7 @@ def _operator_controlled(monkeypatch: pytest.MonkeyPatch) -> None:
     from jev_reflex import trust
 
     other = os.geteuid() + 100_000
-    monkeypatch.setattr(trust, "evaluator_identity", lambda: (other, frozenset()))
+    monkeypatch.setattr(trust, "evaluator_identity", lambda: trust.Identity(other, frozenset()))
 
 
 # Finding 1: unsigned rollout state replaced the signature-verified policy.
