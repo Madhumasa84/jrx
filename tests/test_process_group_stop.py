@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -27,9 +28,22 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="process groups are P
 def _exited_unreaped_leader() -> subprocess.Popen[bytes]:
     """A new process group whose only member has exited but is not yet reaped."""
     process = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
-    # WNOWAIT waits for the exit without reaping, so the group still has one zombie member.
-    os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
-    return process
+    # Nothing calls wait() on the child, so once it exits it stays a zombie. macOS Python
+    # has no os.waitid(WNOWAIT), so ask ps for the state instead.
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        state = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(process.pid)],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        if state.startswith("Z"):
+            return process
+        time.sleep(0.01)
+    process.kill()
+    process.wait()
+    pytest.fail("the child process did not exit")
 
 
 def test_stop_execution_tolerates_a_group_whose_members_have_all_exited() -> None:
