@@ -1,0 +1,15 @@
+{
+  "schema": "jrx.workload-manifest.v1",
+  "development": [
+    {
+      "path": "development/synthetic_v1.jsonl",
+      "sha256": "5188b3c94fabce0749798d33ea7ec44bc0f7b0bda6c11a9c163524a31e5e8d9d",
+      "records": 16
+    }
+  ],
+  "holdout": [],
+  "thresholds": {
+    "path": "thresholds.json",
+    "sha256": "b7ffab0eb0d9feb31c3441301b23aca23ba6776f0b8dd0cf7fc76b034f03449c"
+  }
+}

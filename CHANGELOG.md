@@ -25,6 +25,11 @@
 - Redaction runs in linear time on adversarial input and also covers URL userinfo, `sshpass -p`, `mysql -pPW`, `PGPASSWORD`, unterminated PEM keys, JSON-in-string credentials and nested structured secrets. `jrx audit verify` and the dashboard enforce `signing.require_signature` with the configured public key, without loading the private key, and reject duplicate-key or non-canonical records. Policy reload records carry their own `event_type`.
 - `jrx model pull` installs a pinned revision of the default model and checks every file against a pinned SHA-256 digest; other models must match the hub's published digests.
 
+### Added
+
+- `python -B -m benchmarks.workloads` scores labeled agent workloads by host outcome (proceed, ask, deny) per adapter, mode and backend, reporting risky actions allowed, flagged and prevented, benign actions denied and sent for review, and latency, with counts, denominators and Wilson intervals. Holdout scoring requires independently labeled, authorized records, pinned file hashes and acceptance thresholds registered before scoring (`eval/workloads/README.md`). No independent holdout exists yet.
+- `docs/guarantees.md` states what each integration stops, asks about or cannot see, checked against the tested enforcement matrix.
+
 ### Fixed
 
 - Canary cohorts are keyed on the repository root, so every subdirectory of a repository gets the same revision.

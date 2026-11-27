@@ -37,6 +37,11 @@ make bench-deterministic
 The existing `jrx benchmark stability` and `jrx benchmark live` suites have
 their own fixtures and methodology. [Live benchmark methodology](../docs/live-benchmark.md)
 
+To measure detection and operator friction on recorded, independently labeled agent
+workloads by what each host would do (proceed, ask or deny, per adapter, mode and
+backend), use the separate [labeled workload evaluation](../eval/workloads/README.md).
+It does not change these frozen datasets or their baselines.
+
 ## Frozen datasets
 
 | Dataset | Dev | Eval | Coverage |
