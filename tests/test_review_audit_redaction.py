@@ -953,7 +953,10 @@ def test_policy_replay_rejects_separators_that_verification_rejects(tmp_path, se
         simulate(log, config, config)
 
 
-def test_dashboard_never_lets_an_unsigned_policy_choose_the_audit_key(tmp_path, monkeypatch):
+@pytest.mark.parametrize("require_signature", [False, True])
+def test_dashboard_never_lets_an_unsigned_policy_choose_the_audit_key(
+    tmp_path, monkeypatch, require_signature
+):
     import jev_reflex.signing as signing
 
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -970,7 +973,11 @@ def test_dashboard_never_lets_an_unsigned_policy_choose_the_audit_key(tmp_path, 
     )
     AuditLog(forged).write_entry("rm -rf /prod", [], {}, PolicyDecision("ALLOW", (), ()))
     policy = tmp_path / "policy.yaml"
-    policy.write_text(f"mode: enforce\nsigning:\n  public_key_path: {attacker_public}\n")
+    policy.write_text(
+        "mode: enforce\nsigning:\n"
+        f"  require_signature: {str(require_signature).lower()}\n"
+        f"  public_key_path: {attacker_public}\n"
+    )
 
     loaded: list[Path] = []
     real_load = signing.load_public_key
@@ -981,7 +988,11 @@ def test_dashboard_never_lets_an_unsigned_policy_choose_the_audit_key(tmp_path, 
     team = snapshot(_dashboard(tmp_path, policy, log), identity)["teams"][0]
     # Without a pinned key nothing vouches for signatures, and the policy's key is unused.
     assert attacker_public not in loaded
-    assert "signature" not in team["audit_integrity"]["message"]
+    if require_signature:
+        assert team["audit_integrity"]["valid"] is False  # it can only fail closed
+        assert "decisions" not in team
+    else:
+        assert "signature" not in team["audit_integrity"]["message"]
 
     pinned = _dashboard(tmp_path, policy, log)
     pinned.sources[0].audit_public_key_path = str(operator_public)
@@ -989,3 +1000,4 @@ def test_dashboard_never_lets_an_unsigned_policy_choose_the_audit_key(tmp_path, 
     assert team["audit_integrity"]["valid"] is False  # only the operator key is trusted
     assert "decisions" not in team
     assert operator_private.exists()
+    assert loaded == [operator_public]  # the source policy's key is never loaded
