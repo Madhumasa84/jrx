@@ -574,9 +574,10 @@ def test_dashboard_does_not_load_the_private_signing_key(tmp_path, monkeypatch):
         "mode: enforce\nsigning:\n  require_signature: true\n"
         f"  private_key_path: {private}\n  public_key_path: {public}\n"
     )
-    team = snapshot(_dashboard(tmp_path, policy, log), Identity("operator", frozenset({"ops"})))[
-        "teams"
-    ][0]
+    # The dashboard trusts only an operator-pinned audit key, never the policy's choice.
+    dashboard = _dashboard(tmp_path, policy, log)
+    dashboard.sources[0].audit_public_key_path = str(public)
+    team = snapshot(dashboard, Identity("operator", frozenset({"ops"})))["teams"][0]
     assert team["audit_integrity"]["valid"] is True, team
     assert team["decisions"]["ALLOW"] == 1
 
@@ -669,9 +670,10 @@ def test_tail_and_overrides_skip_malformed_records(tmp_path):
         stream.write('{"event_type": "human_override", "event_type": "policy_decision"}\n')
     entries = audit.tail(10)
     assert all(isinstance(entry, dict) for entry in entries)
-    assert len(entries) == 3
+    # Records without an integer seq are malformed for display and skipped too.
+    assert [entry["identity"] for entry in entries] == ["reviewer"]
     overrides = audit.get_overrides()
-    assert len(overrides) == 3
+    assert [entry["identity"] for entry in overrides] == ["reviewer"]
     recent = audit.get_overrides(since="2000-01-01")
     assert [entry["identity"] for entry in recent] == ["reviewer"]
 
@@ -806,3 +808,139 @@ def test_write_entry_rejects_other_event_types(tmp_path, event_type):
     config = ReflexConfig(audit={"enabled": True, "path": str(tmp_path / "audit.jsonl")})
     with pytest.raises(ValueError, match="unsupported audit event type"):
         AuditLog(config).write_entry("x", [], {}, _decision("ALLOW"), event_type=event_type)
+
+
+# ---------------------------------------------------------------------------
+# PR review follow-ups: tail limits, replay framing, dashboard trust key.
+# ---------------------------------------------------------------------------
+
+
+def _display_log(tmp_path: Path, lines: list[str]) -> tuple[Path, ReflexConfig]:
+    log = tmp_path / "audit.jsonl"
+    log.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+    return log, ReflexConfig.model_validate({"audit": {"enabled": True, "path": str(log)}})
+
+
+def test_tail_validates_display_fields_before_applying_the_limit(tmp_path, monkeypatch):
+    lines = [
+        json.dumps({"seq": 1, "policy_decision": "ALLOW", "action_summary": "ls"}),
+        json.dumps({"action_summary": "older record without seq"}),
+        json.dumps({"seq": True, "action_summary": "boolean seq"}),
+        json.dumps({"seq": 2, "policy_decision": "HOLD", "action_summary": "rm"}),
+        "{not json",
+    ]
+    log, config = _display_log(tmp_path, lines)
+    assert [entry["seq"] for entry in AuditLog(config).tail(2)] == [2, 1]
+    assert [entry["seq"] for entry in AuditLog(config).tail(1)] == [2]
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(app, ["audit", "tail", "-n", "2", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "Seq: 2" in result.output and "Seq: 1" in result.output
+    assert "without seq" not in result.output
+
+
+def test_tail_reads_only_the_end_of_a_large_log(tmp_path, monkeypatch):
+    lines = [json.dumps({"seq": index, "action_summary": "x" * 40}) for index in range(1, 20_001)]
+    _, config = _display_log(tmp_path, lines)
+    decoded = []
+    original = AuditLog._display_record
+    monkeypatch.setattr(
+        AuditLog, "_display_record", staticmethod(lambda line: decoded.append(1) or original(line))
+    )
+    assert [entry["seq"] for entry in AuditLog(config).tail(3)] == [20_000, 19_999, 19_998]
+    assert len(decoded) <= 5  # the trailing newline's empty line plus three records
+
+
+@pytest.mark.parametrize("block", [1, 2, 3, 7, 4096])
+def test_reverse_line_reader_keeps_multibyte_text_across_block_boundaries(tmp_path, block):
+    lines = [
+        "é première",
+        "ü✓ zweite",
+        "",
+        "日本語 third",
+        "\udc80".encode("utf-8", "surrogatepass").decode("latin-1"),
+    ]
+    log = tmp_path / "audit.jsonl"
+    log.write_bytes(
+        b"".join(line.encode("utf-8", "surrogatepass") + b"\n" for line in lines[:4])
+        + b"\xff\xfe broken\n"
+    )
+    config = ReflexConfig.model_validate({"audit": {"enabled": True, "path": str(log)}})
+    found = list(AuditLog(config)._lines_from_end(block=block))
+    # Invalid UTF-8 lines are skipped; everything else comes back newest first.
+    assert found == ["", *reversed(lines[:4])]
+
+
+def test_tail_of_a_missing_or_empty_log_is_empty(tmp_path):
+    config = ReflexConfig.model_validate(
+        {"audit": {"enabled": True, "path": str(tmp_path / "missing.jsonl")}}
+    )
+    assert AuditLog(config).tail(5) == []
+    (tmp_path / "missing.jsonl").write_text("")
+    assert AuditLog(config).tail(5) == []
+
+
+@pytest.mark.parametrize("separator", [b"\r\n", b"\r"])
+def test_policy_replay_rejects_separators_that_verification_rejects(tmp_path, separator):
+    from jev_reflex.policy_rollout import simulate
+
+    log = tmp_path / "audit.jsonl"
+    config = ReflexConfig.model_validate(
+        {"mode": "enforce", "audit": {"enabled": True, "path": str(log)}}
+    )
+    for command in ("ls", "pwd"):
+        AuditLog(config).write_entry(
+            command,
+            [],
+            {},
+            PolicyDecision("ALLOW", (), ()),
+            risk_choice="low",
+            risk_confidence=0.9,
+            degraded=False,
+            forced_review=False,
+        )
+    assert simulate(log, config, config)["total"] == 2
+    log.write_bytes(log.read_bytes().replace(b"\n", separator))
+    assert AuditLog(config).verify()[0] is False
+    with pytest.raises(ValueError, match="verification failed"):
+        simulate(log, config, config)
+
+
+def test_dashboard_never_lets_an_unsigned_policy_choose_the_audit_key(tmp_path, monkeypatch):
+    import jev_reflex.signing as signing
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    operator_private, operator_public = _signing_keys(tmp_path)
+    attacker = tmp_path / "attacker"
+    attacker.mkdir()
+    attacker_private, attacker_public = _signing_keys(attacker)
+    log = tmp_path / "audit.jsonl"
+    forged = ReflexConfig.model_validate(
+        {
+            "audit": {"enabled": True, "path": str(log)},
+            "signing": {"private_key_path": str(attacker_private)},
+        }
+    )
+    AuditLog(forged).write_entry("rm -rf /prod", [], {}, PolicyDecision("ALLOW", (), ()))
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(f"mode: enforce\nsigning:\n  public_key_path: {attacker_public}\n")
+
+    loaded: list[Path] = []
+    real_load = signing.load_public_key
+    monkeypatch.setattr(
+        signing, "load_public_key", lambda path: loaded.append(path) or real_load(path)
+    )
+    identity = Identity("operator", frozenset({"ops"}))
+    team = snapshot(_dashboard(tmp_path, policy, log), identity)["teams"][0]
+    # Without a pinned key nothing vouches for signatures, and the policy's key is unused.
+    assert attacker_public not in loaded
+    assert "signature" not in team["audit_integrity"]["message"]
+
+    pinned = _dashboard(tmp_path, policy, log)
+    pinned.sources[0].audit_public_key_path = str(operator_public)
+    team = snapshot(pinned, identity)["teams"][0]
+    assert team["audit_integrity"]["valid"] is False  # only the operator key is trusted
+    assert "decisions" not in team
+    assert operator_private.exists()

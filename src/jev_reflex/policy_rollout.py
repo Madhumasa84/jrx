@@ -116,7 +116,9 @@ def simulate(
     if unsupported:
         raise ValueError("cannot replay configuration changes: " + ", ".join(unsupported))
     public_key = AuditLog.verification_key(baseline, public_key)
-    snapshot = audit_path.read_text(encoding="utf-8")
+    # Decode the exact bytes: text-mode reads would turn CR and CRLF into LF and hide
+    # record separators that verification rejects.
+    snapshot = audit_path.read_bytes().decode("utf-8")
     AuditLog.verify_snapshot(baseline, snapshot, public_key_path=public_key)
     report: dict[str, Any] = {
         "baseline_hash": policy_hash(baseline),

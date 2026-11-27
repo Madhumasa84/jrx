@@ -8,7 +8,7 @@ import io
 import json
 import os
 import stat
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -474,6 +474,23 @@ class AuditLog:
 
     write_override_entry = write_human_override
 
+    @staticmethod
+    def _display_record(line: str) -> dict[str, Any] | None:
+        """Decode one line for display, or None unless it is an object with an integer seq."""
+        if not line.strip():
+            return None
+        try:
+            # Reject duplicate members: readers must not disagree on content.
+            data = json.loads(line, object_pairs_hook=unique_object)
+        except (ValueError, RecursionError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        seq = data.get("seq")
+        if not isinstance(seq, int) or isinstance(seq, bool):
+            return None  # every display shows seq; a record without one is malformed
+        return data
+
     def _display_records(self) -> list[dict[str, Any]]:
         """Read records for display without verifying them; skip malformed lines."""
         log_path = self._get_log_path()
@@ -483,18 +500,36 @@ class AuditLog:
         try:
             with log_path.open("r", encoding="utf-8", newline="\n") as f:
                 for line in f:
-                    if not line.strip():
-                        continue
-                    try:
-                        # Reject duplicate members: readers must not disagree on content.
-                        data = json.loads(line, object_pairs_hook=unique_object)
-                    except (ValueError, RecursionError):
-                        continue
-                    if isinstance(data, dict):
+                    if (data := self._display_record(line)) is not None:
                         records.append(data)
         except (OSError, UnicodeError):
             return []
         return records
+
+    def _lines_from_end(self, block: int = 65536) -> Iterator[str]:
+        """Yield the log's lines newest first, reading only as far back as needed."""
+        try:
+            with self._get_log_path().open("rb") as f:
+                position = f.seek(0, os.SEEK_END)
+                remainder = b""
+                while position > 0:
+                    size = min(block, position)
+                    position -= size
+                    f.seek(position)
+                    # A UTF-8 sequence never contains b"\n", so splitting bytes is safe.
+                    pieces = (f.read(size) + remainder).split(b"\n")
+                    remainder = pieces[0]
+                    for raw in reversed(pieces[1:]):
+                        try:
+                            yield raw.decode("utf-8")
+                        except UnicodeDecodeError:
+                            continue
+                try:
+                    yield remainder.decode("utf-8")
+                except UnicodeDecodeError:
+                    return
+        except OSError:
+            return
 
     @staticmethod
     def _record_time(data: dict[str, Any]) -> datetime | None:
@@ -680,4 +715,10 @@ class AuditLog:
         """
         if n <= 0:
             return []
-        return self._display_records()[-n:][::-1]
+        records: list[dict[str, Any]] = []
+        for line in self._lines_from_end():
+            if (data := self._display_record(line)) is not None:
+                records.append(data)
+                if len(records) == n:
+                    break
+        return records

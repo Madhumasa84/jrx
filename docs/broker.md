@@ -210,7 +210,7 @@ For HA deployments with multiple broker instances, use a simple pattern:
 
 1. **Multiple broker instances**: Run 2-3 broker instances on different hosts
 2. **TCP load balancer**: Place a TCP load balancer (HAProxy, nginx stream, or cloud LB) in front
-3. **Same policy on every host**: Each broker loads its policy at startup (`reflex.yaml`, or the active revision from the host's staged rollout state). Brokers do not poll a central source.
+3. **Same policy on every host**: Each broker loads its policy at startup (`reflex.yaml`, or a revision from the host's staged rollout state). Brokers do not poll a central source. While a canary is in progress (`--percent` between 1 and 99), a broker selects the active or the candidate revision by hashing its configuration's repository root (or the configuration directory), so brokers with different configuration paths can serve different revisions. Promote to `--percent 100` or roll back before restarting brokers that must serve the same revision.
 
 ```
                 ┌─────────────┐
@@ -234,7 +234,7 @@ For HA deployments with multiple broker instances, use a simple pattern:
 
 **Key points:**
 - No leader election or clustering is needed
-- Each broker independently loads the same signed policy or rollout state
+- Each broker independently loads the same signed policy or rollout state; during a canary, its configuration path decides whether it serves the candidate
 - Policy changes reach a broker when it restarts after `jrx policy rollout promote` or a new signed `reflex.yaml`
 - The load balancer distributes client connections across healthy brokers
 - Clients use the load balancer address as the broker endpoint

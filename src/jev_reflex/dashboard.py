@@ -150,9 +150,16 @@ def snapshot(config: DashboardConfig, identity: Identity) -> dict[str, Any]:
             )
             # Verify and render the same captured bytes even if the log changes.
             audit_text = _read_audit_snapshot(audit_path)
-            # Verify as a reader (no private signing key), honouring the policy's
-            # signing.public_key_path and signing.require_signature.
-            valid, message = AuditLog.reader(audit_config).verify(
+            # Verify as a reader (no private signing key). This policy file is not
+            # signature-checked, so it must not choose the audit trust key: only the
+            # operator-pinned key verifies signatures. Its require_signature can only
+            # make verification stricter (no pinned key then fails closed).
+            reader_config = audit_config.model_copy(
+                update={
+                    "signing": audit_config.signing.model_copy(update={"public_key_path": None})
+                }
+            )
+            valid, message = AuditLog.reader(reader_config).verify(
                 Path(source.audit_public_key_path).expanduser()
                 if source.audit_public_key_path
                 else None,

@@ -429,7 +429,8 @@ def test_broker_start_waits_for_local_model_warm(monkeypatch, tmp_path):
         def wait(self, timeout=None):
             return 0
 
-    socket_dir = Path(tempfile.mkdtemp(prefix="jrx-", dir="/tmp"))
+    # Resolved: on macOS /tmp is a symlink, and broker directories refuse symlinks.
+    socket_dir = Path(tempfile.mkdtemp(prefix="jrx-", dir=Path("/tmp").resolve()))
     monkeypatch.setattr(broker_cli.subprocess, "Popen", Process)
 
     class Client:
