@@ -46,7 +46,11 @@ def _node() -> str | None:
 
 
 NODE = _node()
-pytestmark = pytest.mark.skipif(NODE is None, reason="needs Node.js with type stripping (22.6+)")
+# CI sets JRX_REQUIRE_NODE=1 so a runner without a suitable Node fails instead of skipping.
+REQUIRED = os.environ.get("JRX_REQUIRE_NODE") == "1"
+pytestmark = pytest.mark.skipif(
+    NODE is None and not REQUIRED, reason="needs Node.js with type stripping (22.6+)"
+)
 
 FAKES = {
     "verdict": '#!/bin/sh\ncat >/dev/null\nprintf \'%s\' \'{"block":"held","decision":"deny"}\'\n',
@@ -73,7 +77,7 @@ def _run(
     cwd: Path | None = None,
     real_jrx: bool = False,
 ) -> object:
-    assert NODE is not None
+    assert NODE is not None, "JRX_REQUIRE_NODE=1 but Node.js 22.6+ is not available"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     target = bin_dir / "jev-reflex"

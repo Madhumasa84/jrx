@@ -36,16 +36,19 @@ from jev_reflex.config import (
 from jev_reflex.policy_rollout import RolloutStore
 from jev_reflex.signing import Ed25519Signer, sign_file
 
-
-def _sudo_available() -> bool:
-    if os.environ.get("JRX_PRIVILEGED_TESTS") != "1" or os.geteuid() == 0:
-        return False
-    return subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode == 0
-
-
+# CI sets JRX_PRIVILEGED_TESTS=1; there a missing sudo or a root user fails the tests
+# instead of silently skipping them.
 pytestmark = pytest.mark.skipif(
-    not _sudo_available(), reason="needs JRX_PRIVILEGED_TESTS=1, a non-root user and sudo -n"
+    os.environ.get("JRX_PRIVILEGED_TESTS") != "1",
+    reason="set JRX_PRIVILEGED_TESTS=1 with a non-root user and password-less sudo",
 )
+
+
+@pytest.fixture(autouse=True)
+def _privileged_runner() -> None:
+    assert os.geteuid() != 0, "privileged trust tests must run as a non-root user"
+    probe = subprocess.run(["sudo", "-n", "true"], capture_output=True, check=False)
+    assert probe.returncode == 0, "JRX_PRIVILEGED_TESTS=1 but sudo -n is not available"
 
 
 def _sudo(*args: str) -> None:
