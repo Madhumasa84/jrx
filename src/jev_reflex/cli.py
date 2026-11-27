@@ -346,15 +346,27 @@ def _validated_mode(value: str | None) -> Mode | None:
     return value  # type: ignore[return-value]
 
 
+class PolicyLoadError(ValueError):
+    """The policy, or a trust input that selects it, could not be loaded."""
+
+
 def _load(path: Path | None, mode: str | None, cwd: Path | None = None) -> ReflexConfig:
+    mode_override = _validated_mode(mode)
     try:
         return load_config(
             path,
-            mode_override=_validated_mode(mode),
+            mode_override=mode_override,
             scope=str(cwd.resolve()) if cwd is not None else None,
         )
     except FileNotFoundError as exc:
         raise typer.BadParameter(str(exc)) from None
+    except ValueError as exc:
+        raise PolicyLoadError(str(exc)) from None
+
+
+def _policy_error_detail(exc: BaseException) -> str:
+    """The operator-facing reason a policy did not load (never shown to the agent)."""
+    return f" {terminal_line(exc)}." if isinstance(exc, PolicyLoadError) else ""
 
 
 def _provider(config: ReflexConfig, cwd: Path | None) -> RepositoryContextProvider:
@@ -617,14 +629,21 @@ def check(
         )
     except typer.BadParameter:
         raise
-    except (OSError, RuntimeError, ValueError, sqlite3.Error, subprocess.SubprocessError):
+    except (OSError, RuntimeError, ValueError, sqlite3.Error, subprocess.SubprocessError) as exc:
         # Same contract as exec: corrupt session/approval state is an input error.
         if json_output:
-            typer.echo(
-                json.dumps({"decision": "REVIEW", "error": "invalid input or configuration"})
-            )
+            error: dict[str, str] = {
+                "decision": "REVIEW",
+                "error": "invalid input or configuration",
+            }
+            if isinstance(exc, PolicyLoadError):
+                error["detail"] = terminal_line(exc)
+            typer.echo(json.dumps(error))
         else:
-            typer.echo("Configuration or input error. No action was executed.", err=True)
+            typer.echo(
+                "Configuration or input error. No action was executed." + _policy_error_detail(exc),
+                err=True,
+            )
         raise typer.Exit(code=2) from None
 
     _emit_result(result, json_output=json_output)
@@ -855,8 +874,12 @@ def exec_action(
         )
     except typer.BadParameter:
         raise
-    except (OSError, RuntimeError, ValueError, sqlite3.Error, subprocess.SubprocessError):
-        typer.echo("Configuration, input, or command error. No action was executed.", err=True)
+    except (OSError, RuntimeError, ValueError, sqlite3.Error, subprocess.SubprocessError) as exc:
+        typer.echo(
+            "Configuration, input, or command error. No action was executed."
+            + _policy_error_detail(exc),
+            err=True,
+        )
         raise typer.Exit(code=2) from None
 
     _emit_result(result, json_output=json_output)

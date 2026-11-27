@@ -316,32 +316,36 @@ Policy files can be cryptographically signed to prevent unauthorized modificatio
 
 **Setup:**
 
-1. Generate a keypair:
+1. Generate a keypair, keeping the private key off the evaluating host:
    ```bash
-   jrx policy sign reflex.yaml
+   jrx policy keygen --output-dir keys
    ```
-   This outputs a public key and private key in PEM format. Save the private key securely.
+   This writes `keys/policy_signing.key` (private, mode 0600) and `keys/policy_signing.pub`.
 
-2. Save the public key to a secure location (e.g., `/etc/jrx/public_key.pem`).
+2. Install the public key where the evaluating user can read but not change it
+   (see [Trust anchors](#trust-anchors-which-files-the-evaluating-user-must-not-control)),
+   for example `sudo install -o root -m 0644 keys/policy_signing.pub /etc/jrx/policy.pub`.
 
-3. Create a bootstrap configuration:
+3. Create a bootstrap configuration in `/etc/jrx/bootstrap.yaml`, also root-owned and `0644`
+   (`~/.jev-reflex/bootstrap.yaml` works but is no independent trust anchor: the agent's
+   user can edit it):
    ```yaml
-   # /etc/jrx/bootstrap.yaml or ~/.jev-reflex/bootstrap.yaml
    require_signature: true
-   public_key_path: /etc/jrx/public_key.pem
+   public_key_path: /etc/jrx/policy.pub
    signer_type: ed25519
    ```
 
 4. Sign the policy file:
    ```bash
-   jrx policy sign reflex.yaml --key /path/to/private_key.pem
+   jrx policy sign reflex.yaml --key keys/policy_signing.key
    ```
-   This creates `reflex.yaml.sig`.
+   This creates `reflex.yaml.sig`. `jrx policy status --config reflex.yaml` reports whether
+   the bootstrap, key and policy are protected from the evaluating user.
 
 **Behavior:**
 
 - When `require_signature: true` is set in the bootstrap config, JEV Reflex refuses to load `reflex.yaml` unless a valid signature exists
-- Missing or invalid signatures cause the engine to fail closed (refuse to start) rather than falling back to defaults
+- Missing or invalid signatures cause the engine to fail closed (refuse to start) rather than falling back to defaults; `jrx check` and `jrx exec` exit 2 and print the reason, hooks deny
 - This prevents attackers with filesystem write access from silently modifying policy settings
 
 **Signer types:**

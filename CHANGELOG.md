@@ -33,6 +33,7 @@
 
 ### Fixed
 
+- `jrx check` and `jrx exec` print why a policy could not be loaded (for example a failed signature or a trust-anchor refusal) after "No action was executed"; `check --json` adds it as `detail`. Hooks still give the agent only a generic reason.
 - Canary cohorts are keyed on the repository root, so every subdirectory of a repository gets the same revision.
 - `jrx policy test -c FILE` tests `FILE`, even when rollout state exists.
 - `jrx policy status` no longer prints fetch and override fields for a central source the runtime never polls. The docs now describe staged rollout as the only path from a central policy to runtime.
