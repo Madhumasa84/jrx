@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import yaml
@@ -39,7 +40,14 @@ class SecurityLoader(yaml.SafeLoader):
             raise yaml.constructor.ConstructorError(
                 None, None, "YAML tag is not supported in security configuration", None
             )
-        return super().construct_object(node, deep=deep)
+        value = super().construct_object(node, deep=deep)
+        # ``.inf``, ``.nan`` and overflowing literals such as ``1.0e+400`` have no
+        # JSON form either: a JSON dump turns them into null or invalid JSON.
+        if isinstance(value, float) and not math.isfinite(value):
+            raise yaml.constructor.ConstructorError(
+                None, None, "non-finite numbers are not supported in security configuration", None
+            )
+        return value
 
     def construct_mapping(self, node: Any, deep: bool = False) -> dict[Any, Any]:
         result: dict[Any, Any] = {}

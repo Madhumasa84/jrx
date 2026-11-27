@@ -4,10 +4,12 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from jev_reflex.cli import app
 from jev_reflex.policy_lint import lint_policy
+from jev_reflex.serialization import safe_yaml_load
 
 
 def lint(tmp_path, text):
@@ -262,3 +264,25 @@ def test_collection_tags_cannot_turn_scalar_keys_into_unhashable_values(tmp_path
     assert not report["valid"]
     assert codes(report) == {code}
     assert "private-fixture" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("value", [".inf", "-.Inf", ".NaN", "!!float .inf", "1.0e+400"])
+def test_non_finite_floats_are_rejected_like_the_runtime_loader(tmp_path, value):
+    # JSON has no infinity or NaN: such a value would reach the policy hash as null.
+    text = f"""
+mode: enforce
+audit: {{enabled: true}}
+mcp:
+  tools:
+    - server: data
+      name: query
+      effect: read
+      argument_schema: {{type: object, properties: {{limit: {{const: {value}}}}}}}
+"""
+    report = lint(tmp_path, text)
+    assert not report["valid"]
+    assert codes(report) == {"invalid_yaml"}
+    with pytest.raises(yaml.YAMLError):
+        safe_yaml_load(text)
+    finite = lint(tmp_path, text.replace(value, "1.5"))
+    assert finite["valid"], finite
