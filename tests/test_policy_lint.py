@@ -194,20 +194,29 @@ def test_duplicate_keys_are_detected_before_yaml_merge_flattening(tmp_path, text
     assert "duplicate_key" in codes(report)
 
 
-def test_aliases_and_explicit_merge_overrides_are_rejected_like_the_runtime_loader(tmp_path):
-    report = lint(
-        tmp_path,
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Without aliases, which are rejected first, only merge handling decides.
+        "<<: {<<: {mode: advisory}, mode: enforce}\naudit: {enabled: true}\n",
         """
-<<: {<<: {mode: advisory}, mode: enforce}
+mode: enforce
 audit: {enabled: true}
 mcp:
   tools:
-    - &first {server: data, name: first, effect: read}
-    - <<: *first
+    - {server: data, name: first, effect: read}
+    - <<: {server: data, name: first, effect: read}
       name: second
 """,
-    )
+    ],
+)
+def test_explicit_merge_overrides_are_rejected_like_the_runtime_loader(tmp_path, text):
+    report = lint(tmp_path, text)
     assert not report["valid"]
+    assert codes(report) == {"invalid_yaml"}
+
+
+def test_aliases_are_rejected_like_the_runtime_loader(tmp_path):
     aliases_only = lint(
         tmp_path,
         "mode: enforce\nhold_on: &h [destructive]\nreview_on: *h\naudit: {enabled: true}\n",
