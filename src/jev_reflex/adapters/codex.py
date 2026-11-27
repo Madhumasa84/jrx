@@ -6,54 +6,39 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..config import ReflexConfig
-from ..evaluator import DefaultEvaluator, DemoEvaluator
 from ..formatters import hook_context
 from ..models import EvaluationResult
-from ..policy import host_guard_denied
-from .generic import context_from_hook_payload
+from .harness import (
+    evaluate_harness_hook,
+    hook_error_reason,
+    host_verdict,
+    pretooluse_context,
+    pretooluse_denial,
+)
 
 
 def _hook_error() -> dict[str, Any]:
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": "JEV Reflex could not parse the hook input; action denied safely.",
-        }
-    }
+    return pretooluse_denial(hook_error_reason())
 
 
 def codex_hook_response(result: EvaluationResult, config: ReflexConfig) -> dict[str, Any]:
     """Map policy output to the currently supported Codex hook response shape."""
 
-    reason = hook_context(result)
-    should_block = result.decision == "HOLD" or (result.degraded and config.mode != "advisory")
-    # Codex PreToolUse parses but does not support "ask". In either
-    # non-advisory mode, REVIEW must therefore fail closed; additionalContext
-    # is informational and does not stop the tool call.
-    if config.mode != "advisory" and result.decision == "REVIEW":
-        should_block = True
-    if config.mode == "advisory":
-        should_block = False
-    if host_guard_denied(result):
-        should_block = True
+    return codex_shaped_response(result, config, hook_context(result))
 
-    if should_block:
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }
-        }
-    if result.decision != "ALLOW" or result.warnings:
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "additionalContext": reason,
-            }
-        }
-    return {}
+
+def codex_shaped_response(
+    result: EvaluationResult, config: ReflexConfig, reason: str
+) -> dict[str, Any]:
+    """The Codex PreToolUse contract, which parses but does not support "ask".
+
+    A REVIEW in an enforcing mode is therefore denied, and additionalContext is only
+    informational: it does not stop the call. DeepSeek's bridge speaks the same contract.
+    """
+
+    if host_verdict(result, config, can_ask=False) == "deny":
+        return pretooluse_denial(reason)
+    return pretooluse_context(result, reason)
 
 
 def evaluate_codex_hook(
@@ -62,10 +47,8 @@ def evaluate_codex_hook(
     config: ReflexConfig,
     demo: bool = False,
 ) -> tuple[EvaluationResult, dict[str, Any]]:
-    context = context_from_hook_payload(payload, config=config, provider_key="codex")
-    evaluator = DemoEvaluator(config) if demo else DefaultEvaluator(config)
-    result = evaluator.evaluate(context)
-    return result, codex_hook_response(result, config)
+    result, reason = evaluate_harness_hook(payload, config=config, demo=demo, provider_key="codex")
+    return result, codex_shaped_response(result, config, reason)
 
 
 def codex_hooks_json(command: str = "jev-reflex codex-hook") -> dict[str, Any]:

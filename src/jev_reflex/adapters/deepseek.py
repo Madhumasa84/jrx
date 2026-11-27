@@ -12,7 +12,8 @@ from typing import Any
 
 from ..config import ReflexConfig
 from ..models import EvaluationResult
-from .harness import evaluate_harness_hook, hook_error_reason, should_block
+from .codex import codex_shaped_response
+from .harness import evaluate_harness_hook, hook_error_reason, pretooluse_denial
 
 
 def deepseek_hook_response(
@@ -21,27 +22,13 @@ def deepseek_hook_response(
     *,
     reason: str | None = None,
 ) -> dict[str, Any]:
-    """Map policy output to the Codex-compatible DeepSeek bridge contract."""
+    """Map policy output to the Codex-compatible DeepSeek bridge contract.
 
-    message = reason or result.reason_summary()
-    # The dsh-hooks-codex bridge speaks the Codex PreToolUse contract, which cannot ask, so
-    # a REVIEW must be denied in every enforcing mode instead of running unattended.
-    if should_block(result, config, review_supported=False):
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": message,
-            }
-        }
-    if result.decision != "ALLOW" or result.warnings:
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "additionalContext": message,
-            }
-        }
-    return {}
+    The dsh-hooks-codex bridge speaks the Codex PreToolUse contract, which cannot ask,
+    so a REVIEW is denied in every enforcing mode instead of running unattended.
+    """
+
+    return codex_shaped_response(result, config, reason or result.reason_summary())
 
 
 def evaluate_deepseek_hook(
@@ -59,13 +46,7 @@ def evaluate_deepseek_hook(
 def deepseek_hook_error() -> dict[str, Any]:
     """Return a fail-safe DeepSeek bridge response."""
 
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": hook_error_reason(),
-        }
-    }
+    return pretooluse_denial(hook_error_reason())
 
 
 def deepseek_hooks_json(command: str = "jev-reflex deepseek-hook") -> dict[str, Any]:

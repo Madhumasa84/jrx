@@ -6,41 +6,32 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..config import ReflexConfig
-from ..evaluator import DefaultEvaluator, DemoEvaluator
 from ..formatters import hook_context
 from ..models import EvaluationResult
-from ..policy import host_guard_denied
-from .generic import context_from_hook_payload
-from .harness import should_block
+from .harness import (
+    evaluate_harness_hook,
+    hook_error_reason,
+    host_verdict,
+    pretooluse_context,
+    pretooluse_denial,
+)
 
 
 def _hook_error() -> dict[str, Any]:
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": "JEV Reflex could not parse the hook input; action denied safely.",
-        }
-    }
+    return pretooluse_denial(hook_error_reason())
 
 
 def claude_code_hook_response(result: EvaluationResult, config: ReflexConfig) -> dict[str, Any]:
     reason = hook_context(result)
+    verdict = host_verdict(result, config, can_ask=True)
+    if config.mode == "advisory" and verdict == "proceed":
+        return pretooluse_context(result, reason)
     output: dict[str, Any] = {"hookSpecificOutput": {"hookEventName": "PreToolUse"}}
-    specific = output["hookSpecificOutput"]
-
-    if config.mode == "advisory" and not host_guard_denied(result):
-        if result.decision != "ALLOW" or result.warnings:
-            specific["additionalContext"] = reason
-        return output if len(specific) > 1 else {}
-
-    if should_block(result, config, review_supported=True):
-        specific["permissionDecision"] = "deny"
-        specific["permissionDecisionReason"] = reason
-    elif result.decision == "REVIEW":
-        # Claude Code supports an explicit ask decision for PreToolUse.
-        specific["permissionDecision"] = "ask"
-        specific["permissionDecisionReason"] = reason
+    if verdict != "proceed":
+        # Claude Code supports an explicit ask decision for PreToolUse. JRX never
+        # sends "allow", which would skip Claude Code's own permission prompt.
+        output["hookSpecificOutput"]["permissionDecision"] = verdict
+        output["hookSpecificOutput"]["permissionDecisionReason"] = reason
     return output
 
 
@@ -50,9 +41,9 @@ def evaluate_claude_code_hook(
     config: ReflexConfig,
     demo: bool = False,
 ) -> tuple[EvaluationResult, dict[str, Any]]:
-    context = context_from_hook_payload(payload, config=config, provider_key="claude")
-    evaluator = DemoEvaluator(config) if demo else DefaultEvaluator(config)
-    result = evaluator.evaluate(context)
+    result, _reason = evaluate_harness_hook(
+        payload, config=config, demo=demo, provider_key="claude"
+    )
     return result, claude_code_hook_response(result, config)
 
 
