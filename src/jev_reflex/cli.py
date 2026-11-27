@@ -2012,6 +2012,16 @@ def audit_report(
             typer.echo(f"Triggered check: {name} ({count})")
 
 
+def _signal_text(value: object) -> str:
+    """Format a recorded signal like the writer's floats; show anything else inertly."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return f"{value:.2f}"
+        except OverflowError:  # an integer too large for a float
+            pass
+    return terminal_line(value)
+
+
 @audit_app.command("tail")
 def audit_tail(
     n: int = typer.Option(10, "-n", "--number", help="Number of entries to show.", min=1),
@@ -2057,17 +2067,26 @@ def audit_tail(
                 else:
                     typer.echo(f"Decision: {show(entry.get('policy_decision', ''))}")
                     typer.echo(f"Action: {show(entry.get('action_summary', ''))}")
-                    if entry.get("hard_rule_findings"):
+                    # Display records are unverified: render any shape without failing
+                    # midway through the listing.
+                    if findings := entry.get("hard_rule_findings"):
                         typer.echo("Hard rule findings:")
-                        for finding in entry["hard_rule_findings"]:
-                            typer.echo(
-                                f"  - {show(finding['check'])}: {show(finding['reason_code'])} "
-                                f"(triggered: {show(finding['triggered'])})"
-                            )
-                    if entry.get("jev_signals"):
+                        for finding in findings if isinstance(findings, list) else [findings]:
+                            if isinstance(finding, dict):
+                                typer.echo(
+                                    f"  - {show(finding.get('check', '?'))}: "
+                                    f"{show(finding.get('reason_code', '?'))} "
+                                    f"(triggered: {show(finding.get('triggered', '?'))})"
+                                )
+                            else:
+                                typer.echo(f"  - {show(finding)}")
+                    if signals := entry.get("jev_signals"):
                         typer.echo("JEV signals:")
-                        for signal, value in entry["jev_signals"].items():
-                            typer.echo(f"  - {show(signal)}: {value:.2f}")
+                        if isinstance(signals, dict):
+                            for signal, value in signals.items():
+                                typer.echo(f"  - {show(signal)}: {_signal_text(value)}")
+                        else:
+                            typer.echo(f"  - {show(signals)}")
                 typer.echo(f"Policy version hash: {show(entry.get('policy_version_hash', ''))}")
                 typer.echo(f"Entry hash: {show(entry.get('entry_hash', ''))}")
                 typer.echo("---")

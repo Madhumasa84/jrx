@@ -38,6 +38,7 @@
 - `jrx policy test -c FILE` tests `FILE`, even when rollout state exists.
 - `jrx policy status` no longer prints fetch and override fields for a central source the runtime never polls. The docs now describe staged rollout as the only path from a central policy to runtime.
 - Stability threshold crossings also count the review boundary for hold signals. `PolicyReloader` keeps the previous policy when the local override is invalid.
+- `jrx audit tail` renders records with malformed `hard_rule_findings` items or non-numeric `jev_signals` values instead of exiting 1 after partial output.
 
 ### Breaking / Upgrade Notes
 

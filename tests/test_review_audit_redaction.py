@@ -882,6 +882,51 @@ def test_tail_of_a_missing_or_empty_log_is_empty(tmp_path):
     assert AuditLog(config).tail(5) == []
 
 
+def test_plain_tail_renders_malformed_findings_and_signals_without_failing(tmp_path, monkeypatch):
+    lines = [
+        json.dumps(
+            {
+                "seq": 1,
+                "policy_decision": "HOLD",
+                "action_summary": "well formed",
+                "hard_rule_findings": [{"check": "git", "reason_code": "push", "triggered": True}],
+                "jev_signals": {"unsafe": 0.5},
+            }
+        ),
+        json.dumps(
+            {
+                "seq": 2,
+                "policy_decision": "HOLD",
+                "action_summary": "malformed items",
+                "hard_rule_findings": ["bare", {"check": "partial"}, 7],
+                "jev_signals": {"unsafe": "high", "huge": 10**400, "none": None},
+            }
+        ),
+        json.dumps(
+            {
+                "seq": 3,
+                "policy_decision": "HOLD",
+                "action_summary": "malformed containers",
+                "hard_rule_findings": "not a list",
+                "jev_signals": ["not", "a", "mapping"],
+            }
+        ),
+    ]
+    log, _ = _display_log(tmp_path, lines)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(app, ["audit", "tail", "-n", "3", "--path", str(log)])
+    # A malformed record must not stop the listing after partial output.
+    assert result.exit_code == 0, result.output
+    assert result.output.count("---") == 3
+    for seq in (1, 2, 3):
+        assert f"Seq: {seq}" in result.output
+    assert "  - git: push (triggered: True)" in result.output  # well-formed output unchanged
+    assert "  - unsafe: 0.50" in result.output
+    assert "  - unsafe: high" in result.output
+    assert "  - bare" in result.output and "  - not a list" in result.output
+
+
 @pytest.mark.parametrize("separator", [b"\r\n", b"\r"])
 def test_policy_replay_rejects_separators_that_verification_rejects(tmp_path, separator):
     from jev_reflex.policy_rollout import simulate
