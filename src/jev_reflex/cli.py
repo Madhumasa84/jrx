@@ -470,7 +470,6 @@ def _check_exit_code(result: EvaluationResult, config: ReflexConfig) -> int:
             result.decision,
             mode=config.mode,
             degraded=result.degraded,
-            strict_review=config.strict_review_required,
         )
         else 2
     )
@@ -924,7 +923,6 @@ def exec_action(
         result.decision,
         mode=loaded.mode,
         degraded=result.degraded,
-        strict_review=loaded.strict_review_required,
     ):
         if loaded.strict_review_required:
             typer.echo(

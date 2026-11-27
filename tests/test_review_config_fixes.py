@@ -447,10 +447,14 @@ def codes_of(report: dict) -> set[str]:
     return {issue["code"] for issue in report["issues"]}
 
 
-# Finding 7: the rollout gate ignored HOLD -> REVIEW under a mode that runs REVIEW.
+# Finding 7: the rollout gate ignored HOLD -> REVIEW under a mode that ran REVIEW unattended.
+# Since REVIEW never runs unattended in enforce mode either, the gate reports the transition
+# without counting it as newly executable, in both enforcing modes.
 
 
-def test_rollout_stage_gate_counts_hold_to_review_when_review_can_execute(tmp_path: Path) -> None:
+def test_rollout_stage_gate_reports_hold_to_review_without_unattended_execution(
+    tmp_path: Path,
+) -> None:
     audit = tmp_path / "audit.jsonl"
     data = {"mode": "enforce", "audit": {"enabled": True, "path": str(audit)}}
     baseline = ReflexConfig.model_validate(data)
@@ -482,14 +486,12 @@ def test_rollout_stage_gate_counts_hold_to_review_when_review_can_execute(tmp_pa
         command += ["--baseline", str(baseline_path), "--audit", str(audit), *extra]
         return CliRunner().invoke(app, command)
 
-    enforce = {**data, "hold_on": hold_on}
-    assert stage(enforce).exit_code == 2
-    allowed = stage(enforce, "--max-new-allows", "1")
-    assert allowed.exit_code == 0, allowed.output
-    assert json.loads(allowed.output)["simulation"]["changes"]["HOLD_to_REVIEW"] == 1
-    # Review mode never runs a REVIEW decision, so HOLD -> REVIEW is not a relaxation.
-    review = stage({**data, "mode": "review", "hold_on": hold_on})
-    assert review.exit_code == 0, review.output
+    for mode in ("enforce", "review"):
+        staged = stage({**data, "mode": mode, "hold_on": hold_on})
+        assert staged.exit_code == 0, staged.output
+        simulation = json.loads(staged.output)["simulation"]
+        assert simulation["changes"]["HOLD_to_REVIEW"] == 1
+        assert simulation["newly_executable"] == 0
 
 
 # Finding 8: non-core YAML tags gave process-dependent policies and hashes.

@@ -67,7 +67,9 @@ def test_execution_modes_are_distinct() -> None:
     assert execution_allowed("HOLD", mode="advisory")
     assert not execution_allowed("REVIEW", mode="review")
     assert not execution_allowed("HOLD", mode="enforce")
-    assert execution_allowed("REVIEW", mode="enforce")
+    # REVIEW never runs unattended in an enforcing mode: a caller must ask or deny.
+    assert not execution_allowed("REVIEW", mode="enforce")
+    assert execution_allowed("ALLOW", mode="enforce")
     assert not execution_allowed("ALLOW", mode="enforce", degraded=True)
 
 

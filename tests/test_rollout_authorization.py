@@ -345,7 +345,8 @@ def test_enforcement_relaxations_compare_modes(tmp_path: Path) -> None:
         {"mode": "review", "audit": {"enabled": True, "path": str(audit)}}
     )
     enforce = review.model_copy(update={"mode": "enforce"})
-    assert enforcement_relaxations(review, enforce) == ["REVIEW"]
+    # Neither review nor enforce runs a REVIEW unattended.
+    assert enforcement_relaxations(review, enforce) == []
     assert enforcement_relaxations(enforce, review) == []
     assert set(enforcement_relaxations(enforce, review.model_copy(update={"mode": "advisory"})))
     assert enforcement_relaxations(review, review) == []

@@ -50,7 +50,6 @@ def _executes(decision: Decision, config: ReflexConfig, degraded: bool) -> bool:
         decision,
         mode=config.mode,
         degraded=degraded,
-        strict_review=config.strict_review_required,
     )
 
 
