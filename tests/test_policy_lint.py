@@ -155,12 +155,13 @@ def test_missing_oversized_and_invalid_utf8_files(tmp_path, monkeypatch):
 
 
 def test_cli_is_offline_and_strict_warnings_fail(tmp_path, monkeypatch):
-    import jev_reflex.cli as cli
+    import jev_reflex.config as config_module
 
     def forbidden(*args, **kwargs):
         pytest.fail("Lint must not load or activate runtime policies")
 
-    monkeypatch.setattr(cli, "load_config", forbidden)
+    # Patch the source module: commands import load_config lazily from it.
+    monkeypatch.setattr(config_module, "load_config", forbidden)
     path = tmp_path / "policy.yaml"
     path.write_text("mode: advisory\n")
     result = CliRunner().invoke(app, ["policy", "lint", "-c", str(path), "--json"])
