@@ -411,7 +411,7 @@ jrx policy rollout rollback --bootstrap /etc/jrx/bootstrap.yaml
 
 `rollback` discards an in-progress candidate, or restores the previous fully promoted revision. The host's bootstrap file must be at one of the standard locations for `check`, `exec`, and hooks to select the staged policy. Production rollout operators should keep a copy of the currently active policy to use as the next staging baseline.
 
-The dashboard reads local audit logs, approval databases, rollout state, broker sockets, and Prometheus metrics endpoints for configured teams. It verifies audit integrity before showing decisions. Set an OIDC `view` rule for each repository and run the server on loopback. The browser requests an OIDC token and keeps it only in page memory. Use an authenticated HTTPS proxy for remote access.
+The dashboard reads local audit logs, approval databases, rollout state, broker sockets, and Prometheus metrics endpoints for configured teams. It verifies audit integrity before showing decisions, with signatures checked only against a source's pinned `audit_public_key_path` (never the policy file's `signing.public_key_path`). Set an OIDC `view` rule for each repository and run the server on loopback. The browser requests an OIDC token and keeps it only in page memory. Use an authenticated HTTPS proxy for remote access.
 
 ```yaml
 # dashboard.yaml

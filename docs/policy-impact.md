@@ -1,6 +1,6 @@
 # Preview policy changes on pull requests
 
-`jrx policy impact` replays recorded policy decisions against a proposed policy. The PR status shows coverage, new ALLOWs, HOLD-to-REVIEW transitions when present, and new HOLDs. For example,
+`jrx policy impact` replays recorded policy decisions against a proposed policy. The PR status shows coverage, new ALLOWs, HOLD-to-REVIEW transitions when present, and new HOLDs, followed by `enforcement relaxed` when the candidate's mode runs a decision class the baseline's mode blocked. For example,
 
 ```text
 500/540 replayed, 2 new ALLOW, 4 HOLD->REVIEW, 3 new HOLD
@@ -17,7 +17,7 @@ jrx policy impact --audit audit.jsonl --baseline baseline.yaml --candidate candi
 | Exit | Meaning |
 | --- | --- |
 | 0 | At least one matching decision was replayed and both configured limits were satisfied. |
-| 1 | A completed replay exceeded a configured limit. |
+| 1 | A completed replay exceeded a configured limit, or, when `--max-new-allows` or `--max-relaxations` is set, the candidate's mode relaxes enforcement (it runs a decision class the baseline's mode blocked). |
 | 2 | Unassessed. Examples include invalid policies, unsupported changes, failed audit verification and zero replayable decisions. |
 
 Both limits take nonnegative integers. `--max-new-allows 0` rejects either REVIEW → ALLOW or HOLD → ALLOW. `--max-relaxations 0` also rejects HOLD → REVIEW. Without either flag the check reports counts without a transition gate. `--github-output FILE` appends the single-line `counts` field after an assessed replay, including a limit breach.
