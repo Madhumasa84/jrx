@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from .audit import AuditLog
+from . import trust
+from .audit import AuditLog, record_event_type
 from .config import BootstrapConfig, ReflexConfig, parse_policy_bytes, verify_policy_signature
 from .models import Decision, DeterministicFinding
 from .policy import decide, execution_allowed
@@ -49,7 +50,6 @@ def _executes(decision: Decision, config: ReflexConfig, degraded: bool) -> bool:
         decision,
         mode=config.mode,
         degraded=degraded,
-        strict_review=config.strict_review_required,
     )
 
 
@@ -147,7 +147,7 @@ def simulate(
     with io.StringIO(snapshot) as handle:
         for line in handle:
             entry = json.loads(line)
-            if entry.get("event_type", "policy_decision") != "policy_decision":
+            if record_event_type(entry) != "policy_decision":
                 continue
             report["total"] += 1
             if not all(key in entry for key in ("risk_choice", "degraded", "forced_review")):
@@ -198,67 +198,6 @@ def simulate(
     return report
 
 
-def _evaluator_identity() -> tuple[int, frozenset[int]]:
-    """The effective uid and groups whose writes evaluation cannot trust."""
-    return os.geteuid(), frozenset({os.getegid(), *os.getgroups()})
-
-
-def _writable(details: os.stat_result, uid: int, groups: frozenset[int]) -> bool:
-    if details.st_uid == uid:
-        return True  # an owner can always chmod and then write
-    if details.st_mode & stat.S_IWOTH:
-        return True
-    return bool(details.st_mode & stat.S_IWGRP) and details.st_gid in groups
-
-
-def _protected_location(
-    path: Path, uid: int, groups: frozenset[int], depth: int = 0
-) -> Path | None:
-    """Return the real path when ``uid`` can neither rewrite nor replace it, else None.
-
-    Every component is checked from the root: the uid must not own it, and its directory
-    must not let the uid rename or unlink entries (a sticky directory protects entries
-    the uid does not own). Symlinks are followed only after that check, so the uid cannot
-    re-point them. A missing final component is protected when its directory is, since
-    the uid could then neither have removed it nor create it. Root can change anything,
-    and ACLs or capabilities beyond the mode bits are not modelled.
-    """
-    if uid == 0 or depth > 32 or not path.is_absolute() or ".." in path.parts:
-        return None
-    current = Path(path.anchor)
-    parts = path.parts[1:]
-    for index, name in enumerate(parts):
-        directory = os.stat(current)
-        child_path = current / name
-        if directory.st_uid == uid:
-            return None
-        try:
-            child = os.lstat(child_path)
-        except FileNotFoundError:
-            # Absent, and the uid cannot create it unless the directory is writable.
-            return None if _writable(directory, uid, groups) else Path(current, *parts[index:])
-        if child.st_uid == uid:
-            return None
-        if _writable(directory, uid, groups) and not directory.st_mode & stat.S_ISVTX:
-            return None
-        if stat.S_ISLNK(child.st_mode):
-            target = Path(os.readlink(child_path))
-            resolved = _protected_location(
-                target if target.is_absolute() else current / target, uid, groups, depth + 1
-            )
-            if resolved is None:
-                return None
-            current = resolved
-        else:
-            current = child_path
-    # A symlink target may be an intermediate directory; only the full path names a file.
-    if depth == 0 and current.exists():
-        final = os.stat(current)
-        if not stat.S_ISREG(final.st_mode) or _writable(final, uid, groups):
-            return None
-    return current
-
-
 class RolloutStore:
     """Atomic local activation state for a previously verified remote candidate.
 
@@ -266,9 +205,10 @@ class RolloutStore:
     it was verified from, and is verified again against the bootstrap trust
     roots on every read. Signatures only authenticate a policy's contents: which
     revision is active, the canary percentage, and rollbacks are trusted only
-    because the evaluating user cannot rewrite or replace the state file. While
-    ``bootstrap.require_signature`` is true, :meth:`select` therefore refuses
-    state that the evaluating user could change (see ``_protected_location``).
+    because the evaluating user cannot rewrite or replace the state file.
+    :meth:`select` therefore refuses state the evaluating user could change
+    whenever anything it would override is protected from that user (see
+    ``config.rollout_protection_reason`` and ``trust.protected_location``).
     Unsigned snapshots are accepted only when signatures are not required.
     """
 
@@ -277,14 +217,17 @@ class RolloutStore:
         self.bootstrap = bootstrap if bootstrap is not None else BootstrapConfig()
         self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
 
-    def _load(self) -> tuple[dict[str, Any], dict[str, ReflexConfig]] | None:
+    def _load(
+        self, path: Path | None = None
+    ) -> tuple[dict[str, Any], dict[str, ReflexConfig]] | None:
         """Read the state and every snapshot's verified policy."""
-        if not self.path.exists():
+        path = path or self.path
+        if not path.exists():
             return None
-        details = self.path.lstat()
+        details = path.lstat()
         if not stat.S_ISREG(details.st_mode) or details.st_mode & 0o022:
             raise ValueError("rollout state must be a regular file without group or world write")
-        data = json.loads(self.path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or data.get("schema") not in (1, SCHEMA):
             raise ValueError("unsupported rollout state")
         percent = data.get("percent")
@@ -309,7 +252,8 @@ class RolloutStore:
         return ValueError(
             f"rollout state {self.path} contains a policy snapshot without signature "
             "material, but bootstrap require_signature is true. Remove the rollout state "
-            "file and re-stage the policy with `jrx policy rollout stage`."
+            "file and re-stage the policy with `jrx policy rollout stage --bootstrap <file> "
+            "--baseline <reflex.yaml> --audit <audit.log>`."
         )
 
     def _verify_signature(self, raw: bytes, signature: bytes, trust_root: Any) -> None:
@@ -380,25 +324,35 @@ class RolloutStore:
             "percent": data["percent"],
         }
 
-    def _require_operator_controlled(self) -> None:
-        uid, groups = _evaluator_identity()
-        if _protected_location(self.path, uid, groups) is None:
+    def _operator_controlled_location(self, reason: str) -> Path:
+        identity = trust.evaluator_identity()
+        location = trust.protected_location(self.path.absolute(), identity)
+        if location is None:
             raise ValueError(
                 f"rollout state {self.path} can be rewritten or replaced by the evaluating "
-                f"user (uid {uid}), so it cannot authorize which signed policy is active "
-                "while bootstrap require_signature is true. Keep it in a directory only the "
-                "operator can write (for example a root-owned /var/lib/jrx with mode 0755), "
-                "set bootstrap rollout_state_path there, and re-run `jrx policy rollout "
-                "stage` as that operator; or remove rollout_state_path to use the signed "
-                "reflex.yaml directly."
+                f"user (uid {identity.uid}), so it cannot choose the active policy while "
+                f"{reason}. Keep it in a directory only the operator can write (for example "
+                "a root-owned /var/lib/jrx with mode 0755), set rollout_state_path there in "
+                "an operator-controlled bootstrap such as /etc/jrx/bootstrap.yaml, and re-run "
+                "`jrx policy rollout stage --bootstrap /etc/jrx/bootstrap.yaml ...` as that "
+                "operator; or remove rollout_state_path to use the policy file directly."
             )
+        return location
 
-    def select(self, scope: str) -> ReflexConfig | None:
-        if self.bootstrap.require_signature:
+    def select(self, scope: str, *, protect_because: str | None) -> ReflexConfig | None:
+        """Return the policy this scope should use, or None to keep the local file.
+
+        ``protect_because`` is why the state must be operator-controlled (see
+        ``config.rollout_protection_reason``); None only when nothing the state could
+        override is protected from the evaluating user.
+        """
+        path = self.path
+        if protect_because is not None:
             # Checked before reading so a missing file is trusted only when the
-            # evaluating user could not have removed it either.
-            self._require_operator_controlled()
-        loaded = self._load()
+            # evaluating user could not have removed it either, and read through
+            # the checked location.
+            path = self._operator_controlled_location(protect_because)
+        loaded = self._load(path)
         if loaded is None:
             return None
         data, policies = loaded

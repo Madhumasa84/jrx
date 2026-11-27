@@ -172,8 +172,8 @@ def lint_policy(path: Path | bytes, *, profile: PolicyProfile = "standard") -> d
                 "error",
                 "invalid_yaml",
                 "",
-                "Policy YAML is invalid, uses an unsupported tag or merge key, "
-                "or is too deeply nested.",
+                "Policy YAML is invalid, uses an unsupported tag, merge key or "
+                "non-finite number, or is too deeply nested.",
             )
         )
     except OSError:

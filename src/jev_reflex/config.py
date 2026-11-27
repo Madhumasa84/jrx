@@ -29,6 +29,8 @@ PolicyProfile = Literal["standard", "production"]
 
 DEFAULT_MODEL_ID = "ollaya-dev/coba-68m-ternary"
 DEFAULT_MODEL_DIR = "~/.jev-reflex/models"
+# Host-controlled bootstrap; when present it is used instead of ~/.jev-reflex/bootstrap.yaml.
+SYSTEM_BOOTSTRAP = Path("/etc/jrx/bootstrap.yaml")
 ONNX_MIN_FRAMING_TOKENS = 6  # CLS, three SEP tokens, and two option masks
 
 HOST_GUARD_CHECKS = frozenset({"tamper_guard", "taint_exfiltration", "agent_control"})
@@ -169,7 +171,11 @@ class PolicySourceConfig(BaseModel):
 
 
 class BootstrapConfig(BaseModel):
-    """Bootstrap configuration for signature verification requirements."""
+    """Bootstrap configuration for signature verification requirements.
+
+    ``require_signature`` lives in this file, so it is only as trustworthy as the
+    file's location: see :attr:`operator_controlled`.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -178,6 +184,23 @@ class BootstrapConfig(BaseModel):
     signer_type: str = "ed25519"
     policy_source: PolicySourceConfig = Field(default_factory=PolicySourceConfig)
     rollout_state_path: str | None = None
+
+    _path: Path | None = PrivateAttr(default=None)
+    _operator_controlled: bool = PrivateAttr(default=False)
+
+    @property
+    def path(self) -> Path | None:
+        """The bootstrap file that was loaded, or None for built-in defaults."""
+        return self._path
+
+    @property
+    def operator_controlled(self) -> bool:
+        """Whether the evaluating user could neither rewrite nor replace this bootstrap.
+
+        Only then is it an independent trust anchor: a bootstrap the agent's user can
+        edit can also set ``require_signature: false``.
+        """
+        return self._operator_controlled
 
 
 class CalibrationConfig(BaseModel):
@@ -835,7 +858,8 @@ def load_config(
         from .policy_rollout import RolloutStore
 
         selected = RolloutStore(Path(bootstrap.rollout_state_path), bootstrap).select(
-            _rollout_scope(scope, config_path)
+            _rollout_scope(scope, config_path),
+            protect_because=rollout_protection_reason(bootstrap, config_path),
         )
         if selected is not None:
             config = selected
@@ -885,8 +909,94 @@ def _verify_config_signature(
         raise ValueError(f"Signature verification failed for configuration file: {config_path}")
 
 
+def rollout_protection_reason(bootstrap: BootstrapConfig, config_path: Path) -> str | None:
+    """Why rollout state must be operator-controlled here, or None when nothing it
+    could replace is protected from the evaluating user (a same-user installation).
+
+    Rollout state chooses the effective policy. Signatures prove a revision's
+    contents, not which revision is active, so the state must be at least as
+    protected as what it would override.
+    """
+    from . import trust
+
+    if bootstrap.require_signature:
+        return "bootstrap require_signature is true"
+    if bootstrap.operator_controlled:
+        return f"bootstrap {bootstrap.path} is operator-controlled"
+    if trust.operator_controlled(config_path):
+        return f"policy {config_path.absolute()} is operator-controlled"
+    return None
+
+
+def trust_report(config_path: Path | None = None) -> dict[str, Any]:
+    """Which policy inputs the evaluating user could change, without loading the policy.
+
+    Uses the same predicates as :func:`load_config`, so ``issues`` lists exactly the
+    trust refusals evaluation would raise for this bootstrap and policy path.
+    """
+    from . import trust
+
+    identity = trust.evaluator_identity()
+    policy_path = (config_path if config_path is not None else Path("reflex.yaml")).absolute()
+    bootstrap = load_bootstrap_config()
+
+    def entry(path: str | Path | None) -> dict[str, Any] | None:
+        if path is None:
+            return None
+        return {
+            "path": str(path),
+            "exists": Path(path).exists(),
+            "operator_controlled": trust.operator_controlled(path, identity),
+        }
+
+    issues: list[str] = []
+    key = entry(bootstrap.public_key_path) if bootstrap.require_signature else None
+    if key is not None and bootstrap.operator_controlled and not key["operator_controlled"]:
+        issues.append(
+            "public key is writable by the evaluating user under an operator-controlled bootstrap"
+        )
+    state = entry(bootstrap.rollout_state_path)
+    reason = rollout_protection_reason(bootstrap, policy_path) if state is not None else None
+    if state is not None and reason is not None and not state["operator_controlled"]:
+        issues.append(f"rollout state is writable by the evaluating user while {reason}")
+    policy = entry(policy_path)
+    assert policy is not None
+    if not policy["exists"]:
+        issues.append("policy file does not exist")
+    signed_and_anchored = (
+        bootstrap.require_signature
+        and bootstrap.operator_controlled
+        and key is not None
+        and key["operator_controlled"]
+    )
+    protected = not identity.privileged and (
+        signed_and_anchored or bool(policy["operator_controlled"])
+    )
+    if state is not None:
+        protected = protected and bool(state["operator_controlled"])
+    return {
+        "evaluator": {
+            "uid": identity.uid,
+            "privileged": identity.privileged,
+            "capabilities": trust.bypassing_capabilities(),
+        },
+        "bootstrap": {
+            "path": str(bootstrap.path) if bootstrap.path else None,
+            "operator_controlled": bootstrap.operator_controlled,
+        },
+        "require_signature": bootstrap.require_signature,
+        "public_key": key,
+        "policy": policy,
+        "rollout_state": state,
+        # True only when the evaluating user can change neither the policy nor what selects it.
+        "policy_protected_from_evaluating_user": protected and not issues,
+        "issues": issues,
+    }
+
+
 def _bootstrap_verifier(bootstrap: BootstrapConfig) -> tuple[Any, bytes]:
     """Return the signer and public key of the bootstrap policy trust root."""
+    from . import trust
     from .signing import CosignSigner, Ed25519Signer, Signer, load_public_key
 
     if bootstrap.public_key_path is None:
@@ -895,6 +1005,20 @@ def _bootstrap_verifier(bootstrap: BootstrapConfig) -> tuple[Any, bytes]:
         )
 
     public_key_path = Path(bootstrap.public_key_path).expanduser()
+    if bootstrap.operator_controlled:
+        # The agent's user cannot disable require_signature in this bootstrap, so it
+        # must not be able to swap the key either. Read the key through the checked path.
+        identity = trust.evaluator_identity()
+        location = trust.protected_location(public_key_path.absolute(), identity)
+        if location is None:
+            raise ValueError(
+                f"public key {public_key_path} can be rewritten or replaced by the evaluating "
+                f"user (uid {identity.uid}), so it cannot authenticate policy for the "
+                f"operator-controlled bootstrap {bootstrap.path}. Install the key where only "
+                "the operator can write, for example `sudo install -o root -g root -m 0644 "
+                "policy.pub /etc/jrx/policy.pub`, and point public_key_path at it."
+            )
+        public_key_path = location
     public_key = load_public_key(public_key_path)
 
     # Create appropriate signer
@@ -926,18 +1050,21 @@ def load_bootstrap_config(path: Path | None = None) -> BootstrapConfig:
     against the bootstrap file's directory, never the process working
     directory (which is usually the agent's repository).
 
+    The system location wins whenever it exists, so an agent cannot shadow it with a
+    file in its own home directory. Whether the loaded file is an independent trust
+    anchor is recorded in :attr:`BootstrapConfig.operator_controlled`; its bytes are
+    read through the location that check verified.
+
     Args:
         path: Path to bootstrap config file. Defaults to standard locations.
 
     Returns:
         BootstrapConfig instance.
     """
+    from . import trust
+
     if path is None:
-        # Check standard locations
-        for candidate in [
-            Path("/etc/jrx/bootstrap.yaml"),
-            Path.home() / ".jev-reflex" / "bootstrap.yaml",
-        ]:
+        for candidate in [SYSTEM_BOOTSTRAP, Path.home() / ".jev-reflex" / "bootstrap.yaml"]:
             if candidate.exists():
                 path = candidate
                 break
@@ -948,13 +1075,15 @@ def load_bootstrap_config(path: Path | None = None) -> BootstrapConfig:
     if not path.exists():
         return BootstrapConfig()
 
-    raw = read_config_bytes(path)
+    path = path.absolute()
+    location = trust.protected_location(path, trust.evaluator_identity())
+    raw = read_config_bytes(location or path)
     loaded = _load_policy_yaml(raw, kind="bootstrap configuration")
     if not isinstance(loaded, dict):
         raise ValueError("bootstrap configuration root must be a YAML mapping")
 
     bootstrap = BootstrapConfig.model_validate(loaded)
-    base = path.absolute().parent
+    base = path.parent
     updates: dict[str, str] = {}
     for name in ("public_key_path", "rollout_state_path"):
         value = getattr(bootstrap, name)
@@ -963,4 +1092,8 @@ def load_bootstrap_config(path: Path | None = None) -> BootstrapConfig:
             if not resolved.is_absolute():
                 resolved = base / resolved
             updates[name] = str(resolved)
-    return bootstrap.model_copy(update=updates) if updates else bootstrap
+    if updates:
+        bootstrap = bootstrap.model_copy(update=updates)
+    bootstrap._path = path
+    bootstrap._operator_controlled = location is not None
+    return bootstrap

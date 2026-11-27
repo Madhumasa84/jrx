@@ -803,6 +803,81 @@ def test_real_policy_reload_record_is_typed_verified_and_kept_out_of_decisions(t
     assert log.verify()[0] is False
 
 
+def _reload_fixture(tmp_path: Path, marker: dict[str, object]) -> tuple[Path, ReflexConfig]:
+    """A replayable decision followed by ``marker``, chained like a writer would."""
+    path = tmp_path / "audit.jsonl"
+    config = ReflexConfig(mode="enforce", audit={"enabled": True, "path": str(path)})
+    AuditLog(config).write_entry(
+        "ls",
+        [],
+        {},
+        _decision("ALLOW"),
+        risk_choice="low",
+        risk_confidence=0.9,
+        degraded=False,
+        forced_review=False,
+    )
+    decision = json.loads(path.read_text())
+    record = {
+        "seq": 2,
+        "timestamp_utc": decision["timestamp_utc"],
+        "action_summary": "policy_reload",
+        "hard_rule_findings": [],
+        "jev_signals": {},
+        "policy_decision": "ALLOW",
+        "policy_version_hash": decision["policy_version_hash"],
+        **marker,
+    }
+    path.write_text(_rechain([decision, {k: v for k, v in record.items() if v is not None}]))
+    assert AuditLog(config).verify()[0] is True
+    return path, config
+
+
+def _decision_counts(path: Path, config: ReflexConfig, tmp_path: Path) -> list[object]:
+    from jev_reflex.policy_rollout import simulate
+
+    report = build_audit_report(path, config)
+    replay = simulate(path, config, config)
+    policy = tmp_path / "policy.yaml"
+    policy.write_text("mode: enforce\n")
+    team = snapshot(_dashboard(tmp_path, policy, path), Identity("operator", frozenset({"ops"})))
+    return [
+        report["decisions"]["ALLOW"],
+        report["other_events"],
+        replay["total"],
+        replay["skipped_legacy"],
+        team["teams"][0]["decisions"]["ALLOW"],
+    ]
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        {},  # the untyped shape PolicyReloader wrote before reloads were typed
+        {"policy_decision": None},  # no decision label at all
+        {"policy_decision": ""},
+    ],
+)
+def test_legacy_untyped_policy_reload_markers_are_reloads_in_every_reader(tmp_path, marker):
+    path, config = _reload_fixture(tmp_path, marker)
+    # One decision and one reload: no false ALLOW, no inflated replay totals, no failure.
+    assert _decision_counts(path, config, tmp_path) == [1, 1, 1, 0, 1]
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        {"event_type": "policy_decision"},  # explicitly typed decisions stay decisions
+        {"risk_choice": "low", "risk_confidence": 0.9, "degraded": False, "forced_review": False},
+        {"hard_rule_findings": [{"check": "git", "triggered": False}]},
+    ],
+)
+def test_decisions_that_only_share_the_reload_summary_stay_decisions(tmp_path, marker):
+    path, config = _reload_fixture(tmp_path, marker)
+    allow, other_events, total, *_, dashboard_allow = _decision_counts(path, config, tmp_path)
+    assert (allow, other_events, total, dashboard_allow) == (2, 0, 2, 2)
+
+
 @pytest.mark.parametrize("event_type", ["human_override", "", "POLICY_RELOAD"])
 def test_write_entry_rejects_other_event_types(tmp_path, event_type):
     config = ReflexConfig(audit={"enabled": True, "path": str(tmp_path / "audit.jsonl")})
@@ -882,6 +957,51 @@ def test_tail_of_a_missing_or_empty_log_is_empty(tmp_path):
     assert AuditLog(config).tail(5) == []
 
 
+def test_plain_tail_renders_malformed_findings_and_signals_without_failing(tmp_path, monkeypatch):
+    lines = [
+        json.dumps(
+            {
+                "seq": 1,
+                "policy_decision": "HOLD",
+                "action_summary": "well formed",
+                "hard_rule_findings": [{"check": "git", "reason_code": "push", "triggered": True}],
+                "jev_signals": {"unsafe": 0.5},
+            }
+        ),
+        json.dumps(
+            {
+                "seq": 2,
+                "policy_decision": "HOLD",
+                "action_summary": "malformed items",
+                "hard_rule_findings": ["bare", {"check": "partial"}, 7],
+                "jev_signals": {"unsafe": "high", "huge": 10**400, "none": None},
+            }
+        ),
+        json.dumps(
+            {
+                "seq": 3,
+                "policy_decision": "HOLD",
+                "action_summary": "malformed containers",
+                "hard_rule_findings": "not a list",
+                "jev_signals": ["not", "a", "mapping"],
+            }
+        ),
+    ]
+    log, _ = _display_log(tmp_path, lines)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(app, ["audit", "tail", "-n", "3", "--path", str(log)])
+    # A malformed record must not stop the listing after partial output.
+    assert result.exit_code == 0, result.output
+    assert result.output.count("---") == 3
+    for seq in (1, 2, 3):
+        assert f"Seq: {seq}" in result.output
+    assert "  - git: push (triggered: True)" in result.output  # well-formed output unchanged
+    assert "  - unsafe: 0.50" in result.output
+    assert "  - unsafe: high" in result.output
+    assert "  - bare" in result.output and "  - not a list" in result.output
+
+
 @pytest.mark.parametrize("separator", [b"\r\n", b"\r"])
 def test_policy_replay_rejects_separators_that_verification_rejects(tmp_path, separator):
     from jev_reflex.policy_rollout import simulate
@@ -908,7 +1028,10 @@ def test_policy_replay_rejects_separators_that_verification_rejects(tmp_path, se
         simulate(log, config, config)
 
 
-def test_dashboard_never_lets_an_unsigned_policy_choose_the_audit_key(tmp_path, monkeypatch):
+@pytest.mark.parametrize("require_signature", [False, True])
+def test_dashboard_never_lets_an_unsigned_policy_choose_the_audit_key(
+    tmp_path, monkeypatch, require_signature
+):
     import jev_reflex.signing as signing
 
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -925,7 +1048,11 @@ def test_dashboard_never_lets_an_unsigned_policy_choose_the_audit_key(tmp_path, 
     )
     AuditLog(forged).write_entry("rm -rf /prod", [], {}, PolicyDecision("ALLOW", (), ()))
     policy = tmp_path / "policy.yaml"
-    policy.write_text(f"mode: enforce\nsigning:\n  public_key_path: {attacker_public}\n")
+    policy.write_text(
+        "mode: enforce\nsigning:\n"
+        f"  require_signature: {str(require_signature).lower()}\n"
+        f"  public_key_path: {attacker_public}\n"
+    )
 
     loaded: list[Path] = []
     real_load = signing.load_public_key
@@ -936,11 +1063,49 @@ def test_dashboard_never_lets_an_unsigned_policy_choose_the_audit_key(tmp_path, 
     team = snapshot(_dashboard(tmp_path, policy, log), identity)["teams"][0]
     # Without a pinned key nothing vouches for signatures, and the policy's key is unused.
     assert attacker_public not in loaded
-    assert "signature" not in team["audit_integrity"]["message"]
+    if require_signature:
+        assert team["audit_integrity"]["valid"] is False  # it can only fail closed
+        assert "decisions" not in team
+    else:
+        assert "signature" not in team["audit_integrity"]["message"]
 
     pinned = _dashboard(tmp_path, policy, log)
     pinned.sources[0].audit_public_key_path = str(operator_public)
     team = snapshot(pinned, identity)["teams"][0]
     assert team["audit_integrity"]["valid"] is False  # only the operator key is trusted
     assert "decisions" not in team
+    assert loaded == [operator_public]  # the source policy's key is never loaded
     assert operator_private.exists()
+
+
+def test_report_and_dashboard_parse_each_verified_record_once(tmp_path, monkeypatch):
+    import jev_reflex.audit as audit_module
+    import jev_reflex.audit_report as report_module
+    import jev_reflex.dashboard as dashboard_module
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    log = tmp_path / "audit.jsonl"
+    config = ReflexConfig.model_validate({"audit": {"enabled": True, "path": str(log)}})
+    for command in ("ls", "pwd", "id"):
+        AuditLog(config).write_entry(command, [], {}, PolicyDecision("ALLOW", (), ()))
+    policy = tmp_path / "policy.yaml"
+    policy.write_text("mode: enforce\n")
+
+    parsed: list[str] = []
+    real = audit_module.parse_audit_record
+
+    def counting(line: str) -> dict[str, object]:
+        parsed.append(line)
+        return real(line)
+
+    for module in (audit_module, report_module, dashboard_module):
+        monkeypatch.setattr(module, "parse_audit_record", counting, raising=False)
+
+    # Verification parses each record canonically; the readers reuse its framing
+    # without re-serializing every verified record a second time.
+    assert build_audit_report(log, config)["decisions"]["ALLOW"] == 3
+    assert len(parsed) == 3
+    parsed.clear()
+    team = snapshot(_dashboard(tmp_path, policy, log), Identity("operator", frozenset({"ops"})))
+    assert team["teams"][0]["decisions"]["ALLOW"] == 3
+    assert len(parsed) == 3

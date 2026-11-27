@@ -10,7 +10,7 @@ from ..models import EvaluationResult
 from .harness import (
     evaluate_harness_hook,
     hook_error_reason,
-    permission_decision,
+    host_verdict,
 )
 
 
@@ -22,11 +22,12 @@ def antigravity_hook_response(
 ) -> dict[str, Any]:
     """Map JEV Reflex policy to Antigravity's allow/ask/deny contract."""
 
-    decision = permission_decision(result, config)
-    if decision == "ask":
-        # Review must remain an explicit user decision even when Antigravity
-        # has a cached "Always Allow" permission for the tool.
-        decision = "force_ask"
+    # "allow" delegates to the next hook or Antigravity's default policy; it is not
+    # auto-approval. A review must remain an explicit user decision even when
+    # Antigravity has a cached "Always Allow" permission, hence "force_ask".
+    decision = {"proceed": "allow", "ask": "force_ask", "deny": "deny"}[
+        host_verdict(result, config, can_ask=True)
+    ]
     output: dict[str, Any] = {"decision": decision}
     if reason and (decision != "allow" or result.decision != "ALLOW" or result.warnings):
         output["reason"] = reason

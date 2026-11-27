@@ -39,7 +39,17 @@ jobs:
       - name: Cache image for the sandbox integration tests
         if: runner.os == 'Linux'
         run: docker pull python:3.11-slim
-      - run: python -m pytest
+      - name: Test suite (skip reasons listed)
+        run: python -m pytest -rs
+        env:
+          # Real root-owned trust-anchor tests (tests/test_bootstrap_trust_privileged.py).
+          JRX_PRIVILEGED_TESTS: "1"
+          # The TypeScript bridge tests must run, not skip, on CI.
+          JRX_REQUIRE_NODE: "1"
+      - name: JRX-01 development pilot tests (outside default discovery)
+        run: python -m pytest -rs eval/jrx-01
+      - name: Workload evaluation harness self-test
+        run: python -B -m benchmarks.workloads --self-test
       - name: Deterministic benchmark regression
         run: python -B benchmarks/run.py --backend deterministic --verify-hashes --skip-latency --baseline benchmarks/results/v0.2.0-step3-deterministic.json --fail-on-regression
       - run: python -m ruff check .

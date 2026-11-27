@@ -272,9 +272,9 @@ class PolicyMerger:
             merged_data["thresholds"]["hold"] = merged_strong
         merged_data["thresholds"]["review"] = merged_review
 
-        # Review and enforce are incomparable: review adds confirmation for
-        # REVIEW but can permit confirmed HOLD actions that enforce forbids.
-        # Only advisory can safely be tightened to a different mode locally.
+        # Neither review nor enforce runs a REVIEW unattended, but review can
+        # permit confirmed HOLD actions that enforce forbids. Only advisory can
+        # safely be tightened to a different mode locally.
         mode_strictness = {"advisory": 0, "enforce": 1, "review": 1}
         central_strictness = mode_strictness[central.mode]
         local_strictness = mode_strictness[local.mode]

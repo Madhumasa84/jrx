@@ -54,10 +54,10 @@ def _operator_controlled(monkeypatch: pytest.MonkeyPatch) -> None:
     """Evaluate as a uid that owns none of the test files (operator-written state)."""
     import os
 
-    from jev_reflex import policy_rollout
+    from jev_reflex import trust
 
     other = os.geteuid() + 100_000
-    monkeypatch.setattr(policy_rollout, "_evaluator_identity", lambda: (other, frozenset()))
+    monkeypatch.setattr(trust, "evaluator_identity", lambda: trust.Identity(other, frozenset()))
 
 
 # Finding 1: unsigned rollout state replaced the signature-verified policy.
@@ -261,6 +261,19 @@ def test_rollout_stage_cli_keeps_verified_bytes_for_both_trust_roots(
             }
         )
     )
+    # Swap the baseline right after its signature verifies (TOCTOU): staging must
+    # keep the bytes it verified, not re-read the file.
+    verified = baseline_path.read_bytes()
+    swapped: list[bytes] = []
+    real_verify = config_module.verify_policy_signature
+
+    def verify_then_swap(data: bytes, signature: bytes, settings: BootstrapConfig) -> None:
+        real_verify(data, signature, settings)
+        if not swapped:
+            relaxed = baseline.model_copy(update={"mode": "advisory"})
+            swapped.append(_write_policy(baseline_path, relaxed).read_bytes())
+
+    monkeypatch.setattr(config_module, "verify_policy_signature", verify_then_swap)
     runner = CliRunner()
     staged = runner.invoke(
         app,
@@ -277,6 +290,12 @@ def test_rollout_stage_cli_keeps_verified_bytes_for_both_trust_roots(
         ],
     )
     assert staged.exit_code == 0, staged.output
+    assert swapped and swapped[0] != verified  # the swap ran during the successful stage
+    state = json.loads((tmp_path / "state" / "rollout.json").read_text())
+    assert base64.b64decode(state["active"]["raw"]) == verified
+    assert state["active"]["hash"] == policy_hash(baseline)
+    monkeypatch.setattr(config_module, "verify_policy_signature", real_verify)
+    baseline_path.write_bytes(verified)  # runtime verifies the local file again below
     promoted = runner.invoke(
         app, ["policy", "rollout", "promote", "--bootstrap", str(bootstrap), "--percent", "100"]
     )
@@ -447,10 +466,14 @@ def codes_of(report: dict) -> set[str]:
     return {issue["code"] for issue in report["issues"]}
 
 
-# Finding 7: the rollout gate ignored HOLD -> REVIEW under a mode that runs REVIEW.
+# Finding 7: the rollout gate ignored HOLD -> REVIEW under a mode that ran REVIEW unattended.
+# Since REVIEW never runs unattended in enforce mode either, the gate reports the transition
+# without counting it as newly executable, in both enforcing modes.
 
 
-def test_rollout_stage_gate_counts_hold_to_review_when_review_can_execute(tmp_path: Path) -> None:
+def test_rollout_stage_gate_reports_hold_to_review_without_unattended_execution(
+    tmp_path: Path,
+) -> None:
     audit = tmp_path / "audit.jsonl"
     data = {"mode": "enforce", "audit": {"enabled": True, "path": str(audit)}}
     baseline = ReflexConfig.model_validate(data)
@@ -482,14 +505,12 @@ def test_rollout_stage_gate_counts_hold_to_review_when_review_can_execute(tmp_pa
         command += ["--baseline", str(baseline_path), "--audit", str(audit), *extra]
         return CliRunner().invoke(app, command)
 
-    enforce = {**data, "hold_on": hold_on}
-    assert stage(enforce).exit_code == 2
-    allowed = stage(enforce, "--max-new-allows", "1")
-    assert allowed.exit_code == 0, allowed.output
-    assert json.loads(allowed.output)["simulation"]["changes"]["HOLD_to_REVIEW"] == 1
-    # Review mode never runs a REVIEW decision, so HOLD -> REVIEW is not a relaxation.
-    review = stage({**data, "mode": "review", "hold_on": hold_on})
-    assert review.exit_code == 0, review.output
+    for mode in ("enforce", "review"):
+        staged = stage({**data, "mode": mode, "hold_on": hold_on})
+        assert staged.exit_code == 0, staged.output
+        simulation = json.loads(staged.output)["simulation"]
+        assert simulation["changes"]["HOLD_to_REVIEW"] == 1
+        assert simulation["newly_executable"] == 0
 
 
 # Finding 8: non-core YAML tags gave process-dependent policies and hashes.

@@ -10,6 +10,7 @@ propagated. Anything it cannot resolve is marked on the word or makes the plan o
 from __future__ import annotations
 
 import re
+import shlex
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from typing import NamedTuple
@@ -1510,12 +1511,18 @@ _SU_VALUE_LONG = frozenset(
 
 
 def su_invocation(argv: tuple[str, ...]) -> SuInvocation:
-    """Parse ``su``/``runuser``, whose util-linux getopt accepts options after the user."""
+    """Parse ``su``/``runuser``, whose util-linux getopt accepts options after the user.
+
+    ``runuser -u USER [--] COMMAND [ARG...]`` runs COMMAND directly, without a shell; that
+    argv is returned as the script (quoted, so it lexes back to the same words).
+    """
     script = None
+    user_mode = False  # runuser -u/--user: the command follows the options
     index = 1
     while index < len(argv):
         arg = argv[index]
         if arg == "--":
+            index += 1
             break
         name, equals, value = arg.partition("=")
         if arg in {"-h", "--help", "-V", "--version"}:
@@ -1526,6 +1533,7 @@ def su_invocation(argv: tuple[str, ...]) -> SuInvocation:
                 value = argv[index] if index < len(argv) else ""
             if name in {"--command", "--session-command"}:
                 script = value
+            user_mode = user_mode or name == "--user"
         elif arg.startswith("-") and not arg.startswith("--") and len(arg) > 1:
             for position, letter in enumerate(arg[1:], 1):
                 if letter in _SU_VALUE_LETTERS:
@@ -1535,8 +1543,13 @@ def su_invocation(argv: tuple[str, ...]) -> SuInvocation:
                         value = argv[index] if index < len(argv) else ""
                     if letter == "c":
                         script = value
+                    user_mode = user_mode or letter == "u"
                     break
+        elif user_mode:
+            break  # the first operand after -u starts the command
         index += 1
+    if script is None and user_mode and program(argv[0]) == "runuser" and index < len(argv):
+        script = shlex.join(argv[index:])
     return SuInvocation(True, script)
 
 

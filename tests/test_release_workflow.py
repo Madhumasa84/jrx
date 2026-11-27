@@ -151,3 +151,26 @@ def test_release_runbook_requires_reviewed_pr_and_successful_tag_run(tmp_path):
     calls = [json.loads(line) for line in log.read_text().splitlines()]
     assert len(calls) == 3
     assert calls[-1] == ["gh", "run", "watch", "123", "--exit-status"]
+
+
+def test_release_verification_pins_the_identity_the_workflow_signs_with() -> None:
+    """The operator script checks the signer this workflow actually is.
+
+    Keyless signatures carry the workflow file path and the ref that triggered it.
+    The release workflow runs on version tags, so the script must pin
+    ``.github/workflows/release.yml@refs/tags/<tag>`` and GitHub's OIDC issuer.
+    """
+    root = Path(__file__).parents[1]
+    workflow = yaml.safe_load((root / ".github" / "workflows" / "release.yml").read_text())
+    triggers = workflow.get("on") or workflow.get(True)
+    assert triggers["push"]["tags"] == ["v*.*.*"]
+    steps = [step for job in workflow["jobs"].values() for step in job.get("steps", [])]
+    assert any("cosign sign" in str(step.get("run", "")) for step in steps)
+    assert any("cosign attest" in str(step.get("run", "")) for step in steps)
+    script = (root / "scripts" / "verify-release.sh").read_text()
+    assert '/.github/workflows/release.yml@refs/tags/${tag}"' in script
+    assert 'issuer="https://token.actions.githubusercontent.com"' in script
+    assert "verify-attestation" in script and "--type spdxjson" in script
+    doc = (root / "docs" / "releases" / "verify.md").read_text()
+    assert "release.yml@refs/tags/vX.Y.Z" in doc
+    subprocess.run(["bash", "-n", str(root / "scripts" / "verify-release.sh")], check=True)

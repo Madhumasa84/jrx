@@ -72,12 +72,17 @@ def test_rollout_store_canary_promotion_rollback_and_permissions(tmp_path: Path)
     store = RolloutStore(tmp_path / "state.json")
     store.stage(baseline, candidate)
     store.promote(10)
-    selected = {policy_hash(store.select(f"repository-{index}")) for index in range(1000)}
+    selected = {
+        policy_hash(store.select(f"repository-{index}", protect_because=None))
+        for index in range(1000)
+    }
     assert selected == {policy_hash(baseline), policy_hash(candidate)}
-    assert policy_hash(store.select("repository-1")) == policy_hash(store.select("repository-1"))
+    assert policy_hash(store.select("repository-1", protect_because=None)) == policy_hash(
+        store.select("repository-1", protect_because=None)
+    )
     store.rollback()
     assert store.status()["candidate_hash"] is None
-    assert policy_hash(store.select("repository-1")) == policy_hash(baseline)
+    assert policy_hash(store.select("repository-1", protect_because=None)) == policy_hash(baseline)
     store.stage(baseline, candidate)
     store.promote(100)
     assert store.status()["active_hash"] == policy_hash(candidate)

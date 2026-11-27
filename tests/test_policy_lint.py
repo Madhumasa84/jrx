@@ -4,10 +4,12 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from jev_reflex.cli import app
 from jev_reflex.policy_lint import lint_policy
+from jev_reflex.serialization import safe_yaml_load
 
 
 def lint(tmp_path, text):
@@ -155,12 +157,13 @@ def test_missing_oversized_and_invalid_utf8_files(tmp_path, monkeypatch):
 
 
 def test_cli_is_offline_and_strict_warnings_fail(tmp_path, monkeypatch):
-    import jev_reflex.cli as cli
+    import jev_reflex.config as config_module
 
     def forbidden(*args, **kwargs):
         pytest.fail("Lint must not load or activate runtime policies")
 
-    monkeypatch.setattr(cli, "load_config", forbidden)
+    # Patch the source module: commands import load_config lazily from it.
+    monkeypatch.setattr(config_module, "load_config", forbidden)
     path = tmp_path / "policy.yaml"
     path.write_text("mode: advisory\n")
     result = CliRunner().invoke(app, ["policy", "lint", "-c", str(path), "--json"])
@@ -191,20 +194,29 @@ def test_duplicate_keys_are_detected_before_yaml_merge_flattening(tmp_path, text
     assert "duplicate_key" in codes(report)
 
 
-def test_aliases_and_explicit_merge_overrides_are_rejected_like_the_runtime_loader(tmp_path):
-    report = lint(
-        tmp_path,
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Without aliases, which are rejected first, only merge handling decides.
+        "<<: {<<: {mode: advisory}, mode: enforce}\naudit: {enabled: true}\n",
         """
-<<: {<<: {mode: advisory}, mode: enforce}
+mode: enforce
 audit: {enabled: true}
 mcp:
   tools:
-    - &first {server: data, name: first, effect: read}
-    - <<: *first
+    - {server: data, name: first, effect: read}
+    - <<: {server: data, name: first, effect: read}
       name: second
 """,
-    )
+    ],
+)
+def test_explicit_merge_overrides_are_rejected_like_the_runtime_loader(tmp_path, text):
+    report = lint(tmp_path, text)
     assert not report["valid"]
+    assert codes(report) == {"invalid_yaml"}
+
+
+def test_aliases_are_rejected_like_the_runtime_loader(tmp_path):
     aliases_only = lint(
         tmp_path,
         "mode: enforce\nhold_on: &h [destructive]\nreview_on: *h\naudit: {enabled: true}\n",
@@ -261,3 +273,44 @@ def test_collection_tags_cannot_turn_scalar_keys_into_unhashable_values(tmp_path
     assert not report["valid"]
     assert codes(report) == {code}
     assert "private-fixture" not in json.dumps(report)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "!!omap [{git_risk: enforce}]",
+        "!!pairs [{git_risk: enforce}]",
+        "!!omap []",
+        "!!pairs []",
+        "!!set {git_risk: null}",
+    ],
+)
+def test_well_formed_non_core_collections_are_rejected_by_tag(tmp_path, value):
+    # Well-formed values pass the constructors' shape checks, so only the tag
+    # filter itself rejects them; the key-position cases above would also fail
+    # on shape alone.
+    report = lint(tmp_path, f"mode: enforce\naudit: {{enabled: true}}\nrule_modes: {value}\n")
+    assert not report["valid"]
+    assert codes(report) == {"invalid_yaml"}
+
+
+@pytest.mark.parametrize("value", [".inf", "-.Inf", ".NaN", "!!float .inf", "1.0e+400"])
+def test_non_finite_floats_are_rejected_like_the_runtime_loader(tmp_path, value):
+    # JSON has no infinity or NaN: such a value would reach the policy hash as null.
+    text = f"""
+mode: enforce
+audit: {{enabled: true}}
+mcp:
+  tools:
+    - server: data
+      name: query
+      effect: read
+      argument_schema: {{type: object, properties: {{limit: {{const: {value}}}}}}}
+"""
+    report = lint(tmp_path, text)
+    assert not report["valid"]
+    assert codes(report) == {"invalid_yaml"}
+    with pytest.raises(yaml.YAMLError):
+        safe_yaml_load(text)
+    finite = lint(tmp_path, text.replace(value, "1.5"))
+    assert finite["valid"], finite

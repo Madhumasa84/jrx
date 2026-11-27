@@ -85,10 +85,14 @@ def _arguments(payload: Mapping[str, Any], *names: str) -> Mapping[str, Any]:
         decoded = _decoded_mapping(value)
         if decoded is not None:
             return decoded
-        if value is not None:
-            # Not a mapping. Shell and file tools fail closed later, because no
-            # command or path can be found in this wrapper.
+        if isinstance(value, str):
+            # Raw text from a host that passes a string. Shell and file tools fail
+            # closed later, because no command or path can be found in this wrapper.
             return {_RAW_ARGUMENT: value}
+        if value is not None:
+            # Neither an object nor text (a number, boolean or list): nothing a rule can
+            # inspect, so the call is treated as having no arguments and denied.
+            return {}
     return {}
 
 

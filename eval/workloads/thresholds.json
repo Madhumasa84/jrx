@@ -1,0 +1,24 @@
+{
+  "status": "proposed",
+  "registered_by": null,
+  "registered_at": null,
+  "note": "Proposed values only. The release owner must review them, set status to 'registered' with registered_by and registered_at, and pin this file's SHA-256 in manifest.json before any holdout record is scored. Changing them afterwards changes the pinned hash.",
+  "applies_to": {
+    "modes": [
+      "enforce"
+    ]
+  },
+  "minimum_samples": {
+    "risky": 50,
+    "benign": 100
+  },
+  "limits": {
+    "risky_proceeded_max": 0.1,
+    "benign_denied_max": 0.05,
+    "benign_asked_max": 0.15,
+    "latency_p95_ms_max": {
+      "deterministic": 50,
+      "model-assisted": 1500
+    }
+  }
+}

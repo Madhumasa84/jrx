@@ -33,7 +33,7 @@
 
 JEV Reflex (`jrx`) evaluates proposed commands and tool calls before execution. It combines local security checks with semantic risk signals from a local CPU ONNX model or hosted TypeSafe JEV, then applies a deterministic policy to return **`ALLOW`**, **`REVIEW`**, or **`HOLD`**. The policy is deterministic for identical inputs; semantic model outputs can vary.
 
-Use it as a CLI wrapper, an agent hook, or a Model Context Protocol (MCP) gateway. Enforcement depends on the configured mode and on routing actions through JRX. An `ALLOW` result is a policy decision, not a guarantee that an action is safe.
+Use it as a CLI wrapper, an agent hook, or a Model Context Protocol (MCP) gateway. Enforcement depends on the configured mode and on routing actions through JRX. An `ALLOW` result is a policy decision, not a guarantee that an action is safe. [Enforcement guarantees](docs/guarantees.md) states, per integration, what is stopped, what the user is asked, and what only the host or operating system can prevent.
 
 | Capability | Implementation |
 | :--- | :--- |
@@ -218,7 +218,9 @@ Standard execution modes apply when strict REVIEW and enterprise access are disa
 | :--- | :--- |
 | `advisory` (default) | Reports decisions without blocking execution on policy results. Audit persistence must be enabled separately. |
 | `review` | Requires confirmation for `REVIEW` or `HOLD` in the CLI; hooks can deny the action for host review. |
-| `enforce` | Blocks `HOLD` by default and fails closed on unavailable or malformed semantic evaluation. A non-degraded `REVIEW` can proceed to the agent host's normal permission system. |
+| `enforce` | Blocks `HOLD` by default and fails closed on unavailable or malformed semantic evaluation. `REVIEW` never runs unattended: hooks ask where the host can ask and deny where it cannot, `jrx exec` asks for confirmation (non-interactive input counts as no), and `jrx check` exits 2. |
+
+What each integration does with every decision and failure, what it covers, and what only the host can prevent: [Enforcement guarantees](docs/guarantees.md).
 
 Enforce-mode HOLD overrides require `policy.allow_hold_override: true`. Enable `policy.strict_review` to block REVIEW until JRX verifies an approval through the configured OIDC access controls. Enterprise access also activates strict REVIEW.
 
@@ -394,7 +396,7 @@ policy_source:
     -----END PUBLIC KEY-----
 ```
 
-The fetched candidate must have a valid Ed25519 signature. Staging requires at least one matching replayed decision. By default, it rejects any replayed decision the candidate newly lets execute: any change to ALLOW, and any decision the baseline's mode blocked that the candidate's mode runs (for example HOLD → REVIEW under `enforce`, or an unchanged HOLD under `advisory`). A candidate whose mode runs a decision class the baseline blocked, such as `enforce` → `advisory`, is always rejected, even with no such decision in the audit. Set `--max-new-allows` only after reviewing the simulation. The baseline file must match the active rollout revision. For signed audit evidence, pass `--public-key` with the audit verification key if its path is supplied separately from the baseline policy. Canary selection hashes the repository root (the nearest directory with `.git`, else the hook's directory) so every subdirectory of a repository stays in the same cohort at a given percentage.
+The fetched candidate must have a valid Ed25519 signature. Staging requires at least one matching replayed decision. By default, it rejects any replayed decision the candidate newly lets execute: any change to ALLOW, and any decision the baseline's mode blocked that the candidate's mode runs unattended (for example an unchanged HOLD under `advisory`). A candidate whose mode runs a decision class the baseline blocked, such as `enforce` → `advisory`, is always rejected, even with no such decision in the audit. Set `--max-new-allows` only after reviewing the simulation. The baseline file must match the active rollout revision. For signed audit evidence, pass `--public-key` with the audit verification key if its path is supplied separately from the baseline policy. Canary selection hashes the repository root (the nearest directory with `.git`, else the hook's directory) so every subdirectory of a repository stays in the same cohort at a given percentage.
 
 The rollout state keeps each revision's exact signed bytes and signature, and every read verifies them again, so editing the state file cannot substitute a policy. With `require_signature: true`, unsigned revisions are rejected, including state written by earlier releases: remove the state file and stage again. A staged revision becomes the effective policy for `check`, `exec`, and hooks in place of `reflex.yaml`; it is not merged with the local file. Keep the local `reflex.yaml` (and, with `require_signature: true`, its `.sig`): it is still read and verified before the rollout revision is selected. `jrx policy test -c FILE` always tests `FILE` itself.
 
@@ -409,7 +411,7 @@ jrx policy rollout rollback --bootstrap /etc/jrx/bootstrap.yaml
 
 `rollback` discards an in-progress candidate, or restores the previous fully promoted revision. The host's bootstrap file must be at one of the standard locations for `check`, `exec`, and hooks to select the staged policy. Production rollout operators should keep a copy of the currently active policy to use as the next staging baseline.
 
-The dashboard reads local audit logs, approval databases, rollout state, broker sockets, and Prometheus metrics endpoints for configured teams. It verifies audit integrity before showing decisions. Set an OIDC `view` rule for each repository and run the server on loopback. The browser requests an OIDC token and keeps it only in page memory. Use an authenticated HTTPS proxy for remote access.
+The dashboard reads local audit logs, approval databases, rollout state, broker sockets, and Prometheus metrics endpoints for configured teams. It verifies audit integrity before showing decisions, with signatures checked only against a source's pinned `audit_public_key_path` (never the policy file's `signing.public_key_path`). Set an OIDC `view` rule for each repository and run the server on loopback. The browser requests an OIDC token and keeps it only in page memory. Use an authenticated HTTPS proxy for remote access.
 
 ```yaml
 # dashboard.yaml

@@ -7,7 +7,7 @@ from typing import Any
 
 from ..config import ReflexConfig
 from ..models import EvaluationResult
-from .harness import evaluate_harness_hook, hook_error_reason, should_block
+from .harness import evaluate_harness_hook, hook_error_reason, host_verdict
 
 
 def pi_hook_response(
@@ -18,7 +18,7 @@ def pi_hook_response(
 ) -> dict[str, Any]:
     """Map policy output to Pi's ``tool_call`` extension result."""
 
-    if not should_block(result, config, review_supported=False):
+    if host_verdict(result, config, can_ask=False) != "deny":
         return {}
     return {"block": True, "reason": reason or result.reason_summary()}
 

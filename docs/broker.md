@@ -235,7 +235,7 @@ For HA deployments with multiple broker instances, use a simple pattern:
 **Key points:**
 - No leader election or clustering is needed
 - Each broker independently loads the same signed policy or rollout state; during a canary, its configuration path decides whether it serves the candidate
-- Policy changes reach a broker when it restarts after `jrx policy rollout promote` or a new signed `reflex.yaml`
+- Policy changes reach a broker when it restarts after `jrx policy rollout promote`. A replaced (signed) `reflex.yaml` takes effect on restart only when no rollout revision is selected (the host bootstrap sets no `rollout_state_path`, or no state file exists yet); otherwise the selected revision replaces `reflex.yaml`, so stage and promote the change instead
 - The load balancer distributes client connections across healthy brokers
 - Clients use the load balancer address as the broker endpoint
 

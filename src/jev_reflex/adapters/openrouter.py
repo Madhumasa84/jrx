@@ -7,13 +7,7 @@ from typing import Any
 
 from ..config import ReflexConfig
 from ..models import EvaluationResult
-from ..policy import host_guard_denied
-from .harness import (
-    evaluate_harness_hook,
-    hook_error_reason,
-    permission_decision,
-    should_block,
-)
+from .harness import evaluate_harness_hook, hook_error_reason, host_verdict
 
 
 def _event_name(payload: Mapping[str, Any]) -> str:
@@ -39,16 +33,13 @@ def openrouter_hook_response(
     """Map policy output to OpenRouter's pre-tool and approval hook results."""
 
     message = reason or result.reason_summary()
-    if config.mode == "advisory" and not host_guard_denied(result):
-        return {}
     if _is_permission_request(event):
-        decision = permission_decision(result, config)
-        output: dict[str, Any] = {"decision": "ask_user" if decision == "ask" else decision}
-        if output["decision"] != "allow":
-            output["reason"] = message
-        return output if output["decision"] != "allow" or result.decision != "ALLOW" else {}
-
-    if should_block(result, config, review_supported=False):
+        # Never answer "allow": that would approve the call. Proceed returns nothing.
+        verdict = host_verdict(result, config, can_ask=True)
+        if verdict == "proceed":
+            return {}
+        return {"decision": "ask_user" if verdict == "ask" else "deny", "reason": message}
+    if host_verdict(result, config, can_ask=False) == "deny":
         return {"block": message}
     return {}
 
@@ -71,10 +62,16 @@ def evaluate_openrouter_hook(
     )
 
 
-def openrouter_hook_error(*, event: str = "PreToolUse") -> dict[str, Any]:
-    """Return a fail-safe OpenRouter hook result."""
+def openrouter_hook_error(*, event: str | None = None) -> dict[str, Any]:
+    """Return a fail-safe OpenRouter hook result.
+
+    When the event could not be read, answer in both shapes: PreToolUse reads
+    ``block`` and PermissionRequest reads ``decision``.
+    """
 
     reason = hook_error_reason()
+    if event is None:
+        return {"block": reason, "decision": "deny", "reason": reason}
     if _is_permission_request(event):
         return {"decision": "deny", "reason": reason}
     return {"block": reason}

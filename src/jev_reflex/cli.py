@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shlex
@@ -38,15 +39,14 @@ from .identity import resolve_approver
 from .logging_config import log_structured
 from .models import EvaluationContext, EvaluationResult, ProposedAction
 from .policy import execution_allowed, host_guard_denied
+from .policy_cli import policy_app
 from .sandbox import (
     build_sandbox_command,
     prepare_sandbox_egress,
     remove_sandbox_container,
     remove_sandbox_egress,
 )
-from .serialization import read_config_bytes, safe_yaml_load
 from .session_limits import MAX_SESSION_OFFSET, SessionLimitError
-from .signing import CosignSigner, Ed25519Signer, Signer, load_public_key, sign_file, verify_file
 from .stability import StabilityRunner
 
 _HOOK_MODULES = {
@@ -93,10 +93,6 @@ app = typer.Typer(
 )
 benchmark_app = typer.Typer(name="benchmark", help="Run offline or live benchmark suites.")
 audit_app = typer.Typer(name="audit", help="Audit log management and verification.")
-policy_app = typer.Typer(name="policy", help="Policy file signing and verification.")
-rollout_app = typer.Typer(
-    name="rollout", help="Stage, promote, and roll back signed policy revisions."
-)
 approval_app = typer.Typer(name="approval", help="Request and grant action-bound approvals.")
 dashboard_app = typer.Typer(name="dashboard", help="Serve a read-only operations dashboard.")
 mcp_app = typer.Typer(name="mcp", help="Run a policy-enforcing MCP stdio gateway.")
@@ -107,7 +103,6 @@ app.add_typer(broker_app, name="broker")
 app.add_typer(model_app, name="model")
 app.add_typer(audit_app, name="audit")
 app.add_typer(policy_app, name="policy")
-policy_app.add_typer(rollout_app, name="rollout")
 app.add_typer(approval_app, name="approval")
 app.add_typer(dashboard_app, name="dashboard")
 app.add_typer(mcp_app, name="mcp")
@@ -351,15 +346,27 @@ def _validated_mode(value: str | None) -> Mode | None:
     return value  # type: ignore[return-value]
 
 
+class PolicyLoadError(ValueError):
+    """The policy, or a trust input that selects it, could not be loaded."""
+
+
 def _load(path: Path | None, mode: str | None, cwd: Path | None = None) -> ReflexConfig:
+    mode_override = _validated_mode(mode)
     try:
         return load_config(
             path,
-            mode_override=_validated_mode(mode),
+            mode_override=mode_override,
             scope=str(cwd.resolve()) if cwd is not None else None,
         )
     except FileNotFoundError as exc:
         raise typer.BadParameter(str(exc)) from None
+    except ValueError as exc:
+        raise PolicyLoadError(str(exc)) from None
+
+
+def _policy_error_detail(exc: BaseException) -> str:
+    """The operator-facing reason a policy did not load (never shown to the agent)."""
+    return f" {terminal_line(exc)}." if isinstance(exc, PolicyLoadError) else ""
 
 
 def _provider(config: ReflexConfig, cwd: Path | None) -> RepositoryContextProvider:
@@ -469,7 +476,6 @@ def _check_exit_code(result: EvaluationResult, config: ReflexConfig) -> int:
             result.decision,
             mode=config.mode,
             degraded=result.degraded,
-            strict_review=config.strict_review_required,
         )
         else 2
     )
@@ -623,14 +629,21 @@ def check(
         )
     except typer.BadParameter:
         raise
-    except (OSError, RuntimeError, ValueError, sqlite3.Error, subprocess.SubprocessError):
+    except (OSError, RuntimeError, ValueError, sqlite3.Error, subprocess.SubprocessError) as exc:
         # Same contract as exec: corrupt session/approval state is an input error.
         if json_output:
-            typer.echo(
-                json.dumps({"decision": "REVIEW", "error": "invalid input or configuration"})
-            )
+            error: dict[str, str] = {
+                "decision": "REVIEW",
+                "error": "invalid input or configuration",
+            }
+            if isinstance(exc, PolicyLoadError):
+                error["detail"] = terminal_line(exc)
+            typer.echo(json.dumps(error))
         else:
-            typer.echo("Configuration or input error. No action was executed.", err=True)
+            typer.echo(
+                "Configuration or input error. No action was executed." + _policy_error_detail(exc),
+                err=True,
+            )
         raise typer.Exit(code=2) from None
 
     _emit_result(result, json_output=json_output)
@@ -659,27 +672,36 @@ def _resolve_exec_argv(command: str | None, trailing: list[str]) -> list[str]:
     return values
 
 
+def _signal_command(process: subprocess.Popen[bytes], signum: int) -> None:
+    """Signal an owned command's process group (POSIX) or the command itself."""
+    if os.name != "posix":
+        if signum == signal.SIGTERM:
+            process.terminate()
+        else:
+            process.kill()
+        return
+    try:
+        os.killpg(process.pid, signum)
+    except ProcessLookupError:
+        pass  # every member has exited and been reaped
+    except PermissionError:
+        # macOS refuses (EPERM) to signal a group whose remaining members have all exited
+        # but are not yet reaped, such as an orphaned descendant awaiting launchd. Those
+        # members cannot run again; a leader that is still running is signalled directly.
+        if process.poll() is None:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(process.pid, signum)
+
+
 def _stop_execution(process: subprocess.Popen[bytes]) -> None:
     """Reap an owned command and stop descendants even after its leader exits."""
-    try:
-        if os.name == "posix":
-            os.killpg(process.pid, signal.SIGTERM)
-        else:
-            process.terminate()
-    except ProcessLookupError:
-        pass
+    _signal_command(process, signal.SIGTERM)
     try:
         process.wait(timeout=1)
     except subprocess.TimeoutExpired:
         pass
     finally:
-        try:
-            if os.name == "posix":
-                os.killpg(process.pid, signal.SIGKILL)
-            else:
-                process.kill()
-        except ProcessLookupError:
-            pass
+        _signal_command(process, signal.SIGKILL)
         process.wait()
 
 
@@ -852,8 +874,12 @@ def exec_action(
         )
     except typer.BadParameter:
         raise
-    except (OSError, RuntimeError, ValueError, sqlite3.Error, subprocess.SubprocessError):
-        typer.echo("Configuration, input, or command error. No action was executed.", err=True)
+    except (OSError, RuntimeError, ValueError, sqlite3.Error, subprocess.SubprocessError) as exc:
+        typer.echo(
+            "Configuration, input, or command error. No action was executed."
+            + _policy_error_detail(exc),
+            err=True,
+        )
         raise typer.Exit(code=2) from None
 
     _emit_result(result, json_output=json_output)
@@ -914,7 +940,6 @@ def exec_action(
         result.decision,
         mode=loaded.mode,
         degraded=result.degraded,
-        strict_review=loaded.strict_review_required,
     ):
         if loaded.strict_review_required:
             typer.echo(
@@ -1342,10 +1367,12 @@ def _discover_hook_policy(start: Path) -> tuple[Path | None, Path]:
 
 
 def _openrouter_permission_request(payload: dict[str, Any] | None) -> bool:
-    return payload is not None and any(
-        str(payload.get(name, "")).replace("_", "").replace("-", "").lower() == "permissionrequest"
-        for name in ("hook_name", "hookName", "event", "event_name", "eventName")
-    )
+    """Whether the OpenRouter adapter reads this event as a PermissionRequest."""
+    if payload is None:
+        return False
+    from .adapters.openrouter import _event_name, _is_permission_request
+
+    return _is_permission_request(_event_name(payload))
 
 
 def _hook_error_output(kind: str, payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -1365,7 +1392,7 @@ def _hook_error_output(kind: str, payload: dict[str, Any] | None) -> dict[str, A
         ):
             return {"decision": "deny", "reason": reason}
         if kind == "openrouter":
-            return {"block": reason}
+            return {"block": reason, "decision": "deny", "reason": reason}
         if kind == "pi":
             return {"block": True, "reason": reason}
         return {
@@ -1480,13 +1507,16 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
                 else:
                     output = {}
         rendered = json.dumps(output, separators=(",", ":"))
-    except Exception:
+    except BaseException:  # every failure, interrupts included, must deny
         if post:
             typer.echo("PostToolUse evidence could not be recorded.", err=True)
             raise typer.Exit(code=2) from None
         # Hook hosts differ in how they treat non-zero hook exits (Claude Code treats
         # an uncaught traceback's exit 1 as non-blocking). A valid deny response is the
-        # most portable fail-safe for malformed input, configuration, or state.
+        # most portable fail-safe for malformed input, configuration, state, or an
+        # interrupt. Failures before this point (an interpreter that cannot start or
+        # import jrx, or a host timeout) are the host's to handle: `jrx setup` asks
+        # Claude Code to block on hook failure.
         rendered = json.dumps(_hook_error_output(kind, parsed), separators=(",", ":"))
     typer.echo(rendered)
 
@@ -1982,6 +2012,16 @@ def audit_report(
             typer.echo(f"Triggered check: {name} ({count})")
 
 
+def _signal_text(value: object) -> str:
+    """Format a recorded signal like the writer's floats; show anything else inertly."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return f"{value:.2f}"
+        except OverflowError:  # an integer too large for a float
+            pass
+    return terminal_line(value)
+
+
 @audit_app.command("tail")
 def audit_tail(
     n: int = typer.Option(10, "-n", "--number", help="Number of entries to show.", min=1),
@@ -2027,17 +2067,26 @@ def audit_tail(
                 else:
                     typer.echo(f"Decision: {show(entry.get('policy_decision', ''))}")
                     typer.echo(f"Action: {show(entry.get('action_summary', ''))}")
-                    if entry.get("hard_rule_findings"):
+                    # Display records are unverified: render any shape without failing
+                    # midway through the listing.
+                    if findings := entry.get("hard_rule_findings"):
                         typer.echo("Hard rule findings:")
-                        for finding in entry["hard_rule_findings"]:
-                            typer.echo(
-                                f"  - {show(finding['check'])}: {show(finding['reason_code'])} "
-                                f"(triggered: {show(finding['triggered'])})"
-                            )
-                    if entry.get("jev_signals"):
+                        for finding in findings if isinstance(findings, list) else [findings]:
+                            if isinstance(finding, dict):
+                                typer.echo(
+                                    f"  - {show(finding.get('check', '?'))}: "
+                                    f"{show(finding.get('reason_code', '?'))} "
+                                    f"(triggered: {show(finding.get('triggered', '?'))})"
+                                )
+                            else:
+                                typer.echo(f"  - {show(finding)}")
+                    if signals := entry.get("jev_signals"):
                         typer.echo("JEV signals:")
-                        for signal, value in entry["jev_signals"].items():
-                            typer.echo(f"  - {show(signal)}: {value:.2f}")
+                        if isinstance(signals, dict):
+                            for signal, value in signals.items():
+                                typer.echo(f"  - {show(signal)}: {_signal_text(value)}")
+                        else:
+                            typer.echo(f"  - {show(signals)}")
                 typer.echo(f"Policy version hash: {show(entry.get('policy_version_hash', ''))}")
                 typer.echo(f"Entry hash: {show(entry.get('entry_hash', ''))}")
                 typer.echo("---")
@@ -2105,193 +2154,6 @@ def audit_overrides(
     except Exception as e:
         typer.echo(f"Error reading audit log overrides: {terminal_line(e)}", err=True)
         raise typer.Exit(code=1) from None
-
-
-def _parse_policy_file(raw: bytes) -> ReflexConfig:
-    value = safe_yaml_load(raw.decode("utf-8"))
-    return ReflexConfig.model_validate(value)
-
-
-@policy_app.command("lint")
-def policy_lint(
-    config: Path = typer.Option(
-        Path("reflex.yaml"), "-c", "--config", help="Candidate policy file to check offline."
-    ),
-    strict: bool = typer.Option(False, "--strict", help="Also fail on warnings."),
-    profile: str = typer.Option("standard", "--profile", help="standard or production."),
-    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable diagnostics."),
-) -> None:
-    """Find policy mistakes without activating the policy or calling external services."""
-    from .policy_lint import lint_policy
-    from .redaction import redact_obj
-
-    if profile not in {"standard", "production"}:
-        raise typer.BadParameter("profile must be standard or production")
-    report = redact_obj(
-        lint_policy(config, profile=cast(Literal["standard", "production"], profile))
-    )
-    if json_output:
-        typer.echo(json.dumps(report, indent=2, sort_keys=True))
-    else:
-        typer.echo(f"Policy lint: {report['errors']} errors, {report['warnings']} warnings")
-        for issue in report["issues"]:
-            typer.echo(
-                f"{issue['severity'].upper()} {issue['path'] or '<root>'}: {issue['message']} [{issue['code']}]"
-            )
-    if report["errors"] or (strict and report["warnings"]):
-        raise typer.Exit(code=1)
-
-
-@policy_app.command("simulate")
-def policy_simulate(
-    audit: Path = typer.Option(..., "--audit"),
-    baseline: Path = typer.Option(..., "--baseline"),
-    candidate: Path = typer.Option(..., "--candidate"),
-    public_key: Path | None = typer.Option(
-        None, "--public-key", help="Trusted audit verification key."
-    ),
-) -> None:
-    """Replay verified audit decisions against a proposed policy without model calls."""
-    from .policy_rollout import simulate
-
-    try:
-        report = simulate(
-            audit,
-            _parse_policy_file(read_config_bytes(baseline)),
-            _parse_policy_file(read_config_bytes(candidate)),
-            public_key=public_key,
-        )
-        typer.echo(json.dumps(report, indent=2, sort_keys=True))
-    except Exception:
-        # YAML, model and audit diagnostics can contain private input.
-        typer.echo("Policy simulation failed; check the audit chain and input policies.", err=True)
-        raise typer.Exit(code=2) from None
-
-
-@policy_app.command("impact")
-def policy_impact(
-    audit: Path = typer.Option(..., "--audit"),
-    baseline: Path = typer.Option(..., "--baseline"),
-    candidate: Path = typer.Option(..., "--candidate"),
-    public_key: Path | None = typer.Option(
-        None, "--public-key", help="Trusted audit verification key."
-    ),
-    max_new_allows: int | None = typer.Option(None, "--max-new-allows", min=0),
-    max_relaxations: int | None = typer.Option(
-        None,
-        "--max-relaxations",
-        min=0,
-        help=(
-            "Limit new ALLOW and HOLD-to-REVIEW decisions combined. With any limit set, a "
-            "candidate whose mode runs a decision class the baseline blocked also fails."
-        ),
-    ),
-    github_output: Path | None = typer.Option(None, "--github-output"),
-) -> None:
-    """Preview a candidate policy using aggregate audit replay counts."""
-    from .policy_impact import impact_report
-
-    try:
-        report = impact_report(audit, baseline, candidate, public_key=public_key)
-    except Exception:
-        # Policy values and private audit data can appear in diagnostics.
-        typer.echo("Unassessed. Check policy syntax, replay support and audit integrity.")
-        raise typer.Exit(2) from None
-
-    typer.echo(report.markdown())
-    if not report.replayed:
-        typer.echo("\nUnassessed. No matching decisions could be replayed.")
-        raise typer.Exit(2)
-    if github_output is not None:
-        try:
-            with github_output.open("a", encoding="utf-8") as stream:
-                stream.write(f"counts={report.summary()}\n")
-        except OSError:
-            typer.echo("Could not write the GitHub output file.", err=True)
-            raise typer.Exit(2) from None
-    if max_new_allows is not None and report.new_allows > max_new_allows:
-        typer.echo(f"\nNew ALLOW decisions exceed the limit of {max_new_allows}.")
-        raise typer.Exit(1)
-    if max_relaxations is not None and report.relaxations > max_relaxations:
-        typer.echo(f"\nPolicy relaxations exceed the limit of {max_relaxations}.")
-        raise typer.Exit(1)
-    if (max_new_allows is not None or max_relaxations is not None) and (
-        report.enforcement_relaxations
-    ):
-        typer.echo("\nThe candidate's mode relaxes enforcement, which no limit allows.")
-        raise typer.Exit(1)
-
-
-def _rollout_store(bootstrap: Path):
-    from .config import load_bootstrap_config
-    from .policy_rollout import RolloutStore
-
-    settings = load_bootstrap_config(bootstrap)
-    if not settings.rollout_state_path:
-        raise ValueError("bootstrap rollout_state_path is required")
-    return settings, RolloutStore(Path(settings.rollout_state_path), settings)
-
-
-@rollout_app.command("stage")
-def policy_rollout_stage(
-    bootstrap: Path = typer.Option(..., "--bootstrap"),
-    baseline: Path = typer.Option(..., "--baseline"),
-    audit: Path = typer.Option(..., "--audit"),
-    public_key: Path | None = typer.Option(
-        None, "--public-key", help="Trusted audit verification key."
-    ),
-    max_new_allows: int = typer.Option(
-        0,
-        "--max-new-allows",
-        min=0,
-        help=(
-            "Limit replayed decisions the candidate newly lets execute: any change to ALLOW, "
-            "plus decisions the baseline's mode blocked and the candidate's mode runs (for "
-            "example HOLD to REVIEW under enforce, or any HOLD under advisory). A candidate "
-            "whose mode runs a decision class the baseline blocked is always rejected."
-        ),
-    ),
-) -> None:
-    """Fetch a signed remote candidate and stage it after an offline replay."""
-    from .config import parse_policy_bytes, verify_policy_signature
-    from .policy_rollout import SignedPolicy, policy_hash, simulate
-    from .policy_source import PolicyFetcher
-
-    try:
-        settings, store = _rollout_store(bootstrap)
-        if settings.policy_source.type is None:
-            raise ValueError("a signed policy source is required")
-        baseline_bytes = read_config_bytes(baseline)
-        baseline_signature = None
-        if settings.require_signature:
-            # Store exactly the bytes and signature verified here, so every
-            # later read can verify the snapshot again.
-            baseline_signature = read_config_bytes(baseline.with_suffix(baseline.suffix + ".sig"))
-            verify_policy_signature(baseline_bytes, baseline_signature, settings)
-        active = parse_policy_bytes(baseline_bytes)
-        baseline_snapshot: ReflexConfig | SignedPolicy = (
-            active
-            if baseline_signature is None
-            else SignedPolicy(baseline_bytes, baseline_signature, "bootstrap")
-        )
-        current = store.status()
-        if current["active_hash"] and current["active_hash"] != policy_hash(active):
-            raise ValueError("baseline policy differs from active rollout policy")
-        fetched = PolicyFetcher(settings.policy_source).fetch_signed()
-        candidate = parse_policy_bytes(fetched.raw)
-        report = simulate(audit, active, candidate, public_key=public_key)
-        if report["replayed"] == 0 or report["newly_executable"] > max_new_allows:
-            raise ValueError("simulation gate failed")
-        if report["enforcement_relaxations"]:
-            # A weaker mode lets a whole decision class run, which no replay count bounds.
-            raise ValueError("candidate relaxes enforcement")
-        store.stage(
-            baseline_snapshot, SignedPolicy(fetched.raw, fetched.signature, "policy_source")
-        )
-        typer.echo(json.dumps({"status": store.status(), "simulation": report}, indent=2))
-    except Exception as exc:
-        typer.echo(f"Policy stage failed: {type(exc).__name__}.", err=True)
-        raise typer.Exit(code=2) from None
 
 
 @dashboard_app.command("serve")
@@ -2414,215 +2276,6 @@ def session_stop(
     except (OSError, ValueError, sqlite3.Error):
         typer.echo("Session stop failed.", err=True)
         raise typer.Exit(code=2) from None
-
-
-@rollout_app.command("promote")
-def policy_rollout_promote(
-    percent: int = typer.Option(..., "--percent", min=1, max=100),
-    bootstrap: Path = typer.Option(..., "--bootstrap"),
-) -> None:
-    """Activate a stable percentage of repositories or fully promote a candidate."""
-    try:
-        _, store = _rollout_store(bootstrap)
-        store.promote(percent)
-        typer.echo(json.dumps(store.status(), indent=2))
-    except (OSError, ValueError):
-        typer.echo("Policy promotion failed.", err=True)
-        raise typer.Exit(code=2) from None
-
-
-@rollout_app.command("rollback")
-def policy_rollout_rollback(bootstrap: Path = typer.Option(..., "--bootstrap")) -> None:
-    """Restore the active policy and clear a staged candidate."""
-    try:
-        _, store = _rollout_store(bootstrap)
-        store.rollback()
-        typer.echo(json.dumps(store.status(), indent=2))
-    except (OSError, ValueError):
-        typer.echo("Policy rollback failed.", err=True)
-        raise typer.Exit(code=2) from None
-
-
-@rollout_app.command("status")
-def policy_rollout_status(bootstrap: Path = typer.Option(..., "--bootstrap")) -> None:
-    """Show active, candidate, and previous policy revisions."""
-    try:
-        _, store = _rollout_store(bootstrap)
-        typer.echo(json.dumps(store.status(), indent=2))
-    except (OSError, ValueError):
-        typer.echo("Policy rollout status unavailable.", err=True)
-        raise typer.Exit(code=2) from None
-
-
-@policy_app.command("keygen")
-def policy_keygen(
-    output_dir: Path = typer.Option(..., "--output-dir", help="Directory for the signing keypair."),
-) -> None:
-    """Generate an Ed25519 policy signing keypair."""
-    directory = output_dir.expanduser()
-    private_path = directory / "policy_signing.key"
-    public_path = directory / "policy_signing.pub"
-    try:
-        directory.mkdir(parents=True, exist_ok=True)
-        if private_path.exists() or public_path.exists():
-            raise FileExistsError("Policy signing keypair already exists")
-        signer = Ed25519Signer()
-        descriptor = os.open(private_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as private_file:
-            private_file.write(signer.get_private_key_pem())
-        with public_path.open("x", encoding="utf-8") as public_file:
-            public_file.write(signer.get_public_key_pem())
-        typer.echo(f"Private key written to: {private_path}")
-        typer.echo(f"Public key written to: {public_path}")
-    except Exception as exc:
-        typer.echo(f"Error generating policy keypair: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-
-@policy_app.command("verify")
-def policy_verify(
-    config_path: Path = typer.Argument(..., help="Path to the signed policy file."),
-    public_key: Path = typer.Option(..., "--public-key", help="Path to the public key."),
-    signature: Path | None = typer.Option(None, "--signature", help="Path to the signature file."),
-    signer_type: str = typer.Option("ed25519", "--signer-type", help="ed25519 or cosign."),
-) -> None:
-    """Verify a policy signature against a pinned public key."""
-    try:
-        signer: Signer
-        if signer_type == "ed25519":
-            signer = Ed25519Signer()
-        elif signer_type == "cosign":
-            signer = CosignSigner()
-        else:
-            raise typer.BadParameter("signer_type must be ed25519 or cosign")
-        config_file = config_path.expanduser()
-        signature_file = (
-            signature.expanduser()
-            if signature
-            else config_file.with_suffix(config_file.suffix + ".sig")
-        )
-        key = load_public_key(public_key.expanduser())
-        if not verify_file(config_file, signature_file, key, signer):
-            typer.echo("Policy signature verification failed.", err=True)
-            raise typer.Exit(code=1)
-        typer.echo("Policy signature verified.")
-    except typer.Exit:
-        raise
-    except Exception as exc:
-        typer.echo(f"Error verifying policy: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-
-
-@policy_app.command("sign")
-def policy_sign(
-    config_path: Path = typer.Argument(..., help="Path to reflex.yaml to sign."),
-    key: Path = typer.Option(None, "--key", help="Path to private key file."),
-    signer_type: str = typer.Option(
-        "ed25519", "--signer-type", help="Signer type: ed25519 or cosign."
-    ),
-    output: Path | None = typer.Option(None, "--output", help="Output path for signature file."),
-) -> None:
-    """Sign a policy configuration file."""
-
-    try:
-        signer: Signer
-        if signer_type not in {"ed25519", "cosign"}:
-            raise typer.BadParameter("signer_type must be ed25519 or cosign")
-        if key is None:
-            # Generate a new keypair if no key is provided
-            if signer_type == "ed25519":
-                signer = Ed25519Signer()
-                typer.echo("Generated new Ed25519 keypair")
-                typer.echo(f"Public key (PEM):\n{signer.get_public_key_pem()}")
-                typer.echo(f"Private key (PEM):\n{signer.get_private_key_pem()}")
-                typer.echo("")
-                typer.echo("Save the private key securely and use the public key for verification.")
-                typer.echo("Example bootstrap.yaml:")
-                typer.echo("  require_signature: true")
-                typer.echo("  public_key_path: /path/to/public_key.pem")
-                typer.echo("  signer_type: ed25519")
-            else:
-                raise typer.BadParameter("key is required for cosign signer")
-        else:
-            # Load existing key
-            key_path = Path(key).expanduser()
-            if signer_type == "ed25519":
-                signer = Ed25519Signer(private_key_path=key_path)
-            elif signer_type == "cosign":
-                signer = CosignSigner(private_key_path=key_path)
-
-        config_file = Path(config_path).expanduser()
-        if not config_file.exists():
-            raise typer.BadParameter(f"Config file not found: {config_file}")
-
-        signature_path = sign_file(config_file, signer, output)
-        typer.echo(f"Signature written to: {signature_path}")
-    except Exception as e:
-        typer.echo(f"Error signing policy: {e}", err=True)
-        raise typer.Exit(code=1) from None
-
-
-@policy_app.command("status")
-def policy_status() -> None:
-    """Show the configured central policy source and how it reaches runtime."""
-    from .config import load_bootstrap_config
-
-    bootstrap = load_bootstrap_config()
-
-    if bootstrap.policy_source.type is None:
-        typer.echo("Policy source: local (reflex.yaml)")
-        typer.echo("No central policy configured")
-        return
-
-    typer.echo(f"Policy source type: {bootstrap.policy_source.type}")
-    typer.echo(f"Policy source URI: {bootstrap.policy_source.uri}")
-    if bootstrap.policy_source.ref:
-        typer.echo(f"Policy source ref: {bootstrap.policy_source.ref}")
-    # Runtime never polls or merges the central source; only staging reads it.
-    typer.echo(
-        "Runtime policy: reflex.yaml, replaced by the active or canary revision when "
-        "rollout state exists. The central source is read only by `jrx policy rollout stage`."
-    )
-    if bootstrap.rollout_state_path:
-        typer.echo(f"Rollout state: {bootstrap.rollout_state_path}")
-        typer.echo("Run `jrx policy rollout status --bootstrap <file>` for active revisions.")
-    else:
-        typer.echo("Rollout state: not configured; the central policy is not applied.")
-
-
-@policy_app.command("test")
-def policy_test(
-    fixtures: Path | None = typer.Option(
-        None, "--fixtures", help="Directory containing golden policy fixtures."
-    ),
-    config: Path | None = typer.Option(
-        None, "-c", "--config", help="Path to reflex.yaml configuration to test."
-    ),
-    json_output: bool = typer.Option(False, "--json", help="Output results in JSON format."),
-) -> None:
-    """Run golden fixture regression suite against a policy configuration."""
-    from .golden_runner import run_fixtures
-
-    config_path = config
-    if config_path is None:
-        if Path("reflex.yaml").exists():
-            config_path = Path("reflex.yaml")
-        elif Path("reflex.example.yaml").exists():
-            config_path = Path("reflex.example.yaml")
-
-    try:
-        report = run_fixtures(fixtures_dir=fixtures, config_path=config_path)
-    except Exception as e:
-        typer.echo(f"Error running policy fixtures: {e}", err=True)
-        raise typer.Exit(code=1) from None
-
-    if json_output:
-        typer.echo(json.dumps(report.to_dict(), indent=2))
-    else:
-        typer.echo(report.summary_table())
-
-    if not report.all_passed:
-        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":  # pragma: no cover

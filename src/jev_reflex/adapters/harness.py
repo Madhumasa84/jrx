@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 from ..config import ReflexConfig
 from ..evaluator import DefaultEvaluator, DemoEvaluator
 from ..formatters import hook_context
 from ..models import EvaluationResult
-from ..policy import host_guard_denied
+from ..policy import execution_allowed, host_guard_denied
 from .generic import context_from_hook_payload
 
 
@@ -28,30 +28,50 @@ def evaluate_harness_hook(
     return result, hook_context(result)
 
 
-def should_block(result: EvaluationResult, config: ReflexConfig, *, review_supported: bool) -> bool:
-    """Apply the configured execution mode to a harness that can block calls."""
-
-    if host_guard_denied(result):
-        return True
-    if config.mode == "advisory":
-        return False
-    if result.degraded or result.decision == "HOLD":
-        return True
-    return result.decision == "REVIEW" and (config.strict_review_required or not review_supported)
+Verdict = Literal["proceed", "ask", "deny"]
 
 
-def permission_decision(result: EvaluationResult, config: ReflexConfig) -> str:
-    """Map the public policy result to a host with allow/ask/deny controls."""
+def host_verdict(result: EvaluationResult, config: ReflexConfig, *, can_ask: bool) -> Verdict:
+    """What the host must do with a policy result. Every hook adapter uses this mapping.
+
+    ``proceed``: JRX does not stop the call; the host's own permission flow still decides,
+    and no adapter turns this into an explicit grant. ``ask``: the host must put the call
+    to the user. ``deny``: the host must refuse it. A REVIEW the host cannot ask about is
+    denied; host-guard findings deny in every mode.
+    """
 
     if host_guard_denied(result):
         return "deny"
-    if config.mode == "advisory":
-        return "allow"
-    if should_block(result, config, review_supported=True):
-        return "deny"
-    if result.decision == "REVIEW":
+    if execution_allowed(result.decision, mode=config.mode, degraded=result.degraded):
+        return "proceed"
+    if (
+        result.decision == "REVIEW"
+        and not result.degraded
+        and can_ask
+        and not config.strict_review_required
+    ):
         return "ask"
-    return "allow"
+    return "deny"
+
+
+def pretooluse_denial(reason: str) -> dict[str, Any]:
+    """The PreToolUse deny response shared by Claude Code, Codex and DeepSeek."""
+
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }
+
+
+def pretooluse_context(result: EvaluationResult, reason: str) -> dict[str, Any]:
+    """Informational PreToolUse output for a call JRX does not stop."""
+
+    if result.decision != "ALLOW" or result.warnings:
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": reason}}
+    return {}
 
 
 def hook_error_reason() -> str:

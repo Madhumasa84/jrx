@@ -328,18 +328,19 @@ class Policy(DeterministicPolicyEngine):
 PolicyEngine = DeterministicPolicyEngine
 
 
-def execution_allowed(
-    decision: Decision, *, mode: str, degraded: bool = False, strict_review: bool = False
-) -> bool:
-    """Return whether the requested CLI mode permits the side effect."""
+def execution_allowed(decision: Decision, *, mode: str, degraded: bool = False) -> bool:
+    """Return whether the side effect may run without a further human decision.
+
+    Advisory mode runs everything. In review and enforce mode only a non-degraded
+    ``ALLOW`` runs unattended: ``REVIEW`` must become a genuine user decision (an
+    interactive confirmation or the host's own ask prompt) or a denial, and ``HOLD``
+    is denied in enforce mode unless ``policy.allow_hold_override`` permits a confirmed
+    override. Callers decide whether they can ask; none may run the action unasked.
+    """
 
     if mode == "advisory":
         return True
     if degraded:
         # A missing or malformed judge cannot silently pass an execution boundary.
         return False
-    if mode == "review" or strict_review:
-        return decision == "ALLOW"
-    # Enforce mode blocks HOLD while allowing a non-degraded REVIEW to reach the
-    # agent's normal permission system.
-    return decision != "HOLD"
+    return decision == "ALLOW"

@@ -19,7 +19,7 @@ import yaml
 from typer.testing import CliRunner
 
 from jev_reflex import config as config_module
-from jev_reflex import policy_rollout
+from jev_reflex import trust
 from jev_reflex.audit import AuditLog
 from jev_reflex.cli import app
 from jev_reflex.config import ReflexConfig, load_bootstrap_config, load_config
@@ -111,7 +111,7 @@ def _rollout(deployment, command: str, *extra: str):
 
 def _as_evaluator(monkeypatch: pytest.MonkeyPatch, uid: int = OTHER_UID) -> None:
     """Evaluate as ``uid``; OTHER_UID owns none of the test files (operator-written state)."""
-    monkeypatch.setattr(policy_rollout, "_evaluator_identity", lambda: (uid, frozenset()))
+    monkeypatch.setattr(trust, "evaluator_identity", lambda: trust.Identity(uid, frozenset()))
 
 
 def _effective(deployment, scope: str = "repository") -> str:
@@ -259,7 +259,9 @@ def test_operator_state_directory_must_not_let_the_user_replace_the_file(
 ) -> None:
     deployment = _staged_and_promoted(tmp_path, monkeypatch)
     group = os.stat(deployment.state.parent).st_gid
-    monkeypatch.setattr(policy_rollout, "_evaluator_identity", lambda: (OTHER_UID, {group}))
+    monkeypatch.setattr(
+        trust, "evaluator_identity", lambda: trust.Identity(OTHER_UID, frozenset({group}))
+    )
     deployment.state.parent.chmod(directory_mode)
     try:
         if accepted:
@@ -343,7 +345,8 @@ def test_enforcement_relaxations_compare_modes(tmp_path: Path) -> None:
         {"mode": "review", "audit": {"enabled": True, "path": str(audit)}}
     )
     enforce = review.model_copy(update={"mode": "enforce"})
-    assert enforcement_relaxations(review, enforce) == ["REVIEW"]
+    # Neither review nor enforce runs a REVIEW unattended.
+    assert enforcement_relaxations(review, enforce) == []
     assert enforcement_relaxations(enforce, review) == []
     assert set(enforcement_relaxations(enforce, review.model_copy(update={"mode": "advisory"})))
     assert enforcement_relaxations(review, review) == []

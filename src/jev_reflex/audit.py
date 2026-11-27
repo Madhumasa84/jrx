@@ -63,6 +63,27 @@ def parse_audit_record(line: str) -> dict[str, Any]:
     return data
 
 
+def record_event_type(entry: dict[str, Any]) -> Any:
+    """The kind of a verified record, for readers that count decisions.
+
+    Typed records name their kind, and untyped records are policy decisions,
+    except the legacy reload marker: before reloads were typed, PolicyReloader
+    wrote them untyped as ``policy_reload`` with no findings, no signals and none
+    of the risk fields every evaluator decision records. Matching that whole
+    shape, not the agent-influenced summary alone, keeps real decisions counted.
+    """
+    if "event_type" in entry:
+        return entry["event_type"]
+    if (
+        entry.get("action_summary") == "policy_reload"
+        and entry.get("hard_rule_findings", []) == []
+        and entry.get("jev_signals", {}) == {}
+        and not any(key in entry for key in ("risk_choice", "degraded", "forced_review"))
+    ):
+        return "policy_reload"
+    return "policy_decision"
+
+
 def _chain_tip(lines: Iterable[str]) -> tuple[str, int]:
     """Refuse to append to a damaged chain; leave recovery to its owner."""
     previous = GENESIS_HASH
