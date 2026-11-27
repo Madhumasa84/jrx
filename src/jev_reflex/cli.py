@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shlex
@@ -659,27 +660,36 @@ def _resolve_exec_argv(command: str | None, trailing: list[str]) -> list[str]:
     return values
 
 
+def _signal_command(process: subprocess.Popen[bytes], signum: int) -> None:
+    """Signal an owned command's process group (POSIX) or the command itself."""
+    if os.name != "posix":
+        if signum == signal.SIGTERM:
+            process.terminate()
+        else:
+            process.kill()
+        return
+    try:
+        os.killpg(process.pid, signum)
+    except ProcessLookupError:
+        pass  # every member has exited and been reaped
+    except PermissionError:
+        # macOS refuses (EPERM) to signal a group whose remaining members have all exited
+        # but are not yet reaped, such as an orphaned descendant awaiting launchd. Those
+        # members cannot run again; a leader that is still running is signalled directly.
+        if process.poll() is None:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(process.pid, signum)
+
+
 def _stop_execution(process: subprocess.Popen[bytes]) -> None:
     """Reap an owned command and stop descendants even after its leader exits."""
-    try:
-        if os.name == "posix":
-            os.killpg(process.pid, signal.SIGTERM)
-        else:
-            process.terminate()
-    except ProcessLookupError:
-        pass
+    _signal_command(process, signal.SIGTERM)
     try:
         process.wait(timeout=1)
     except subprocess.TimeoutExpired:
         pass
     finally:
-        try:
-            if os.name == "posix":
-                os.killpg(process.pid, signal.SIGKILL)
-            else:
-                process.kill()
-        except ProcessLookupError:
-            pass
+        _signal_command(process, signal.SIGKILL)
         process.wait()
 
 
