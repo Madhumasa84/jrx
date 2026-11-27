@@ -12,7 +12,12 @@ from typing import Any
 
 from .checks import run_deterministic_checks
 from .config import ReflexConfig
-from .evaluator import JUDGMENT_NAMES, SemanticEvaluator, semantic_backend
+from .evaluator import (
+    JUDGMENT_NAMES,
+    PUBLIC_SIGNAL_ALIASES,
+    SemanticEvaluator,
+    semantic_backend,
+)
 from .models import EvaluationContext, ProposedAction
 from .policy import decide
 
@@ -191,8 +196,13 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     for case in dict.fromkeys(row["case"] for row in rows):
         group = [row for row in rows if row["case"] == case and not row["degraded"]]
         stats = {}
-        for name in JUDGMENT_NAMES:
-            values = [row["signals"][name] for row in group]
+        # Local and hybrid evaluators return only the signals the policy activates.
+        present = {name for row in group for name in row["signals"]}
+        names = [name for name in JUDGMENT_NAMES if name in present] + sorted(
+            present - set(JUDGMENT_NAMES) - PUBLIC_SIGNAL_ALIASES.keys()
+        )
+        for name in names:
+            values = [row["signals"][name] for row in group if name in row["signals"]]
             if not values:
                 continue
             thresholds = group[0]["thresholds"]

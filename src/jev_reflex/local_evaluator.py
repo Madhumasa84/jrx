@@ -253,6 +253,20 @@ class LocalONNXModel:
                 or self.tokenizer.token_to_id(self.mask_text) != self.mask
             ):
                 raise ValueError("tokenizer mask does not match decision metadata")
+            # Tokenizers match special-token literals anywhere in the text, even
+            # without add_special_tokens, so supplied text could otherwise forge
+            # [CLS]/[SEP]/[PAD]/[MASK] structure in the model input.
+            self.special_text = sorted(
+                {self.mask_text}
+                | {
+                    token.content
+                    for token in self.tokenizer.get_added_tokens_decoder().values()
+                    if token.special and token.content
+                },
+                key=len,
+                reverse=True,
+            )
+            self.structural_ids = frozenset(special)
             self.options = (
                 self._encode(" false: no, the statement does not hold"),
                 self._encode(" true: yes, the statement holds"),
@@ -281,9 +295,11 @@ class LocalONNXModel:
         self.digest = assets.digest
 
     def _encode(self, text: str) -> list[int]:
-        ids = self.tokenizer.encode(text.replace(self.mask_text, " "), add_special_tokens=False).ids
-        if self.mask in ids:
-            raise ValueError("unexpected option marker in supplied text")
+        for literal in self.special_text:
+            text = text.replace(literal, " ")
+        ids = self.tokenizer.encode(text, add_special_tokens=False).ids
+        if not self.structural_ids.isdisjoint(ids):
+            raise ValueError("unexpected special token in supplied text")
         return ids
 
     def _question_frame(self, question: str) -> tuple[list[int], list[int], int]:
@@ -433,7 +449,11 @@ class LocalSemanticEvaluator:
         self.loading_warning: str | None = None
         self.last_api_requests = 0
         self.last_usage: dict[str, int] | None = None
+        # _lock guards the model reference, warning, retry state and counters, and is
+        # only held briefly. _load_lock serializes slow model loads so that health
+        # checks never wait for one and a model is never loaded twice.
         self._lock = Lock()
+        self._load_lock = Lock()
         self._retry_at = 0.0
         self._retry_delay = 1.0
         self._count = 0
@@ -442,15 +462,20 @@ class LocalSemanticEvaluator:
     def warm(self) -> None:
         if self.config.evaluator.local_base_url:
             return
-        with self._lock:
-            if self.model is None and time.monotonic() >= self._retry_at:
-                try:
-                    self.model = LocalONNXModel(self.config)
-                except LocalEvaluationError as exc:
+        with self._load_lock:
+            with self._lock:
+                if self.model is not None or time.monotonic() < self._retry_at:
+                    return
+            try:
+                model = LocalONNXModel(self.config)
+            except LocalEvaluationError as exc:
+                with self._lock:
                     self.loading_warning = str(exc)
                     self._retry_at = time.monotonic() + self._retry_delay
                     self._retry_delay = min(self._retry_delay * 2, 30.0)
-                else:
+            else:
+                with self._lock:
+                    self.model = model
                     self.loading_warning = None
 
     def health(self) -> dict[str, Any]:

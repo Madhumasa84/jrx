@@ -407,13 +407,12 @@ def aggregate_semantic_samples(
     else:
         rank = {"low": 0, "medium": 1, "high": 2}
         risk_score = None
-        risk_choice = max(
-            (sample.risk.choice for sample in samples),
-            key=lambda choice: (
-                sum(sample.risk.choice == choice for sample in samples),
-                -rank[choice],
-            ),
-        )
+        choices = [sample.risk.choice for sample in samples]
+        if aggregation == "max":
+            risk_choice = max(choices, key=rank.__getitem__)
+        else:
+            # Majority vote; a tie resolves to the higher risk (fail closed).
+            risk_choice = max(choices, key=lambda choice: (choices.count(choice), rank[choice]))
     confidence_values = [
         float(sample.risk.confidence) for sample in samples if sample.risk.confidence is not None
     ]
@@ -429,6 +428,17 @@ def aggregate_semantic_samples(
         truncated=any(sample.truncated for sample in samples),
         degraded=any(sample.degraded for sample in samples),
         warnings=warnings,
+    )
+
+
+def _semantic_view(context: EvaluationContext, config: ReflexConfig) -> EvaluationContext:
+    """Bound a whole proposed diff for semantic state after deterministic checks saw it."""
+
+    limit = config.context.max_diff_chars
+    if len(context.git_diff) <= limit:
+        return context
+    return context.model_copy(
+        update={"git_diff": bounded_text(context.git_diff, limit), "semantic_state_truncated": True}
     )
 
 
@@ -485,7 +495,9 @@ def evaluate_context(
         redacted_context, gitleaks_failed = None, False
         safe_action = REDACTED_SECRET
     else:
-        redacted_context, gitleaks_failed = _redacted_context_with_gitleaks(context)
+        redacted_context, gitleaks_failed = _redacted_context_with_gitleaks(
+            _semantic_view(context, config)
+        )
         safe_action = redact_text(redacted_context.proposed_action.display())
     warnings: list[str] = []
 

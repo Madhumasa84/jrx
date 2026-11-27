@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, dataclass
 from statistics import fmean, pstdev
 from typing import Any
@@ -42,20 +43,23 @@ class StabilityReport:
         return value
 
 
-def _crossings(values: list[float], threshold: float) -> int:
-    sides = [value >= threshold for value in values]
-    above = sum(sides)
-    below = len(sides) - above
-    if above == 0 or below == 0:
-        return 0
-    majority_side = above >= below
-    return sum(side != majority_side for side in sides)
+def _crossings(values: list[float], thresholds: tuple[float, ...]) -> int:
+    """Count runs outside the most common decision band the thresholds define."""
+    bands = Counter(sum(value >= threshold for threshold in thresholds) for value in values)
+    return len(values) - max(bands.values())
 
 
 def _signal_threshold(name: str, config: ReflexConfig) -> float:
     if name in config.hold_on or name in {"destructive", "secret_exposure", "irreversible"}:
         return config.thresholds.strong
     return config.thresholds.review
+
+
+def _decision_boundaries(name: str, config: ReflexConfig) -> tuple[float, ...]:
+    # Every signal flips ALLOW/REVIEW at the review threshold; hold signals also
+    # flip REVIEW/HOLD at the strong threshold.
+    threshold = _signal_threshold(name, config)
+    return tuple(sorted({config.thresholds.review, threshold}))
 
 
 def build_report(results: list[EvaluationResult], config: ReflexConfig) -> StabilityReport:
@@ -81,7 +85,7 @@ def build_report(results: list[EvaluationResult], config: ReflexConfig) -> Stabi
     for name in names:
         values = [float(result.signals.get(name, 0.0)) for result in results]
         threshold = _signal_threshold(name, config)
-        threshold_crossings = _crossings(values, threshold)
+        threshold_crossings = _crossings(values, _decision_boundaries(name, config))
         signal_stats[name] = SignalStatistics(
             mean=fmean(values),
             std=pstdev(values) if len(values) > 1 else 0.0,

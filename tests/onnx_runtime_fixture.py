@@ -26,6 +26,17 @@ def install_runtime(
         def token_to_id(self, token):
             return 104 if token == "[MASK]" else None
 
+        def get_added_tokens_decoder(self):
+            return {
+                token_id: SimpleNamespace(content=content, special=True)
+                for token_id, content in (
+                    (101, "[CLS]"),
+                    (102, "[SEP]"),
+                    (103, "[PAD]"),
+                    (104, "[MASK]"),
+                )
+            }
+
         def encode(self, value, *, add_special_tokens):
             assert not add_special_tokens
             return SimpleNamespace(

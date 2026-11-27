@@ -216,7 +216,8 @@ def run_fixtures(
     """Run all fixture cases and return the results report."""
 
     if config is None:
-        config = load_config(config_path) if config_path else ReflexConfig()
+        # Test the given file itself, not a staged rollout revision.
+        config = load_config(config_path, apply_rollout=False) if config_path else ReflexConfig()
     demo_evaluator = DemoEvaluator(config)
     cases = load_fixtures(fixtures_dir)
 

@@ -14,9 +14,12 @@ from typing import Any, Literal, Protocol, TextIO
 from ..config import ReflexConfig
 from ..context import ContextProvider, RepositoryContextProvider
 from ..models import EvaluationContext, EvaluationResult, HookAuditCorrelation, ProposedAction
+from ..serialization import unique_object
 
 MAX_HOOK_CHARS = 1_048_576
 _SAFE_HOOK_TOOL = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+# Key that wraps tool arguments which are not a JSON object.
+_RAW_ARGUMENT = "value"
 
 
 class Adapter(Protocol):
@@ -60,13 +63,32 @@ def _mapping(payload: Mapping[str, Any], *names: str) -> Mapping[str, Any] | Non
     return None
 
 
+def _decoded_mapping(value: object) -> Mapping[str, Any] | None:
+    """Return tool arguments sent as a mapping or as a JSON-encoded object."""
+
+    if isinstance(value, Mapping):
+        return value
+    if isinstance(value, str):
+        # OpenRouter and Pi can carry arguments as the model's raw JSON string.
+        try:
+            decoded = json.loads(value, object_pairs_hook=unique_object)
+        except (ValueError, RecursionError):
+            return None
+        if isinstance(decoded, Mapping):
+            return decoded
+    return None
+
+
 def _arguments(payload: Mapping[str, Any], *names: str) -> Mapping[str, Any]:
     for name in names:
         value = payload.get(name)
-        if isinstance(value, Mapping):
-            return value
+        decoded = _decoded_mapping(value)
+        if decoded is not None:
+            return decoded
         if value is not None:
-            return {"value": value}
+            # Not a mapping. Shell and file tools fail closed later, because no
+            # command or path can be found in this wrapper.
+            return {_RAW_ARGUMENT: value}
     return {}
 
 
@@ -83,6 +105,183 @@ def _tool_call(payload: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
 
 
 _COMMAND_FIELDS = ("command", "CommandLine", "commandLine", "cmd", "script")
+# Hosts differ in key case ("command", "Command", "CommandLine"), so match keys case-insensitively.
+_COMMAND_KEYS = frozenset(field.casefold() for field in _COMMAND_FIELDS)
+# Tools whose host runs the arguments as a shell command line.
+_SHELL_TOOLS = frozenset(
+    {
+        "bash",
+        "sh",
+        "shell",
+        "powershell",
+        "terminal",
+        "exec_command",
+        "shell_command",
+        "local_shell",
+        "container.exec",
+        "run_command",
+        "run_shell_command",
+        "run_terminal_cmd",
+        "run_terminal_command",
+        "execute_command",
+    }
+)
+# Tools whose host writes the file named in the arguments.
+_FILE_WRITE_TOOLS = frozenset(
+    {
+        "write",
+        "edit",
+        "multiedit",
+        "notebookedit",
+        "write_file",
+        "edit_file",
+        "create_file",
+        "write_to_file",
+        "replace_file_content",
+        "multi_replace_file_content",
+    }
+)
+_PATH_KEYS = frozenset(
+    {
+        "path",
+        "file_path",
+        "filepath",
+        "file",
+        "filename",
+        "file_name",
+        "target_file",
+        "targetfile",
+        "target_path",
+        "notebook_path",
+        "absolute_path",
+        "absolutepath",
+    }
+)
+_PATCH_TOOLS = frozenset({"apply_patch", "applypatch"})
+_PATCH_KEYS = frozenset({"patch", "patch_text", "input", "diff"})
+_PATCH_INVOCATION = re.compile(r"\A\s*(?:apply_patch|applypatch)(?=[ \t<'\"]|\Z)")
+_BEGIN_PATCH_LINE = re.compile(r"^[ \t]*\*\*\*[ \t]*begin patch", re.I | re.M)
+_PATCH_HEREDOC = re.compile(
+    r"\A[ \t]*<<[ \t]*(?P<quote>['\"]?)(?P<tag>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)[ \t]*\n"
+)
+_PATCH_MARKER = re.compile(
+    r"\A\*\*\*[ \t]*(?P<kind>add file|update file|delete file|move to)[ \t]*:[ \t]*(?P<path>.*?)\s*\Z",
+    re.I,
+)
+_PATCH_MARKER_NAMES = {
+    "add file": "Add File",
+    "update file": "Update File",
+    "delete file": "Delete File",
+    "move to": "Move to",
+}
+
+
+def _command_fields(tool_input: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    return [
+        (key, value)
+        for key, value in tool_input.items()
+        if isinstance(key, str) and key.casefold() in _COMMAND_KEYS
+    ]
+
+
+def _command_text(tool_input: Mapping[str, Any]) -> str:
+    """Return the single shell command in ``tool_input``; raise when it is ambiguous."""
+
+    fields = _command_fields(tool_input)
+    for _, value in fields:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("hook input contains an invalid command")
+    commands = {value for _, value in fields}
+    if len(commands) > 1:
+        raise ValueError("hook input contains conflicting commands")
+    return commands.pop() if commands else ""
+
+
+def _has_path(tool_input: Mapping[str, Any]) -> bool:
+    return any(
+        isinstance(key, str)
+        and key.casefold() in _PATH_KEYS
+        and isinstance(value, str)
+        and bool(value.strip())
+        for key, value in tool_input.items()
+    )
+
+
+def _normalized_patch(text: str) -> str:
+    """Spell file markers the way policy checks read them.
+
+    Codex trims padding (including a trailing CR) around patch markers, so a
+    padded marker must still reach the protected-path checks.
+    """
+
+    lines = []
+    for line in text.split("\n"):
+        marker = _PATCH_MARKER.match(line.strip())
+        if marker:
+            name = _PATCH_MARKER_NAMES[marker["kind"].casefold()]
+            line = f"*** {name}: {marker['path']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _heredoc_body(text: str) -> str | None:
+    """Return the body of ``<<TAG`` text that ends with its terminator and nothing else."""
+
+    heredoc = _PATCH_HEREDOC.match(text)
+    if heredoc is None:
+        return None
+    tag = heredoc["tag"]
+    lines = text[heredoc.end() :].rstrip().split("\n")
+    body = lines[:-1]
+    # A terminator inside the body would end the heredoc early and run what follows.
+    if lines[-1] != tag or tag in body:
+        return None
+    text = "\n".join(body)
+    if not heredoc["quote"] and re.search(r"[$`\\]", text):
+        # An unquoted heredoc expands $(...) and backticks before apply_patch runs.
+        return None
+    return text
+
+
+def _shell_patch(command: str) -> str | None:
+    """Return the patch from a shell command that only invokes ``apply_patch``.
+
+    Returns ``None`` when the command carries no patch. Raises ``ValueError`` for
+    any other command carrying a patch, because a shell would run the extra text.
+    """
+
+    invocation = _PATCH_INVOCATION.match(command)
+    if invocation is None:
+        if _BEGIN_PATCH_LINE.search(command):
+            raise ValueError("hook input contains an unsupported apply_patch command")
+        return None
+    rest = command[invocation.end() :]
+    body = _heredoc_body(rest)
+    if body is None:
+        quoted = re.fullmatch(r"[ \t]+'([^']*)'\s*", rest)
+        body = quoted[1] if quoted else None
+    if body is None or not _BEGIN_PATCH_LINE.search(body):
+        raise ValueError("hook input contains an unsupported apply_patch command")
+    return body
+
+
+def _tool_patch(tool_input: Mapping[str, Any]) -> str:
+    """Return the patch an ``apply_patch`` tool call carries, whichever field holds it."""
+
+    candidates = {
+        value
+        for key, value in tool_input.items()
+        if isinstance(key, str)
+        and (key.casefold() in _PATCH_KEYS | _COMMAND_KEYS or key == _RAW_ARGUMENT)
+        and isinstance(value, str)
+        and value.strip()
+    }
+    if len(candidates) != 1:
+        raise ValueError("apply_patch input must contain exactly one patch")
+    patch = candidates.pop()
+    if not _BEGIN_PATCH_LINE.search(patch):
+        raise ValueError("apply_patch input does not contain a patch")
+    return patch
 
 
 def is_post_tool_use(payload: Mapping[str, Any]) -> bool:
@@ -123,20 +322,14 @@ def ingest_post_tool_use(payload: Mapping[str, Any], config: ReflexConfig) -> No
         ),
         None,
     )
-    if payload.get("is_error") is True or (
-        isinstance(output, Mapping)
-        and (
-            output.get("is_error") is True
-            or output.get("isError") is True
-            or output.get("interrupted") is True
-            or output.get("exit_code", output.get("exitCode", 0)) not in (0, None)
-        )
-    ):
-        return
+    # Failed, interrupted, and non-zero-exit tools still return their output to the
+    # model, so their evidence is recorded too.
     cwd = Path(_workspace_cwd(payload, arguments) or ".").resolve()
-    action = ProposedAction(
-        command=_text(arguments, *_COMMAND_FIELDS) or None, input=dict(arguments)
+    command = next(
+        (value for _, value in _command_fields(arguments) if isinstance(value, str) and value),
+        None,
     )
+    action = ProposedAction(command=command, input=dict(arguments))
     record_post_tool_use(
         config, session_id, action=action, tool_name=tool_name, cwd=cwd, output=output
     )
@@ -269,19 +462,32 @@ def context_from_hook_payload(
         for value in tool_input.values()
     ):
         raise ValueError("hook input is missing tool arguments")
-    command = ""
-    for name in _COMMAND_FIELDS:
-        if name in tool_input:
-            value = tool_input[name]
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError("hook input contains an invalid command")
-            command = value
-            break
-    is_shell = bool(command.strip())
+    kind = tool_name.strip().casefold()
+    command = _command_text(tool_input)
+    patch = _tool_patch(tool_input) if kind in _PATCH_TOOLS else _shell_patch(command)
+    action_input = dict(tool_input)
+    policy_tool_name = tool_name
+    if patch is not None:
+        # The patch is what gets applied, whichever field (or apply_patch command)
+        # carried it. Policy checks inspect patch headers only on a patch tool call.
+        command = ""
+        action_input = {
+            key: value
+            for key, value in tool_input.items()
+            if not isinstance(key, str)
+            or (key.casefold() not in _PATCH_KEYS | _COMMAND_KEYS and key != _RAW_ARGUMENT)
+        }
+        action_input["patch"] = _normalized_patch(patch)
+        policy_tool_name = "apply_patch"
+    elif kind in _SHELL_TOOLS and not command:
+        raise ValueError("hook input is missing a shell command")
+    elif kind in _FILE_WRITE_TOOLS and not _has_path(tool_input):
+        raise ValueError("hook input is missing a file path")
+    is_shell = bool(command)
     action = ProposedAction(
         type="shell_command" if is_shell else "tool_call",
         command=command if is_shell else None,
-        input=dict(tool_input),
+        input=action_input,
         description=tool_input.get("description")
         if isinstance(tool_input.get("description"), str)
         else None,
@@ -312,7 +518,7 @@ def context_from_hook_payload(
         tool_name=tool_name,
         tool_input=tool_input,
     )
-    return context.model_copy(update={"hook_audit": correlation, "tool_name": tool_name})
+    return context.model_copy(update={"hook_audit": correlation, "tool_name": policy_tool_name})
 
 
 def _path_or_none(value: str) -> Any:

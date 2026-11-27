@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import fcntl
+import io
 import json
 import sqlite3
 import time
@@ -14,9 +16,9 @@ from typing import Any
 import requests
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .audit import AuditLog
+from .audit import AuditLog, parse_audit_record
 from .broker import BrokerClient
-from .config import AccessConfig, ReflexConfig
+from .config import AccessConfig, ReflexConfig, load_bootstrap_config
 from .enterprise import AccessDenied, Identity, authorize, verified_identity
 from .policy_rollout import RolloutStore, policy_hash
 from .serialization import read_config_bytes, safe_yaml_load
@@ -103,6 +105,24 @@ def _metrics(port: int | None) -> dict[str, float]:
     return values
 
 
+MAX_AUDIT_SNAPSHOT_BYTES = 128 * 1024 * 1024
+
+
+def _read_audit_snapshot(path: Path) -> str:
+    """Capture the log under the writer's lock, without newline translation."""
+    if not path.exists():
+        return ""
+    with path.open("rb") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_SH)
+        try:
+            raw = stream.read(MAX_AUDIT_SNAPSHOT_BYTES + 1)
+        finally:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    if len(raw) > MAX_AUDIT_SNAPSHOT_BYTES:
+        raise ValueError("audit log exceeds the dashboard snapshot limit")
+    return raw.decode("utf-8")
+
+
 def snapshot(config: DashboardConfig, identity: Identity) -> dict[str, Any]:
     """Aggregate authorized teams; never expose data from an invalid audit chain."""
     teams = []
@@ -117,7 +137,10 @@ def snapshot(config: DashboardConfig, identity: Identity) -> dict[str, Any]:
             policy = ReflexConfig.model_validate(safe_yaml_load(raw_policy.decode("utf-8")))
             result["active_policy_hash"] = policy_hash(policy)
             if source.rollout_state_path:
-                rollout = RolloutStore(Path(source.rollout_state_path)).status()
+                # Signed snapshots are verified against the host's trust roots.
+                rollout = RolloutStore(
+                    Path(source.rollout_state_path), load_bootstrap_config()
+                ).status()
                 result["rollout"] = rollout
                 if rollout["active_hash"]:
                     result["active_policy_hash"] = rollout["active_hash"]
@@ -126,8 +149,17 @@ def snapshot(config: DashboardConfig, identity: Identity) -> dict[str, Any]:
                 update={"audit": policy.audit.model_copy(update={"path": str(audit_path)})}
             )
             # Verify and render the same captured bytes even if the log changes.
-            audit_text = audit_path.read_text(encoding="utf-8") if audit_path.exists() else ""
-            valid, message = AuditLog(audit_config).verify(
+            audit_text = _read_audit_snapshot(audit_path)
+            # Verify as a reader (no private signing key). This policy file is not
+            # signature-checked, so it must not choose the audit trust key: only the
+            # operator-pinned key verifies signatures. Its require_signature can only
+            # make verification stricter (no pinned key then fails closed).
+            reader_config = audit_config.model_copy(
+                update={
+                    "signing": audit_config.signing.model_copy(update={"public_key_path": None})
+                }
+            )
+            valid, message = AuditLog.reader(reader_config).verify(
                 Path(source.audit_public_key_path).expanduser()
                 if source.audit_public_key_path
                 else None,
@@ -138,7 +170,9 @@ def snapshot(config: DashboardConfig, identity: Identity) -> dict[str, Any]:
                 result["error"] = "Audit chain verification failed"
                 teams.append(result)
                 continue
-            entries = [json.loads(line) for line in audit_text.splitlines() if line.strip()]
+            # Use the verifier's framing: only "\n" delimits records, so Unicode
+            # line separators inside JSON strings cannot split a verified record.
+            entries = [parse_audit_record(line) for line in io.StringIO(audit_text, newline="\n")]
             decisions = Counter(
                 entry.get("policy_decision")
                 for entry in entries

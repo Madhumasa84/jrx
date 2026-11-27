@@ -20,6 +20,9 @@ class PolicyImpactReport:
     skipped_policy_mismatch: int
     skipped_decision_mismatch: int
     changes: dict[str, int]
+    # Decision classes the candidate's mode runs and the baseline's blocked. A mode
+    # downgrade relaxes these even when every replayed label stays the same.
+    enforcement_relaxations: tuple[str, ...] = ()
 
     @property
     def relaxations(self) -> int:
@@ -38,6 +41,8 @@ class PolicyImpactReport:
         if hold_review := self.changes.get("HOLD_to_REVIEW", 0):
             parts.append(f"{count(hold_review)} HOLD->REVIEW")
         parts.append(f"{count(self.new_holds)} new HOLD")
+        if self.enforcement_relaxations:
+            parts.append("enforcement relaxed")
         return ", ".join(parts)
 
     def markdown(self) -> str:
@@ -56,6 +61,12 @@ class PolicyImpactReport:
             f"| {transition.replace('_to_', ' → ')} | {count} |"
             for transition, count in self.changes.items()
         )
+        if self.enforcement_relaxations:
+            lines += [
+                "",
+                "The candidate's mode lets these decisions run where the baseline blocked "
+                "them: " + ", ".join(self.enforcement_relaxations) + ".",
+            ]
         return "\n".join(lines)
 
 
@@ -84,4 +95,5 @@ def impact_report(
         skipped_policy_mismatch=report["skipped_policy_mismatch"],
         skipped_decision_mismatch=report["skipped_decision_mismatch"],
         changes=report["changes"],
+        enforcement_relaxations=tuple(report["enforcement_relaxations"]),
     )

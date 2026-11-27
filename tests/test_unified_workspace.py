@@ -81,8 +81,8 @@ def test_native_arguments_preserve_spaces_unicode_and_shell_text(
     monkeypatch.setenv("CAPTURE", str(capture))
     code, argv = process.launch_native("codex", tmp_path, initial_prompt=prompt)
     assert code == 0
-    assert argv == ["codex", prompt]
-    assert json.loads(capture.read_text(encoding="utf-8")) == [prompt]
+    assert argv == ["codex", "--", prompt]
+    assert json.loads(capture.read_text(encoding="utf-8")) == ["--", prompt]
     assert not (tmp_path / "SHOULD_NOT_EXIST").exists()
 
 
@@ -134,6 +134,7 @@ def test_codex_exec_resume_uses_documented_session_scoped_argv() -> None:
         "--json",
         "--model",
         "account-visible-model",
+        "--",
         "saved-thread-id",
         prompt,
     ]
@@ -147,6 +148,7 @@ def test_codex_workspace_write_is_explicit_and_never_selects_bypass_flags() -> N
         "--json",
         "--sandbox",
         "workspace-write",
+        "--",
         prompt,
     ]
     resumed = process.structured_argv(
@@ -162,6 +164,7 @@ def test_codex_workspace_write_is_explicit_and_never_selects_bypass_flags() -> N
         "--json",
         "--model",
         "account-visible-model",
+        "--",
         "saved-thread-id",
         prompt,
     ]
@@ -207,6 +210,7 @@ def test_codex_exec_resume_stream_passes_session_reference_as_an_argument(
         "--json",
         "--model",
         "account-visible-model",
+        "--",
         "saved-thread-id",
         prompt,
     ]
@@ -1351,8 +1355,10 @@ def test_handoff_native_completion_and_scope_decline_are_persisted(
 
 
 @pytest.mark.parametrize("provider", ["codex", "claude", "antigravity"])
-def test_hook_rollback_preserves_other_commands_in_same_group(provider: str) -> None:
-    command = hooks.hook_command(providers.provider_by_key(provider))
+def test_hook_rollback_preserves_other_commands_in_same_group(
+    provider: str, tmp_path: Path
+) -> None:
+    command = hooks.hook_command(providers.provider_by_key(provider), tmp_path)
     namespace = "jev-reflex" if provider == "antigravity" else "hooks"
     keep = {"type": "command", "command": "keep-me"}
     config = {

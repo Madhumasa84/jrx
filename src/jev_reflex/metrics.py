@@ -263,7 +263,9 @@ class MetricsRegistry:
     def render(self) -> str:
         """Render all metrics in Prometheus exposition format."""
         with self._lock:
-            return "\n\n".join(metric._render() for metric in self._metrics.values())
+            body = "\n\n".join(metric._render() for metric in self._metrics.values())
+        # The text exposition format requires the last line to end with "\n".
+        return body + "\n" if body else body
 
 
 # Global registry

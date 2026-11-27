@@ -83,9 +83,14 @@ def test_rollout_store_canary_promotion_rollback_and_permissions(tmp_path: Path)
     assert store.status()["active_hash"] == policy_hash(candidate)
     store.rollback()
     assert store.status()["active_hash"] == policy_hash(baseline)
+    # Operator-written state must stay readable by another evaluating user, but nobody
+    # else may write it.
     store.path.chmod(0o644)
-    with pytest.raises(ValueError, match="owner-only"):
-        store.status()
+    assert store.status()["active_hash"] == policy_hash(baseline)
+    for mode in (0o664, 0o646):
+        store.path.chmod(mode)
+        with pytest.raises(ValueError, match="group or world write"):
+            store.status()
 
 
 def test_runtime_selects_promoted_revision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

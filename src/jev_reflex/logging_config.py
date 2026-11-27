@@ -90,20 +90,34 @@ class WebhookSink:
         self.max_retries = max_retries
         self._queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=max_queue_size)
         self._stop_event = threading.Event()
+        self._drain_deadline: float | None = None
         self._worker_thread = threading.Thread(target=self._worker, daemon=True)
         self._worker_thread.start()
 
+    def _remaining(self) -> float | None:
+        """Seconds left to drain after stop(), or None while running normally."""
+        deadline = self._drain_deadline
+        return None if deadline is None else deadline - time.monotonic()
+
     def _worker(self) -> None:
         """Background worker that delivers log entries to webhook."""
-        while not self._stop_event.is_set():
+        while True:
+            stopping = self._stop_event.is_set()
             try:
-                # Wait for log entry with timeout to check stop event
-                entry = self._queue.get(timeout=1.0)
-                self._deliver_with_retry(entry)
+                # After stop(), keep delivering what is queued until it is empty or
+                # the drain deadline passes.
+                entry = self._queue.get_nowait() if stopping else self._queue.get(timeout=1.0)
             except queue.Empty:
+                if stopping:
+                    return
                 continue
+            remaining = self._remaining()
+            if remaining is not None and remaining <= 0:
+                return
+            try:
+                self._deliver_with_retry(entry)
             except Exception:
-                # Log delivery errors to stderr to avoid infinite loops
+                # Never let a delivery failure kill the worker or reach callers.
                 pass
 
     def _deliver_with_retry(self, entry: dict[str, Any]) -> None:
@@ -111,12 +125,16 @@ class WebhookSink:
         import requests
 
         for attempt in range(self.max_retries + 1):
+            remaining = self._remaining()
+            if remaining is not None and remaining <= 0:
+                return
+            timeout = 5.0 if remaining is None else min(5.0, remaining)
             try:
                 response = requests.post(
                     self.url,
                     json=entry,
                     headers={"Content-Type": "application/json"},
-                    timeout=5.0,
+                    timeout=timeout,
                 )
                 if response.status_code >= 200 and response.status_code < 300:
                     return
@@ -125,22 +143,30 @@ class WebhookSink:
             except requests.RequestException:
                 if attempt == self.max_retries:
                     return
-            # Exponential backoff: 2^attempt seconds, max 10 seconds
+            # Exponential backoff: 2^attempt seconds, max 10 seconds. A stop()
+            # interrupts the wait so shutdown stays within its drain deadline.
             backoff = min(2**attempt, 10.0)
-            time.sleep(backoff)
+            remaining = self._remaining()
+            if remaining is not None and remaining <= backoff:
+                return
+            self._stop_event.wait(backoff)
 
     def emit(self, entry: dict[str, Any]) -> None:
         """Emit log entry to webhook (non-blocking)."""
+        if self._stop_event.is_set():
+            return
         try:
             self._queue.put_nowait(entry)
         except queue.Full:
             # Queue is full, drop the log entry
             pass
 
-    def stop(self) -> None:
-        """Stop the background worker and drain remaining queue."""
+    def stop(self, timeout: float = 5.0) -> None:
+        """Stop the background worker after draining the queue, within ``timeout`` seconds."""
+        if self._drain_deadline is None:
+            self._drain_deadline = time.monotonic() + timeout
         self._stop_event.set()
-        self._worker_thread.join(timeout=5.0)
+        self._worker_thread.join(timeout=max(0.0, self._drain_deadline - time.monotonic()))
 
     close = stop
 
@@ -220,7 +246,14 @@ class _SinkHandler(logging.Handler):
         self._sink_closed = False
 
     def emit(self, record: logging.LogRecord) -> None:
-        self.sink.emit(json.loads(self.format(record)))
+        # Like stdlib handlers: a logging failure is reported via handleError and
+        # never propagates into the evaluator that emitted the record.
+        try:
+            self.sink.emit(json.loads(self.format(record)))
+        except RecursionError:
+            raise
+        except Exception:
+            self.handleError(record)
 
     def close(self) -> None:
         if not self._sink_closed:

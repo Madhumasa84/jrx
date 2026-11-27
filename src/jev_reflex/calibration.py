@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import math
 import os
 import tempfile
 from collections.abc import Iterator
@@ -17,6 +18,18 @@ from .models import EvaluationResult
 
 def default_events_path() -> Path:
     return Path.home() / ".jev-reflex" / "events.jsonl"
+
+
+def _signals(row: dict[str, Any]) -> dict[str, float] | None:
+    """Return a row's signals when they are a mapping of finite probabilities."""
+    signals = row.get("signals")
+    if signals is None:
+        return {}
+    if not isinstance(signals, dict) or not all(
+        type(value) in (int, float) and math.isfinite(value) for value in signals.values()
+    ):
+        return None
+    return {str(name): float(value) for name, value in signals.items()}
 
 
 class CalibrationStore:
@@ -54,11 +67,11 @@ class CalibrationStore:
             return []
         rows: list[dict[str, Any]] = []
         try:
-            with self.path.open("r", encoding="utf-8") as handle:
+            with self.path.open("rb") as handle:
                 for line in handle:
                     try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
+                        row = json.loads(line.decode("utf-8"))
+                    except (UnicodeDecodeError, ValueError, RecursionError):
                         continue
                     if isinstance(row, dict) and isinstance(row.get("decision_id"), str):
                         rows.append(row)
@@ -99,7 +112,13 @@ class CalibrationStore:
     def summary(self) -> dict[str, Any]:
         with self._locked():
             rows = self._read()
-        labeled = [row for row in rows if row.get("feedback") in {"correct", "incorrect"}]
+        # Skip hand-edited or corrupted rows whose signals are not finite numbers.
+        labeled = [
+            (row, signals)
+            for row in rows
+            if row.get("feedback") in {"correct", "incorrect"}
+            and (signals := _signals(row)) is not None
+        ]
 
         def accuracy(cases: list[dict[str, Any]]) -> float | None:
             if not cases:
@@ -107,26 +126,23 @@ class CalibrationStore:
             return sum(row.get("feedback") == "correct" for row in cases) / len(cases)
 
         strong = [
-            row
-            for row in labeled
-            if any(float(value) >= 0.90 for value in (row.get("signals") or {}).values())
+            row for row, signals in labeled if any(value >= 0.90 for value in signals.values())
         ]
         review = [
             row
-            for row in labeled
-            if any(0.70 <= float(value) < 0.90 for value in (row.get("signals") or {}).values())
+            for row, signals in labeled
+            if any(0.70 <= value < 0.90 for value in signals.values())
         ]
         false_high_confidence = sum(
-            row.get("feedback") == "incorrect"
-            and any(float(value) >= 0.90 for value in (row.get("signals") or {}).values())
-            for row in labeled
+            row.get("feedback") == "incorrect" and any(value >= 0.90 for value in signals.values())
+            for row, signals in labeled
         )
 
         signal_cases: dict[str, list[dict[str, Any]]] = {}
-        for row in labeled:
-            for name, value in (row.get("signals") or {}).items():
-                if float(value) >= 0.70:
-                    signal_cases.setdefault(str(name), []).append(row)
+        for row, signals in labeled:
+            for name, value in signals.items():
+                if value >= 0.70:
+                    signal_cases.setdefault(name, []).append(row)
 
         return {
             "labeled_cases": len(labeled),

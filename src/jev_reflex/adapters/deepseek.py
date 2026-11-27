@@ -24,7 +24,9 @@ def deepseek_hook_response(
     """Map policy output to the Codex-compatible DeepSeek bridge contract."""
 
     message = reason or result.reason_summary()
-    if should_block(result, config, review_supported=config.mode == "enforce"):
+    # The dsh-hooks-codex bridge speaks the Codex PreToolUse contract, which cannot ask, so
+    # a REVIEW must be denied in every enforcing mode instead of running unattended.
+    if should_block(result, config, review_supported=False):
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",

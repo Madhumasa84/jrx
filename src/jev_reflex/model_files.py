@@ -10,7 +10,7 @@ import os
 import re
 import shutil
 import stat
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from errno import ELOOP, ENOTDIR
@@ -38,10 +38,53 @@ _INFERENCE_FILES = (_GRAPH, "tokenizer.json", "calibration.json", "decision.json
 _FILES = (*_INFERENCE_FILES, "LICENSE", "NOTICE")
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+_BLOB_ID = re.compile(r"[0-9a-f]{40}")
 
 
 class ModelError(RuntimeError):
     """The local model cannot be installed or used safely."""
+
+
+@dataclass(frozen=True)
+class PinnedModel:
+    """A reviewed upstream release: its commit and the SHA-256 of every bundle file."""
+
+    revision: str
+    sha256: Mapping[str, str]
+
+
+# The default bundle installs only this reviewed Hugging Face commit, whatever the
+# hub (or HF_ENDPOINT) reports as current. The ONNX graph digest is its Git LFS
+# SHA-256; the other digests hash the files downloaded at that commit. Adopting a
+# new upstream release means reviewing it and updating this pin in a jrx release.
+PINNED_MODELS: Mapping[str, PinnedModel] = {
+    DEFAULT_MODEL_ID: PinnedModel(
+        revision="3553b95dc9b48f40cc3ffe11cd99c9a79e6c6c28",
+        sha256={
+            _GRAPH: "b7a5f89126004ce77fad386f58b4218f96ca795132d43189c241a020c5d8b757",
+            "tokenizer.json": "6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30",
+            "calibration.json": "f4a8b5dd4e1c38d083626646a644c965407eb97c28c0c4869f94fb2539e1383f",
+            "decision.json": "b01dafbc1f887d3498e0106911067400a17287d99f968c6446901c8416713169",
+            "LICENSE": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9",
+            "NOTICE": "ecb02baa6b8cbc327f2ba66ec319dddcea5ddb067f9c04b679be77e2b00327aa",
+        },
+    ),
+}
+
+
+def _pinned_release(model_id: str) -> PinnedModel | None:
+    pin = PINNED_MODELS.get(model_id)
+    if pin is not None and (
+        not isinstance(pin.revision, str)
+        or not _REVISION.fullmatch(pin.revision)
+        or set(pin.sha256) != set(_FILES)
+        or any(
+            not isinstance(digest, str) or not _SHA256.fullmatch(digest)
+            for digest in pin.sha256.values()
+        )
+    ):
+        raise ModelError(f"The pinned release of {model_id} does not cover every bundle file.")
+    return pin
 
 
 class _SnapshotLease:
@@ -224,6 +267,11 @@ def _verified_snapshot(
     model_id = manifest["model_id"]
     files = _snapshot_paths(cache / model_id / manifest["generation"])
     hashes = manifest["sha256"]
+    pin = _pinned_release(model_id)
+    # The manifest is self-written, so a cache pulled from an unreviewed upstream
+    # revision (for example by an earlier jrx) must not stay trusted.
+    if pin is not None and dict(hashes) != dict(pin.sha256):
+        raise ModelError(f"Local model {model_id} does not match its pinned release.")
     size = _verify_hashes(cache, files, hashes)
     inference_hashes = {name: hashes[name] for name in _INFERENCE_FILES}
     digest = hashlib.sha256(json.dumps(inference_hashes, sort_keys=True).encode()).hexdigest()
@@ -262,29 +310,134 @@ def verify_model(model_id: str, model_dir: str | Path = DEFAULT_MODEL_DIR) -> Ve
         raise ModelError(f"Cannot read local model {model_id}. Run `{PULL_MODEL}`.") from None
 
 
-def _catalog(hub: Any, model_id: str) -> tuple[str, dict[str, str]]:
+# Each bundle file maps to ("sha256", digest) or ("blob", Git blob SHA-1).
+_Expected = dict[str, tuple[str, str]]
+
+
+def _catalog(hub: Any, model_id: str) -> tuple[str, _Expected]:
+    """Resolve the commit to install and an expected digest for every bundle file.
+
+    The default model trusts only its pinned release. Another model is the user's
+    own choice of repository: every file must match the digest the hub publishes
+    for the resolved commit (Git LFS SHA-256, or the Git blob SHA-1 of a regular
+    file), and a file without one is refused.
+    """
+    pin = _pinned_release(model_id)
     try:
-        info = hub.HfApi().model_info(model_id, files_metadata=True, token=False)
+        info = hub.HfApi().model_info(
+            model_id,
+            revision=pin.revision if pin is not None else None,
+            files_metadata=True,
+            token=False,
+        )
     except Exception as exc:
         raise ModelError(
             f"Could not resolve {model_id} on Hugging Face ({type(exc).__name__})."
         ) from None
     if not isinstance(info.sha, str) or not _REVISION.fullmatch(info.sha):
         raise ModelError(f"Hugging Face did not return a commit SHA for {model_id}.")
+    if pin is not None and info.sha != pin.revision:
+        raise ModelError(f"Hugging Face did not resolve the pinned revision of {model_id}.")
     siblings = {file.rfilename: file for file in info.siblings or []}
     missing = set(_FILES) - siblings.keys()
     if missing:
         raise ModelError(f"{model_id} lacks required artifacts ({', '.join(sorted(missing))}).")
-    hashes = {
-        name: digest
-        for name in _FILES
-        if (digest := getattr(siblings[name].lfs, "sha256", None)) is not None
-    }
-    return info.sha, hashes
+    expected: _Expected = {}
+    for name in _FILES:
+        lfs = getattr(siblings[name].lfs, "sha256", None)
+        blob = getattr(siblings[name], "blob_id", None)
+        if lfs is not None and (not isinstance(lfs, str) or not _SHA256.fullmatch(lfs)):
+            raise ModelError(f"Hugging Face returned an invalid digest for {name}.")
+        if pin is not None:
+            if lfs is not None and lfs != pin.sha256[name]:
+                raise ModelError(
+                    f"SHA-256 mismatch for {name}: Hugging Face metadata disagrees with the "
+                    "pinned release."
+                )
+            expected[name] = ("sha256", pin.sha256[name])
+        elif lfs is not None:
+            expected[name] = ("sha256", lfs)
+        elif isinstance(blob, str) and _BLOB_ID.fullmatch(blob):
+            expected[name] = ("blob", blob)
+        else:
+            raise ModelError(f"Hugging Face published no verifiable digest for {name}.")
+    return info.sha, expected
+
+
+def _blob_digest(size: int) -> Any:
+    """Git's object ID for a regular file, as the hub reports in sibling ``blob_id``.
+
+    It is the only per-file digest the hub publishes for non-LFS files of a
+    user-chosen model; the default model is checked against pinned SHA-256s.
+    """
+    return hashlib.sha1(b"blob %d\0" % size, usedforsecurity=False)
+
+
+def _matches(expected: tuple[str, str], sha256: str, blob: str) -> bool:
+    kind, digest = expected
+    return (sha256 if kind == "sha256" else blob) == digest
+
+
+def _owner_only(descriptor: int, mode: int) -> None:
+    if os.fstat(descriptor).st_uid != os.geteuid():
+        raise ModelError("Local model cache requires downloads owned by the current user.")
+    os.fchmod(descriptor, mode)
+
+
+def _restrict_download(cache: Path, snapshot: Path, name: str) -> None:
+    """Make a fresh download owner-only before it is hashed and trusted.
+
+    huggingface_hub creates local_dir entries with umask-derived modes, such as
+    0664 and 0775 under the common 0002 umask. Our snapshot directory is 0700, so
+    no other user can reach those entries before they are restricted here.
+    """
+    *directories, filename = name.split("/")
+    with _open_cache_directory(cache, snapshot) as root:
+        parent = os.dup(root)
+    try:
+        for component in directories:
+            try:
+                child = os.open(component, _DIRECTORY_FLAGS, dir_fd=parent)
+            except OSError as exc:
+                if exc.errno in {ELOOP, ENOTDIR}:
+                    raise ModelError(
+                        "Local model cache requires real directories without symbolic links."
+                    ) from None
+                raise
+            os.close(parent)
+            parent = child
+            _owner_only(parent, 0o700)
+        try:
+            descriptor = os.open(filename, _READ_FLAGS, dir_fd=parent)
+        except OSError as exc:
+            if exc.errno == ELOOP:
+                raise ModelError(
+                    f"Local model artifact {filename} must not be a symbolic link."
+                ) from None
+            raise
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise ModelError(f"Expected a regular file for local model artifact {filename}.")
+            _owner_only(descriptor, 0o600)
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(parent)
+
+
+def _download_digests(cache: Path, path: Path) -> tuple[str, str]:
+    """Hash a downloaded artifact once for both SHA-256 and its Git blob ID."""
+    with _open_cache_file(cache, path) as stream:
+        sha256 = hashlib.sha256()
+        blob = _blob_digest(os.fstat(stream.fileno()).st_size)
+        while chunk := stream.read(1 << 20):
+            sha256.update(chunk)
+            blob.update(chunk)
+    return sha256.hexdigest(), blob.hexdigest()
 
 
 def _download(
-    hub: Any, model_id: str, revision: str, cache: Path, snapshot: Path, catalog: dict[str, str]
+    hub: Any, model_id: str, revision: str, cache: Path, snapshot: Path, expected: _Expected
 ) -> dict[str, str]:
     hashes = {}
     for name, path in _snapshot_paths(snapshot).items():
@@ -296,15 +449,37 @@ def _download(
             raise ModelError(f"Could not download {name} ({type(exc).__name__}).") from None
         if Path(downloaded) != path:
             raise ModelError(f"Hugging Face returned an unexpected path for {name}.")
-        digest, _ = _artifact_digest(cache, path)
-        remote_hash = catalog.get(name)
-        if remote_hash is not None and digest != remote_hash:
-            raise ModelError(f"SHA-256 mismatch for downloaded artifact {name}.")
-        hashes[name] = digest
+        _restrict_download(cache, snapshot, name)
+        sha256, blob = _download_digests(cache, path)
+        if not _matches(expected[name], sha256, blob):
+            label = "SHA-256" if expected[name][0] == "sha256" else "Git blob SHA-1"
+            raise ModelError(f"{label} mismatch for downloaded artifact {name}.")
+        hashes[name] = sha256
     metadata = snapshot / ".cache"
     if metadata.exists():
         shutil.rmtree(metadata)
     return hashes
+
+
+def _installed_matches(model: VerifiedModel, revision: str, expected: _Expected) -> bool:
+    if model.revision != revision:
+        return False
+    snapshot = model.tokenizer.parent
+    try:
+        for name, (kind, digest) in expected.items():
+            file = snapshot / name
+            if kind == "sha256":
+                if model._asset_hashes[file] != digest:
+                    return False
+                continue
+            contents = model.read_asset(file)
+            blob = _blob_digest(len(contents))
+            blob.update(contents)
+            if blob.hexdigest() != digest:
+                return False
+    except (ModelError, OSError):
+        return False
+    return True
 
 
 def _collect_inactive_snapshots(root_fd: int, active: str) -> None:
@@ -347,19 +522,12 @@ def pull_model(
             f"Model download requires the local extra. Run `{INSTALL_LOCAL}`."
         ) from None
 
-    revision, catalog = _catalog(hub, model_id)
+    revision, expected = _catalog(hub, model_id)
     try:
         installed = verify_model(model_id, cache)
     except ModelError:
         installed = None
-    if (
-        installed is not None
-        and installed.revision == revision
-        and all(
-            installed._asset_hashes[installed.tokenizer.parent / name] == digest
-            for name, digest in catalog.items()
-        )
-    ):
+    if installed is not None and _installed_matches(installed, revision, expected):
         return installed
     del installed
 
@@ -378,7 +546,7 @@ def pull_model(
                 lease = _SnapshotLease(cache, snapshot)
                 # Pin the new snapshot while the root lock is released for slow I/O.
                 fcntl.flock(root_fd, fcntl.LOCK_UN)
-                hashes = _download(hub, model_id, revision, cache, snapshot, catalog)
+                hashes = _download(hub, model_id, revision, cache, snapshot, expected)
                 manifest = {
                     "version": 2,
                     "model_id": model_id,

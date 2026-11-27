@@ -29,7 +29,7 @@ Configuration is loaded separately from evaluated state. Text inside a command, 
 | --- | --- |
 | Secret sent to TypeSafe | Redact before API calls, logs, hook output, and calibration; common credential flags, URL query keys, and secret-looking object fields are covered; only `TYPESAFE_API_KEY` is read for authentication. |
 | Prompt injection in retrieved content | Supply it in an explicit untrusted field; every question says not to follow state instructions; policy is local and deterministic. |
-| Destructive command | Obvious forms, including recursive `rm` through common wrappers and shell evaluation, produce a deterministic hard finding; semantic destructive signals also hold at the configured threshold. Native hooks or the enforce wrapper stop the resulting `HOLD`. |
+| Destructive command | Obvious forms, including recursive `rm` through common wrappers and shell evaluation, `find … -delete` and `find … \| xargs rm` without a narrowing test, produce a deterministic hard finding; semantic destructive signals also hold at the configured threshold. Native hooks or the enforce wrapper stop the resulting `HOLD`. Commands run through `su -c`/`runuser` are judged as local commands and need review as privileged execution; `ssh` remote commands and `docker`/`podman exec` payloads keep destructive, Git and supply-chain rules but are not judged as local paths, and always need review because their execution context cannot be observed. `tar -C`/`unzip -d` extraction and `git apply` targets are checked against workspace and protected-path rules; archive members are not read, so extraction inside the workspace needs review. |
 | API/network failure | Advisory mode warns; review/enforce produce degraded `REVIEW`; non-advisory `exec` does not run degraded results. Confirmed fail-closed behavior for: TypeSafe API timeout, 5xx errors, malformed/unparseable JSON, missing signal keys, SDK missing, missing API key, network unreachable (DNS failure), revoked API key (401). Broker failures (socket doesn't exist, connection refused, timeout/hang) also fail closed. All modes surface degradation to user/agent; enforce and review modes never return ALLOW on degraded evaluations. |
 | Shell metacharacter injection | `exec` uses a preserved argv list and `shell=False`; `--command` is parsed once with `shlex`. |
 | Malformed model response | Missing/wrong/out-of-range answers are rejected; no partial model output becomes policy approval. Non-advisory modes fail closed to `REVIEW`. |
@@ -190,57 +190,47 @@ This command runs a comprehensive test matrix against mock failure modes and rep
   Protect host time synchronization and broker credentials separately.
 - The fail-closed behavior applies to semantic evaluation failures; hard rules (deterministic checks) continue to function independently
 
-## Central policy mode
+## Central policy source and staged rollout
 
-JEV Reflex supports fetching policy from a central source (git repository, HTTPS endpoint, or local file) to scale policy management across multiple teams. This is configured in `bootstrap.yaml`:
+A central policy (git repository, HTTPS endpoint, or local file) reaches hooks, `check`, and `exec` only through an explicit, operator-run staged rollout. The runtime never polls the central source, and it never merges the central policy with the local `reflex.yaml`. Configure the source and the rollout state in the host `bootstrap.yaml`:
 
 ```yaml
+require_signature: true
+public_key_path: /etc/jrx/policy-signing.pub   # relative paths resolve next to bootstrap.yaml
+rollout_state_path: /var/lib/jrx/policy-rollout.json
 policy_source:
   type: git  # or "https" or "local"
   uri: https://github.com/org/policy-repo.git
   ref: main  # Git branch/ref (required for git type)
-  poll_interval_seconds: 300  # Default 5 minutes
   pinned_signature_pubkey: |
     -----BEGIN PUBLIC KEY-----
     MCowBQYDK2VwAyEA...
     -----END PUBLIC KEY-----
 ```
 
-**Central policy requirements:**
+**How a central policy becomes active:**
 
-- Remote policies MUST be signed (signature verification is mandatory)
-- The `pinned_signature_pubkey` is used to verify the signature
-- On signature verification failure, the old cached policy remains active and an event is logged
-- The broker refuses to start if it cannot fetch a verified policy and has no cached version
+1. `jrx policy rollout stage --bootstrap ... --baseline reflex.yaml --audit ...` fetches the candidate, verifies its Ed25519 signature with `pinned_signature_pubkey`, replays recorded audit decisions, and refuses the candidate when the replay gate fails (see the README).
+2. `jrx policy rollout promote --bootstrap /etc/jrx/bootstrap.yaml --percent N` exposes the candidate to a stable share of repositories; `--percent 100` makes it the active revision. `jrx policy rollout rollback --bootstrap /etc/jrx/bootstrap.yaml` restores the previous revision. Pass the same bootstrap file used for staging.
+3. Without rollout state, the local `reflex.yaml` is the policy. With rollout state, the active (or canary) revision becomes the effective policy in place of `reflex.yaml`; it is not merged with the local file. The local file stays required: with `require_signature: true`, `reflex.yaml` and its `.sig` are verified before a rollout revision is selected, so keep both in place.
 
-**Local policy overrides:**
+**Integrity of the rollout state:**
 
-- Local `reflex.yaml` becomes an override layer that can only TIGHTEN policy, never loosen it
-- Local can add new `hold_on` or `review_on` entries
-- Local cannot remove entries from central policy
-- Local cannot raise thresholds above central's thresholds (lower = stricter)
-- Local can lower thresholds (making them stricter)
-- Local mode merging uses the actual execution strictness: advisory < enforce < review; review requires human handling of REVIEW decisions
-- Attempted loosening is logged and ignored
+- Each snapshot stores the exact policy bytes and the detached signature it was verified from, plus the trust root: `bootstrap` (`public_key_path`/`signer_type`, the signed baseline) or `policy_source` (`pinned_signature_pubkey`, a fetched candidate).
+- Every read verifies every snapshot's signature again, parses the authenticated bytes with the runtime YAML loader, and checks the stored hash. A forged or edited snapshot stops evaluation instead of replacing the policy.
+- With `require_signature: true`, a snapshot without signature material is rejected, including state written by earlier releases (schema 1). Remove the state file and re-stage. With `require_signature: false`, an unsigned baseline snapshot is accepted, as an unsigned `reflex.yaml` is.
+- Signatures authenticate a revision's contents, not which revision is active, the canary percentage, or a rollback. With `require_signature: true`, evaluation therefore trusts rollout state only where the evaluating user can neither rewrite nor replace it: the file, every directory above it, and any symlink on the way must not be owned or writable by that user (a sticky directory protects entries the user does not own), and the evaluator must not run as root. Otherwise `check`, `exec` and hooks fail closed with a message naming the state path. A missing state file is trusted under the same rule, because only then could the user not have deleted it.
+- Operator setup: create a directory only the operator can write, for example `sudo install -d -o root -g root -m 0755 /var/lib/jrx`, set `rollout_state_path: /var/lib/jrx/policy-rollout.json` in a host-controlled `/etc/jrx/bootstrap.yaml`, and run `jrx policy rollout stage|promote|rollback --bootstrap /etc/jrx/bootstrap.yaml` as that operator. New state files are written `0644` so the evaluating user can read them; an operator's narrower mode is kept on rewrite. Group- or world-writable state is rejected.
+- Recovery when evaluation refuses existing state: move the rollout to an operator-controlled path as above and stage again, or remove `rollout_state_path` from the bootstrap to evaluate the signed `reflex.yaml` directly. Without `require_signature`, rollout state owned by the evaluating user keeps working, because the unsigned `reflex.yaml` it replaces is no better protected.
+- The stage gate compares effective enforcement, not only decision labels. A candidate whose mode lets a decision class run that the baseline blocked (for example `enforce` to `advisory`, or `review` to `enforce`) is rejected even when every replayed label is unchanged, and `--max-new-allows` bounds replayed decisions that become `ALLOW` or newly executable. `jrx policy impact` with `--max-new-allows` or `--max-relaxations` fails on the same mode relaxations.
 
-**The merge invariant is enforced by code, not just documentation:**
+**What is not implemented:**
 
-The `PolicyMerger.merge_policies()` function explicitly enforces the tighten-only invariant with tests proving the behavior.
-
-**Policy reload:**
-
-- Broker fetches remote policy on startup and at `poll_interval_seconds` intervals
-- When policy changes, it is hot-reloaded and logged to the audit module with the new `policy_version_hash`
-- Signature verification happens on every fetch
-- On fetch failure with no cached policy, the broker refuses to issue ALLOW decisions (fail-closed)
+`PolicyReloader` and `PolicyMerger` in `policy_source.py` are library components and are not wired into the CLI, hooks, or broker. In particular there is no tighten-only local overlay at runtime. If you use `PolicyMerger` directly, note that `enforce` and `review` modes are incomparable: `review` blocks REVIEW decisions that `enforce` lets run, while `enforce` blocks HOLD decisions that `review` can let a human confirm. Only `advisory` can be safely tightened to another mode, so the merge adopts a local mode only over a central `advisory` mode.
 
 **Status checking:**
 
-Use `jrx policy status` to see:
-- Active policy source type and URI
-- Last fetch time
-- Current policy version hash
-- Whether local overrides are in effect
+`jrx policy status` shows the configured source and the rollout state path. `jrx policy rollout status --bootstrap <file>` shows the active, candidate, and previous revision hashes and the canary percentage.
 
 ## Cryptographic signing
 
@@ -347,8 +337,9 @@ This checks both hash chain integrity and decision signatures, reporting any mis
 
 ## Production audit hardening and optional controls
 
-Security YAML rejects duplicate/unknown keys, aliases and excessive size/depth instead
-of silently selecting a value. Existing configurations with ignored keys must be corrected.
+Security YAML rejects duplicate/unknown keys, aliases, merge keys, tags outside the
+JSON-compatible core schema (`!!set`, `!!omap`, `!!pairs`, `!!binary`, `!!timestamp`,
+custom tags) and excessive size/depth instead of silently selecting a value. Existing configurations with ignored keys must be corrected.
 Audit append rejects symlinks and unsafe file ownership/permissions; enabled audit write
 failure produces a degraded HOLD in non-advisory modes. Ordinary semantic degradation
 cannot be bypassed with `exec --yes` in non-advisory modes.

@@ -10,6 +10,31 @@ from .models import EvaluationResult
 from .redaction import redact_text
 from .stability.metrics import StabilityReport
 
+_LINE_ESCAPES = {"\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
+
+def terminal_line(value: object) -> str:
+    """Render an untrusted value as one inert terminal line.
+
+    Escape sequences (OSC 52 clipboard writes, cursor movement), other C0/C1
+    controls, bidirectional overrides, and line separators are shown as
+    visible escapes instead of being interpreted, so a recorded value cannot
+    rewrite the screen or forge additional records.
+    """
+    text = value if isinstance(value, str) else str(value)
+    rendered: list[str] = []
+    for char in text:
+        code = ord(char)
+        if char in _LINE_ESCAPES:
+            rendered.append(_LINE_ESCAPES[char])
+        elif code < 32 or 127 <= code <= 159:
+            rendered.append(f"\\x{code:02x}")
+        elif 0x202A <= code <= 0x202E or 0x2066 <= code <= 0x2069 or code in {0x2028, 0x2029}:
+            rendered.append(f"\\u{code:04x}")
+        else:
+            rendered.append(char)
+    return "".join(rendered)
+
 
 def _bar(probability: float, width: int = 20) -> str:
     count = max(0, min(width, round(probability * width)))
@@ -17,7 +42,7 @@ def _bar(probability: float, width: int = 20) -> str:
 
 
 def format_human(result: EvaluationResult, *, title: str = "JEV Reflex") -> str:
-    action = redact_text(result.action) if result.action else "(not specified)"
+    action = terminal_line(redact_text(result.action)) if result.action else "(not specified)"
     lines = [title, "", "Action:", f"  {action}", ""]
     lines.extend(["HARD RULES", ""])
     label_width = (
@@ -54,14 +79,14 @@ def format_human(result: EvaluationResult, *, title: str = "JEV Reflex") -> str:
     )
     if result.triggered_rules or result.reasons:
         for reason in result.triggered_rules or result.reasons:
-            lines.append(f"  {reason}")
+            lines.append(f"  {terminal_line(reason)}")
     else:
         lines.append("  no policy rule matched")
     lines.extend(["", "FINAL", f"  Risk: {result.risk.choice.upper()}", f"  {result.decision}"])
     if result.warnings:
         lines.extend(["", "WARNINGS"])
         for warning in result.warnings:
-            lines.append(f"  {redact_text(warning)}")
+            lines.append(f"  {terminal_line(redact_text(warning))}")
     lines.extend(["", f"Decision ID: {result.decision_id}"])
     return "\n".join(lines)
 

@@ -26,7 +26,13 @@ from .config import JEVConfig, Mode, ReflexConfig, load_config
 from .context import RepositoryContextProvider, sanitized_child_env
 from .enterprise import AccessDenied, ApprovalStore, action_binding, authorize, verified_identity
 from .evaluator import DefaultEvaluator, DemoEvaluator, evaluate_context
-from .formatters import format_compare, format_human, format_json, format_stability
+from .formatters import (
+    format_compare,
+    format_human,
+    format_json,
+    format_stability,
+    terminal_line,
+)
 from .harness_cli import app as harness_app
 from .identity import resolve_approver
 from .logging_config import log_structured
@@ -325,8 +331,15 @@ def benchmark_live(
         if summary["degraded_runs"]:
             typer.echo("Stopped on degraded evaluation; live benchmark is incomplete.", err=True)
             raise typer.Exit(2)
+    except typer.Exit:
+        # typer.Exit is a RuntimeError; keep the degraded-run message as the only error.
+        raise
     except (OSError, RuntimeError, ValueError):
         typer.echo("Benchmark input/output error; check case names and output path.", err=True)
+        raise typer.Exit(2) from None
+    except Exception as exc:
+        # Never surface a traceback or evaluator detail from a failed benchmark.
+        typer.echo(f"Live benchmark failed ({type(exc).__name__}).", err=True)
         raise typer.Exit(2) from None
 
 
@@ -610,7 +623,8 @@ def check(
         )
     except typer.BadParameter:
         raise
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError, ValueError, sqlite3.Error, subprocess.SubprocessError):
+        # Same contract as exec: corrupt session/approval state is an input error.
         if json_output:
             typer.echo(
                 json.dumps({"decision": "REVIEW", "error": "invalid input or configuration"})
@@ -748,7 +762,15 @@ def _execute_argv(argv: list[str], cwd: Path, config: ReflexConfig) -> int:
                         signal.signal(signal.SIGTERM, old_term)
 
 
-@app.command("exec", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+@app.command(
+    "exec",
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+        # Everything after the first command word belongs to the wrapped command.
+        "allow_interspersed_args": False,
+    },
+)
 def exec_action(
     ctx: typer.Context,
     command: str | None = typer.Option(
@@ -1292,14 +1314,80 @@ def _antigravity_hook_workspace(payload: dict[str, Any]) -> Path:
     raise ValueError("Antigravity hook input does not identify the action workspace")
 
 
+def _hook_start_directory(hook_cwd: object) -> Path:
+    """Return the absolute directory a hook event names, else the process cwd."""
+    if isinstance(hook_cwd, str) and hook_cwd:
+        start = Path(hook_cwd)
+        if not start.is_absolute():
+            start = Path.cwd() / start
+    else:
+        start = Path.cwd()
+    return start.resolve()
+
+
+def _discover_hook_policy(start: Path) -> tuple[Path | None, Path]:
+    """Find the nearest ``reflex.yaml`` from ``start`` up to the Git root.
+
+    Returns the policy (or ``None``) and the directory where the search stopped.
+    Hooks run in the agent's current directory, which moves when the agent
+    changes directory, so a cwd-relative lookup is not a stable policy source.
+    """
+    for directory in (start, *start.parents):
+        candidate = directory / "reflex.yaml"
+        if candidate.is_file():
+            return candidate, directory
+        if (directory / ".git").exists():
+            return None, directory
+    return None, start
+
+
+def _openrouter_permission_request(payload: dict[str, Any] | None) -> bool:
+    return payload is not None and any(
+        str(payload.get(name, "")).replace("_", "").replace("-", "").lower() == "permissionrequest"
+        for name in ("hook_name", "hookName", "event", "event_name", "eventName")
+    )
+
+
+def _hook_error_output(kind: str, payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the adapter's fail-safe deny response, in the parsed event's shape."""
+    hooks = sys.modules[__name__]
+    try:
+        if kind == "openrouter" and payload is not None:
+            from .adapters.openrouter import _event_name
+
+            return cast(dict[str, Any], hooks.openrouter_hook_error(event=_event_name(payload)))
+        return cast(dict[str, Any], getattr(hooks, f"{kind}_hook_error")())
+    except Exception:
+        # Last resort when an adapter cannot even be imported: still deny.
+        reason = "JEV Reflex could not evaluate the hook input; action denied safely."
+        if kind == "antigravity" or (
+            kind == "openrouter" and _openrouter_permission_request(payload)
+        ):
+            return {"decision": "deny", "reason": reason}
+        if kind == "openrouter":
+            return {"block": reason}
+        if kind == "pi":
+            return {"block": True, "reason": reason}
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        }
+
+
 def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool) -> None:
     hooks = sys.modules[__name__]
     post = False
+    parsed: dict[str, Any] | None = None
     try:
-        payload = hooks.read_hook_payload()
+        payload: dict[str, Any] = hooks.read_hook_payload()
+        parsed = payload
         post = hooks.is_post_tool_use(payload)
         hook_cwd = payload.get("cwd")
         selected_config = config_path
+        demo_defaults: Path | None = None
         if kind == "antigravity":
             workspace_root = _antigravity_hook_workspace(payload)
             hook_cwd = str(workspace_root)
@@ -1309,11 +1397,33 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
                     raise FileNotFoundError(
                         "workspace reflex.yaml is required for Antigravity hooks"
                     )
-        loaded = _load(
-            selected_config,
-            mode,
-            Path(hook_cwd) if isinstance(hook_cwd, str) and hook_cwd else None,
-        )
+        elif selected_config is None:
+            start = _hook_start_directory(hook_cwd)
+            hook_cwd = str(start)
+            selected_config, boundary = _discover_hook_policy(start)
+            if selected_config is None:
+                if not demo:
+                    # Fail closed: built-in defaults are advisory and would allow
+                    # every action whenever the agent leaves the policy directory.
+                    raise FileNotFoundError(
+                        "reflex.yaml is required between the hook directory and the Git root"
+                    )
+                demo_defaults = boundary / "reflex.yaml"
+        if demo_defaults is not None:
+            # Offline demo without a policy file: built-in defaults, enforced
+            # unless --mode says otherwise. Never used by installed hooks.
+            loaded = load_config(
+                demo_defaults,
+                mode_override=_validated_mode(mode) or "enforce",
+                scope=hook_cwd,
+                default_if_missing=True,
+            )
+        else:
+            loaded = _load(
+                selected_config,
+                mode,
+                Path(hook_cwd) if isinstance(hook_cwd, str) and hook_cwd else None,
+            )
         if post:
             hooks.ingest_post_tool_use(payload, loaded)
             typer.echo("{}")
@@ -1365,22 +1475,20 @@ def _run_hook(kind: str, config_path: Path | None, mode: str | None, demo: bool)
                 )
                 if kind == "antigravity":
                     output = {"decision": "allow"}
-                elif kind == "openrouter" and any(
-                    str(payload.get(name, "")).replace("_", "").replace("-", "").lower()
-                    == "permissionrequest"
-                    for name in ("hook_name", "hookName", "event", "event_name", "eventName")
-                ):
+                elif kind == "openrouter" and _openrouter_permission_request(payload):
                     output = {"decision": "allow"}
                 else:
                     output = {}
+        rendered = json.dumps(output, separators=(",", ":"))
     except Exception:
         if post:
             typer.echo("PostToolUse evidence could not be recorded.", err=True)
             raise typer.Exit(code=2) from None
-        # Hook hosts differ in how they treat non-zero hook exits. A valid deny response
-        # is the most portable fail-safe for malformed input/configuration.
-        output = getattr(hooks, f"{kind}_hook_error")()
-    typer.echo(json.dumps(output, separators=(",", ":")))
+        # Hook hosts differ in how they treat non-zero hook exits (Claude Code treats
+        # an uncaught traceback's exit 1 as non-blocking). A valid deny response is the
+        # most portable fail-safe for malformed input, configuration, or state.
+        rendered = json.dumps(_hook_error_output(kind, parsed), separators=(",", ":"))
+    typer.echo(rendered)
 
 
 @app.command("post-tool-use")
@@ -1792,7 +1900,12 @@ def audit_verify(
         None, "--public-key", help="Public key for decision signature verification."
     ),
 ) -> None:
-    """Verify the integrity of the audit log hash chain and optionally decision signatures."""
+    """Verify the audit log hash chain and decision signatures.
+
+    Signatures are checked against --public-key or the configured
+    signing.public_key_path; with signing.require_signature set, a missing key or an
+    unsigned record fails verification.
+    """
 
     try:
         config = load_config()
@@ -1801,7 +1914,8 @@ def audit_verify(
                 update={"audit": config.audit.model_copy(update={"path": str(path)})}
             )
 
-        audit_log = AuditLog(config)
+        # Verify as a reader: the producer's private signing key is never loaded.
+        audit_log = AuditLog.reader(config)
         public_key_path = public_key.expanduser() if public_key else None
         is_valid, message = audit_log.verify(public_key_path=public_key_path)
         typer.echo(message)
@@ -1893,33 +2007,42 @@ def audit_tail(
                 return
 
             for entry in entries:
-                typer.echo(f"Seq: {entry['seq']}")
-                typer.echo(f"Timestamp: {entry.get('timestamp_utc') or entry.get('timestamp')}")
+                # Audit fields can carry agent-controlled text; never let it drive the terminal.
+                show = terminal_line
+                typer.echo(f"Seq: {show(entry['seq'])}")
+                typer.echo(
+                    f"Timestamp: {show(entry.get('timestamp_utc') or entry.get('timestamp'))}"
+                )
                 if entry.get("event_type") == "human_override":
                     typer.echo("Event: human_override")
-                    typer.echo(f"Approver: {entry.get('identity', 'unknown')}")
-                    typer.echo(f"Original Decision: {entry.get('original_decision', 'unknown')}")
-                    typer.echo(f"Action: {entry.get('action_summary', '')}")
+                    typer.echo(f"Approver: {show(entry.get('identity', 'unknown'))}")
+                    typer.echo(
+                        f"Original Decision: {show(entry.get('original_decision', 'unknown'))}"
+                    )
+                    typer.echo(f"Action: {show(entry.get('action_summary', ''))}")
                     justification = entry.get("justification", "")
-                    typer.echo(f"Justification: {justification if justification else '(empty)'}")
+                    typer.echo(
+                        f"Justification: {show(justification) if justification else '(empty)'}"
+                    )
                 else:
-                    typer.echo(f"Decision: {entry.get('policy_decision', '')}")
-                    typer.echo(f"Action: {entry.get('action_summary', '')}")
+                    typer.echo(f"Decision: {show(entry.get('policy_decision', ''))}")
+                    typer.echo(f"Action: {show(entry.get('action_summary', ''))}")
                     if entry.get("hard_rule_findings"):
                         typer.echo("Hard rule findings:")
                         for finding in entry["hard_rule_findings"]:
                             typer.echo(
-                                f"  - {finding['check']}: {finding['reason_code']} (triggered: {finding['triggered']})"
+                                f"  - {show(finding['check'])}: {show(finding['reason_code'])} "
+                                f"(triggered: {show(finding['triggered'])})"
                             )
                     if entry.get("jev_signals"):
                         typer.echo("JEV signals:")
                         for signal, value in entry["jev_signals"].items():
-                            typer.echo(f"  - {signal}: {value:.2f}")
-                typer.echo(f"Policy version hash: {entry.get('policy_version_hash', '')}")
-                typer.echo(f"Entry hash: {entry.get('entry_hash', '')}")
+                            typer.echo(f"  - {show(signal)}: {value:.2f}")
+                typer.echo(f"Policy version hash: {show(entry.get('policy_version_hash', ''))}")
+                typer.echo(f"Entry hash: {show(entry.get('entry_hash', ''))}")
                 typer.echo("---")
     except Exception as e:
-        typer.echo(f"Error reading audit log: {e}", err=True)
+        typer.echo(f"Error reading audit log: {terminal_line(e)}", err=True)
         raise typer.Exit(code=1) from None
 
 
@@ -1950,7 +2073,8 @@ def audit_overrides(
                     since_dt = since_dt.replace(tzinfo=UTC)
             except ValueError:
                 typer.echo(
-                    f"Invalid date format for --since: '{since}'. Use YYYY-MM-DD or ISO 8601.",
+                    f"Invalid date format for --since: '{terminal_line(since)}'. "
+                    "Use YYYY-MM-DD or ISO 8601.",
                     err=True,
                 )
                 raise typer.Exit(code=2) from None
@@ -1965,18 +2089,21 @@ def audit_overrides(
                 return
 
             for entry in overrides:
-                typer.echo(f"Seq: {entry['seq']}")
-                typer.echo(f"Timestamp: {entry.get('timestamp_utc') or entry.get('timestamp')}")
-                typer.echo(f"Approver: {entry.get('identity', 'unknown')}")
-                typer.echo(f"Original Decision: {entry.get('original_decision', 'unknown')}")
-                typer.echo(f"Action: {entry.get('action_summary', '')}")
+                show = terminal_line
+                typer.echo(f"Seq: {show(entry['seq'])}")
+                typer.echo(
+                    f"Timestamp: {show(entry.get('timestamp_utc') or entry.get('timestamp'))}"
+                )
+                typer.echo(f"Approver: {show(entry.get('identity', 'unknown'))}")
+                typer.echo(f"Original Decision: {show(entry.get('original_decision', 'unknown'))}")
+                typer.echo(f"Action: {show(entry.get('action_summary', ''))}")
                 justification = entry.get("justification", "")
-                typer.echo(f"Justification: {justification if justification else '(empty)'}")
+                typer.echo(f"Justification: {show(justification) if justification else '(empty)'}")
                 typer.echo("---")
     except typer.Exit:
         raise
     except Exception as e:
-        typer.echo(f"Error reading audit log overrides: {e}", err=True)
+        typer.echo(f"Error reading audit log overrides: {terminal_line(e)}", err=True)
         raise typer.Exit(code=1) from None
 
 
@@ -2054,7 +2181,10 @@ def policy_impact(
         None,
         "--max-relaxations",
         min=0,
-        help="Limit new ALLOW and HOLD-to-REVIEW decisions combined.",
+        help=(
+            "Limit new ALLOW and HOLD-to-REVIEW decisions combined. With any limit set, a "
+            "candidate whose mode runs a decision class the baseline blocked also fails."
+        ),
     ),
     github_output: Path | None = typer.Option(None, "--github-output"),
 ) -> None:
@@ -2085,6 +2215,11 @@ def policy_impact(
     if max_relaxations is not None and report.relaxations > max_relaxations:
         typer.echo(f"\nPolicy relaxations exceed the limit of {max_relaxations}.")
         raise typer.Exit(1)
+    if (max_new_allows is not None or max_relaxations is not None) and (
+        report.enforcement_relaxations
+    ):
+        typer.echo("\nThe candidate's mode relaxes enforcement, which no limit allows.")
+        raise typer.Exit(1)
 
 
 def _rollout_store(bootstrap: Path):
@@ -2094,7 +2229,7 @@ def _rollout_store(bootstrap: Path):
     settings = load_bootstrap_config(bootstrap)
     if not settings.rollout_state_path:
         raise ValueError("bootstrap rollout_state_path is required")
-    return settings, RolloutStore(Path(settings.rollout_state_path))
+    return settings, RolloutStore(Path(settings.rollout_state_path), settings)
 
 
 @rollout_app.command("stage")
@@ -2105,11 +2240,21 @@ def policy_rollout_stage(
     public_key: Path | None = typer.Option(
         None, "--public-key", help="Trusted audit verification key."
     ),
-    max_new_allows: int = typer.Option(0, "--max-new-allows", min=0),
+    max_new_allows: int = typer.Option(
+        0,
+        "--max-new-allows",
+        min=0,
+        help=(
+            "Limit replayed decisions the candidate newly lets execute: any change to ALLOW, "
+            "plus decisions the baseline's mode blocked and the candidate's mode runs (for "
+            "example HOLD to REVIEW under enforce, or any HOLD under advisory). A candidate "
+            "whose mode runs a decision class the baseline blocked is always rejected."
+        ),
+    ),
 ) -> None:
     """Fetch a signed remote candidate and stage it after an offline replay."""
-    from .config import _verify_config_signature
-    from .policy_rollout import policy_hash, simulate
+    from .config import parse_policy_bytes, verify_policy_signature
+    from .policy_rollout import SignedPolicy, policy_hash, simulate
     from .policy_source import PolicyFetcher
 
     try:
@@ -2117,17 +2262,32 @@ def policy_rollout_stage(
         if settings.policy_source.type is None:
             raise ValueError("a signed policy source is required")
         baseline_bytes = read_config_bytes(baseline)
+        baseline_signature = None
         if settings.require_signature:
-            _verify_config_signature(baseline, settings, data=baseline_bytes)
-        active = _parse_policy_file(baseline_bytes)
+            # Store exactly the bytes and signature verified here, so every
+            # later read can verify the snapshot again.
+            baseline_signature = read_config_bytes(baseline.with_suffix(baseline.suffix + ".sig"))
+            verify_policy_signature(baseline_bytes, baseline_signature, settings)
+        active = parse_policy_bytes(baseline_bytes)
+        baseline_snapshot: ReflexConfig | SignedPolicy = (
+            active
+            if baseline_signature is None
+            else SignedPolicy(baseline_bytes, baseline_signature, "bootstrap")
+        )
         current = store.status()
         if current["active_hash"] and current["active_hash"] != policy_hash(active):
             raise ValueError("baseline policy differs from active rollout policy")
-        candidate, _hash = PolicyFetcher(settings.policy_source).fetch()
+        fetched = PolicyFetcher(settings.policy_source).fetch_signed()
+        candidate = parse_policy_bytes(fetched.raw)
         report = simulate(audit, active, candidate, public_key=public_key)
-        if report["replayed"] == 0 or report["new_allows"] > max_new_allows:
+        if report["replayed"] == 0 or report["newly_executable"] > max_new_allows:
             raise ValueError("simulation gate failed")
-        store.stage(active, candidate)
+        if report["enforcement_relaxations"]:
+            # A weaker mode lets a whole decision class run, which no replay count bounds.
+            raise ValueError("candidate relaxes enforcement")
+        store.stage(
+            baseline_snapshot, SignedPolicy(fetched.raw, fetched.signature, "policy_source")
+        )
         typer.echo(json.dumps({"status": store.status(), "simulation": report}, indent=2))
     except Exception as exc:
         typer.echo(f"Policy stage failed: {type(exc).__name__}.", err=True)
@@ -2404,9 +2564,8 @@ def policy_sign(
 
 @policy_app.command("status")
 def policy_status() -> None:
-    """Show the current policy status including source and overrides."""
+    """Show the configured central policy source and how it reaches runtime."""
     from .config import load_bootstrap_config
-    from .policy_source import PolicyFetcher
 
     bootstrap = load_bootstrap_config()
 
@@ -2419,24 +2578,16 @@ def policy_status() -> None:
     typer.echo(f"Policy source URI: {bootstrap.policy_source.uri}")
     if bootstrap.policy_source.ref:
         typer.echo(f"Policy source ref: {bootstrap.policy_source.ref}")
-    typer.echo(f"Poll interval: {bootstrap.policy_source.poll_interval_seconds}s")
-
-    # Try to fetch current status
-    try:
-        fetcher = PolicyFetcher(bootstrap.policy_source)
-        status = fetcher.get_status()
-        typer.echo(f"Last fetch time: {status['last_fetch_time']}")
-        typer.echo(f"Policy hash: {status['policy_hash']}")
-        typer.echo(f"Has cached policy: {status['has_cached_policy']}")
-    except Exception as e:
-        typer.echo(f"Failed to fetch policy status: {e}")
-
-    # Check for local override
-    local_path = Path("reflex.yaml")
-    if local_path.exists():
-        typer.echo("Local override: present (reflex.yaml)")
+    # Runtime never polls or merges the central source; only staging reads it.
+    typer.echo(
+        "Runtime policy: reflex.yaml, replaced by the active or canary revision when "
+        "rollout state exists. The central source is read only by `jrx policy rollout stage`."
+    )
+    if bootstrap.rollout_state_path:
+        typer.echo(f"Rollout state: {bootstrap.rollout_state_path}")
+        typer.echo("Run `jrx policy rollout status --bootstrap <file>` for active revisions.")
     else:
-        typer.echo("Local override: none")
+        typer.echo("Rollout state: not configured; the central policy is not applied.")
 
 
 @policy_app.command("test")

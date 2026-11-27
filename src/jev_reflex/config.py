@@ -776,6 +776,34 @@ def _load_policy_yaml(raw: bytes, *, kind: str) -> Any:
     return loaded
 
 
+def parse_policy_bytes(raw: bytes) -> ReflexConfig:
+    """Parse policy bytes exactly as the runtime does for ``reflex.yaml``."""
+
+    loaded = _load_policy_yaml(raw, kind="configuration")
+    if not isinstance(loaded, dict):
+        raise ValueError("configuration root must be a YAML mapping")
+    return ReflexConfig.model_validate(loaded)
+
+
+def _rollout_scope(scope: str | None, config_path: Path) -> str:
+    """Bucket canary cohorts by repository, not by the subdirectory a hook ran in."""
+
+    given = scope or str(config_path.parent.resolve())
+    try:
+        start = Path(given).resolve()
+        if not start.is_dir():
+            return given
+        for candidate in (start, *start.parents):
+            # ``.git`` is a directory in a checkout and a file in a worktree or
+            # submodule. Like git, ignore a ``.git`` directory without ``HEAD``.
+            marker = candidate / ".git"
+            if marker.is_file() or (marker / "HEAD").is_file():
+                return str(candidate)
+    except (OSError, RuntimeError, ValueError):
+        pass
+    return given
+
+
 def load_config(
     path: Path | None = None,
     *,
@@ -783,8 +811,13 @@ def load_config(
     scope: str | None = None,
     default_if_missing: bool = False,
     validate_production: bool = True,
+    apply_rollout: bool = True,
 ) -> ReflexConfig:
-    """Load config, defaulting only when the implicit ``reflex.yaml`` is absent."""
+    """Load config, defaulting only when the implicit ``reflex.yaml`` is absent.
+
+    ``apply_rollout=False`` returns the given file's policy even when a staged
+    rollout would otherwise select another revision (for offline testing).
+    """
 
     config_path = path if path is not None else Path("reflex.yaml")
     bootstrap = load_bootstrap_config()
@@ -796,16 +829,13 @@ def load_config(
             raise FileNotFoundError(f"Configuration file not found: {config_path}") from None
     if bootstrap.require_signature:
         _verify_config_signature(config_path, bootstrap, data=raw)
-    loaded = _load_policy_yaml(raw, kind="configuration")
-    if not isinstance(loaded, dict):
-        raise ValueError("configuration root must be a YAML mapping")
-    config = ReflexConfig.model_validate(loaded)
+    config = parse_policy_bytes(raw)
 
-    if bootstrap.rollout_state_path:
+    if apply_rollout and bootstrap.rollout_state_path:
         from .policy_rollout import RolloutStore
 
-        selected = RolloutStore(Path(bootstrap.rollout_state_path)).select(
-            scope or str(config_path.parent.resolve())
+        selected = RolloutStore(Path(bootstrap.rollout_state_path), bootstrap).select(
+            _rollout_scope(scope, config_path)
         )
         if selected is not None:
             config = selected
@@ -839,7 +869,7 @@ def _verify_config_signature(
     Raises:
         ValueError: If signature verification fails or signature is missing.
     """
-    from .signing import CosignSigner, Ed25519Signer, Signer, load_public_key, verify_file
+    from .signing import verify_file
 
     signature_path = config_path.with_suffix(config_path.suffix + ".sig")
 
@@ -847,6 +877,17 @@ def _verify_config_signature(
         raise ValueError(
             f"Signature verification required but signature file not found: {signature_path}"
         )
+
+    signer, public_key = _bootstrap_verifier(bootstrap)
+
+    # Verify the signature
+    if not verify_file(config_path, signature_path, public_key, signer, data=data):
+        raise ValueError(f"Signature verification failed for configuration file: {config_path}")
+
+
+def _bootstrap_verifier(bootstrap: BootstrapConfig) -> tuple[Any, bytes]:
+    """Return the signer and public key of the bootstrap policy trust root."""
+    from .signing import CosignSigner, Ed25519Signer, Signer, load_public_key
 
     if bootstrap.public_key_path is None:
         raise ValueError(
@@ -864,14 +905,26 @@ def _verify_config_signature(
         signer = CosignSigner()
     else:
         raise ValueError(f"Unsupported signer type: {bootstrap.signer_type}")
+    return signer, public_key
 
-    # Verify the signature
-    if not verify_file(config_path, signature_path, public_key, signer, data=data):
-        raise ValueError(f"Signature verification failed for configuration file: {config_path}")
+
+def verify_policy_signature(data: bytes, signature: bytes, bootstrap: BootstrapConfig) -> None:
+    """Verify a detached signature over exact policy bytes with the bootstrap key.
+
+    Raises:
+        ValueError: If the signature does not verify.
+    """
+    signer, public_key = _bootstrap_verifier(bootstrap)
+    if not signature or not signer.verify(data, signature, public_key):
+        raise ValueError("Signature verification failed for policy bytes")
 
 
 def load_bootstrap_config(path: Path | None = None) -> BootstrapConfig:
     """Load bootstrap configuration for signature verification.
+
+    Relative ``public_key_path`` and ``rollout_state_path`` values resolve
+    against the bootstrap file's directory, never the process working
+    directory (which is usually the agent's repository).
 
     Args:
         path: Path to bootstrap config file. Defaults to standard locations.
@@ -900,4 +953,14 @@ def load_bootstrap_config(path: Path | None = None) -> BootstrapConfig:
     if not isinstance(loaded, dict):
         raise ValueError("bootstrap configuration root must be a YAML mapping")
 
-    return BootstrapConfig.model_validate(loaded)
+    bootstrap = BootstrapConfig.model_validate(loaded)
+    base = path.absolute().parent
+    updates: dict[str, str] = {}
+    for name in ("public_key_path", "rollout_state_path"):
+        value = getattr(bootstrap, name)
+        if value:
+            resolved = Path(value).expanduser()
+            if not resolved.is_absolute():
+                resolved = base / resolved
+            updates[name] = str(resolved)
+    return bootstrap.model_copy(update=updates) if updates else bootstrap

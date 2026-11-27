@@ -3,13 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
 
+from jev_reflex import model_files
 from jev_reflex.cli import app
+from jev_reflex.model_files import PinnedModel
 from onnx_runtime_fixture import install_runtime
 
 MODEL_ID = "ollaya-dev/coba-68m-ternary"
@@ -51,9 +54,33 @@ def hf(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
     siblings[0].lfs = SimpleNamespace(sha256=hashlib.sha256(payloads[FILES[0]]).hexdigest())
     info = SimpleNamespace(sha=REVISION, siblings=siblings)
 
-    def model_info(repo_id, *, files_metadata, token):
+    def model_info(repo_id, *, revision=None, files_metadata, token):
         assert repo_id == MODEL_ID and files_metadata and token is False
+        assert revision in {None, info.sha}
         return info
+
+    class HubPin(Mapping):
+        """Pin the fake hub's current commit and bytes, as a jrx release would.
+
+        These tests exercise cache mechanics; test_review_broker_models.py covers
+        a hub that disagrees with the pinned release.
+        """
+
+        def __getitem__(self, model_id):
+            if model_id != MODEL_ID:
+                raise KeyError(model_id)
+            return PinnedModel(
+                revision=info.sha,
+                sha256={name: hashlib.sha256(payloads[name]).hexdigest() for name in FILES},
+            )
+
+        def __iter__(self):
+            return iter((MODEL_ID,))
+
+        def __len__(self):
+            return 1
+
+    monkeypatch.setattr(model_files, "PINNED_MODELS", HubPin())
 
     def hf_hub_download(*, repo_id, filename, revision, local_dir, token):
         assert repo_id == MODEL_ID and revision == info.sha and token is False
@@ -289,12 +316,16 @@ def test_pull_preserves_working_snapshot_when_new_bundle_cannot_load(model_home,
     installed = pull_model(MODEL_ID, model_home)
     manifest = model_home / MODEL_ID / "manifest.json"
     previous = manifest.read_bytes()
+    decision = hf.payloads["decision.json"]
     hf.info.sha = "b" * 40
     hf.payloads["decision.json"] = b'{"engine":"unsupported"}'
     result = runner.invoke(app, ["model", "pull"])
     assert result.exit_code == 1
     assert "runtime compatibility check" in result.output
     assert manifest.read_bytes() == previous
+    # The preserved snapshot verifies against the release it was pinned to.
+    hf.info.sha = REVISION
+    hf.payloads["decision.json"] = decision
     assert verify_model(MODEL_ID, model_home).digest == installed.digest
     assert list(manifest.parent.glob("snapshot-*")) == [installed.tokenizer.parent]
 
@@ -311,7 +342,9 @@ def test_snapshot_gc_preserves_other_process_reader_and_legacy_cache(model_home,
     legacy.mkdir()
     script = (
         "import sys\n"
+        "from jev_reflex import model_files\n"
         "from jev_reflex.model_files import verify_model\n"
+        "model_files.PINNED_MODELS = {}  # The fake bundle is not the pinned release.\n"
         "snapshot = verify_model(*sys.argv[1:])\n"
         "print('ready', flush=True)\n"
         "sys.stdin.readline()\n"

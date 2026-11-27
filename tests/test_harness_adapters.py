@@ -295,7 +295,8 @@ def test_all_adapters_review_the_same_dependency_action(name, evaluator) -> None
     elif name == "pi":
         assert output["block"] is True
     else:
-        assert "additionalContext" in output["hookSpecificOutput"]
+        # DeepSeek's Codex-compatible bridge cannot ask, so REVIEW fails closed.
+        assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_codex_review_fails_closed_when_native_hook_cannot_ask() -> None:

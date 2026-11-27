@@ -50,7 +50,7 @@ Use it as a CLI wrapper, an agent hook, or a Model Context Protocol (MCP) gatewa
 
 ### Zero-API-Key Local ONNX Quickstart
 
-Use Python 3.11 or newer and uv. The local extra runs ONNX on CPU with zero PyTorch. Model setup downloads the Apache-2.0 licensed `ollaya-dev/coba-68m-ternary` and verifies its SHA-256 digests. After setup, checks combine offline semantic scoring with deterministic rules and need no `TYPESAFE_API_KEY`.
+Use Python 3.11 or newer and uv. The local extra runs ONNX on CPU with zero PyTorch. Model setup downloads the Apache-2.0 licensed `ollaya-dev/coba-68m-ternary` at the Hugging Face revision pinned in this release and verifies every bundle file against the SHA-256 digests shipped with jrx, so a changed upstream file is refused. Another `MODEL` installs the repository's current revision, and each file must match the digest Hugging Face publishes for that revision. After setup, checks combine offline semantic scoring with deterministic rules and need no `TYPESAFE_API_KEY`.
 
 ```bash
 uv tool install "jev-reflex[local]==0.3.0"
@@ -370,7 +370,7 @@ YAML keys, built-in signal names, conflicting threshold aliases, duplicate MCP
 rules, and inactive controls. Errors return exit code 1; `--strict` also fails on
 warnings. JSON diagnostics omit configuration values. This checks authoring
 mistakes; signature verification and golden policy tests remain separate steps.
-Local policy and bootstrap files are capped at 1 MiB of encoded UTF-8 bytes. Remove large comments from older policies close to the former character limit. The linter also bounds YAML nesting and alias expansion.
+Local policy and bootstrap files are capped at 1 MiB of encoded UTF-8 bytes. Remove large comments from older policies close to the former character limit. The linter parses YAML exactly as the runtime does: it bounds nesting and rejects aliases, merge keys (`<<`), and tags outside the JSON-compatible core schema (such as `!!set`, `!!omap`, `!!binary`, `!!timestamp`, and unquoted dates).
 
 Policy simulation replays the deterministic findings, semantic signals, risk classification, and degraded state stored in new audit entries. It verifies the audit hash chain first, checks that each entry was evaluated under the baseline policy, and reports every `ALLOW`/`REVIEW`/`HOLD` transition. Older entries lacking replay inputs are counted as skipped. Simulation does not rerun the semantic model or reconstruct a command from its audit summary. Enable `audit.enabled: true` in the policy before collecting rollout evidence. When the baseline requires audit signatures and the verification key is stored separately, add `--public-key /trusted/audit.pub` to the command. Keep the baseline file identical to the policy used to collect the audit.
 
@@ -379,7 +379,7 @@ jrx policy simulate --audit /var/log/jrx/audit.jsonl \
   --baseline reflex.yaml --candidate proposed.yaml
 ```
 
-Configure a signed policy source and rollout state in the host bootstrap file (`/etc/jrx/bootstrap.yaml` or `~/.jev-reflex/bootstrap.yaml`). The pinned public key is the **PEM content**, not a path. Keep the state file in a host-controlled directory; JRX writes it with owner-only permissions.
+Configure a signed policy source and rollout state in the host bootstrap file (`/etc/jrx/bootstrap.yaml` or `~/.jev-reflex/bootstrap.yaml`). The pinned public key is the **PEM content**, not a path. Relative `public_key_path` and `rollout_state_path` values resolve against the bootstrap file's directory. With `require_signature: true`, keep the state file in a directory only the operator can write (for example root-owned `/var/lib/jrx`, mode `0755`) and run rollout commands as that operator: evaluation refuses rollout state the evaluating user could rewrite or replace, because signatures cannot prove which revision is active or the canary percentage. New state files are readable (`0644`) by default. See [docs/security.md](docs/security.md#central-policy-source-and-staged-rollout) for recovery steps.
 
 ```yaml
 require_signature: true
@@ -394,7 +394,9 @@ policy_source:
     -----END PUBLIC KEY-----
 ```
 
-The fetched candidate must have a valid Ed25519 signature. Staging requires at least one matching replayed decision. By default, it rejects any new `ALLOW` decision; set `--max-new-allows` only after reviewing the simulation. The baseline file must match the active rollout revision. For signed audit evidence, pass `--public-key` with the audit verification key if its path is supplied separately from the baseline policy. Canary selection hashes the repository scope so the same repository remains in the same cohort at a given percentage.
+The fetched candidate must have a valid Ed25519 signature. Staging requires at least one matching replayed decision. By default, it rejects any replayed decision the candidate newly lets execute: any change to ALLOW, and any decision the baseline's mode blocked that the candidate's mode runs (for example HOLD → REVIEW under `enforce`, or an unchanged HOLD under `advisory`). A candidate whose mode runs a decision class the baseline blocked, such as `enforce` → `advisory`, is always rejected, even with no such decision in the audit. Set `--max-new-allows` only after reviewing the simulation. The baseline file must match the active rollout revision. For signed audit evidence, pass `--public-key` with the audit verification key if its path is supplied separately from the baseline policy. Canary selection hashes the repository root (the nearest directory with `.git`, else the hook's directory) so every subdirectory of a repository stays in the same cohort at a given percentage.
+
+The rollout state keeps each revision's exact signed bytes and signature, and every read verifies them again, so editing the state file cannot substitute a policy. With `require_signature: true`, unsigned revisions are rejected, including state written by earlier releases: remove the state file and stage again. A staged revision becomes the effective policy for `check`, `exec`, and hooks in place of `reflex.yaml`; it is not merged with the local file. Keep the local `reflex.yaml` (and, with `require_signature: true`, its `.sig`): it is still read and verified before the rollout revision is selected. `jrx policy test -c FILE` always tests `FILE` itself.
 
 ```bash
 jrx policy rollout stage --bootstrap /etc/jrx/bootstrap.yaml \
@@ -574,9 +576,9 @@ agent hooks or upstream MCP servers.
 | `jrx harness` | `jrx harness [run\|resume\|status\|acp]` | Optional host utility. Run or resume managed agent sessions, inspect checkpoints, or connect an ACP agent. See the [managed harness guide](docs/agent-harness.md). |
 | `jrx doctor` | `jrx doctor [--config PATH] [--provider NAME] [--models]` | Inspect installed CLIs, authentication and hook status, broker health, and production policy controls. |
 | `jrx init` | `jrx init --preset <dev-safe\|strict-ci\|enterprise\|production>` | Generate a starter `reflex.yaml`. |
-| `jrx model pull` | `jrx model pull [MODEL]` | Download and verify the configured ONNX model. |
+| `jrx model pull` | `jrx model pull [MODEL]` | Download and verify the configured ONNX model; the default model must match the revision and SHA-256 digests pinned in this release. |
 | `jrx model status` | `jrx model status [--json]` | List installed models and report verification status. |
-| `jrx model verify` | `jrx model verify [MODEL]` | Verify installed model artifacts against their SHA-256 digests. |
+| `jrx model verify` | `jrx model verify [MODEL]` | Verify installed model artifacts against their recorded SHA-256 digests and, for the default model, the pinned release. |
 | `jrx setup` | `jrx setup --provider NAME [--apply\|--rollback]` | Preview or apply a merged provider hook configuration, or narrowly remove JRX's entry. |
 | `jrx check` | `jrx check --command "<cmd>"` | Analyze proposed action without executing. Supports `--json`, `--task`, `--stdin-diff`. |
 | `jrx exec` | `jrx exec --mode enforce -- <cmd>` | Evaluate and execute according to mode, access rules, and session limits; optionally use Docker isolation. |

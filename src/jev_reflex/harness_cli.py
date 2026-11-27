@@ -57,6 +57,15 @@ def _show_result(record: dict[str, Any]) -> None:
         raise typer.Exit(3)
 
 
+def _workspace_config(root: Path, config: Path | None) -> Any:
+    """Load the selected workspace's policy, not the process cwd's ``reflex.yaml``."""
+    return load_config(
+        config if config is not None else root / "reflex.yaml",
+        scope=str(root),
+        default_if_missing=config is None,
+    )
+
+
 def _report_error(exc: Exception) -> None:
     typer.echo(f"Harness stopped ({type(exc).__name__}): {_display(str(exc))}", err=True)
     raise typer.Exit(2) from None
@@ -78,7 +87,7 @@ def run(
         from .workspace.state import validate_workspace
 
         root = validate_workspace(workspace)
-        loaded = load_config(config, scope=str(root))
+        loaded = _workspace_config(root, config)
         session = HarnessSession(
             root,
             loaded,
@@ -90,6 +99,9 @@ def run(
         )
         typer.echo(f"Session: {session.session_id}")
         _show_result(session.run(task, on_event=lambda event: typer.echo(_display(event))))
+    except typer.Exit:
+        # click's Exit is a RuntimeError; keep the pending-approval exit code 3.
+        raise
     except KeyboardInterrupt:
         typer.echo("Cancelled. Inspect the checkpoint and workspace before recovery.", err=True)
         raise typer.Exit(130) from None
@@ -118,7 +130,7 @@ def resume(
 
         root = validate_workspace(workspace)
         record = load_session(root, session_id)
-        loaded = load_config(config, scope=str(root))
+        loaded = _workspace_config(root, config)
         session = HarnessSession(
             root,
             loaded,
@@ -135,6 +147,8 @@ def resume(
                 on_event=lambda event: typer.echo(_display(event)),
             )
         )
+    except typer.Exit:
+        raise
     except KeyboardInterrupt:
         typer.echo("Cancelled. Checkpoint retained.", err=True)
         raise typer.Exit(130) from None
@@ -229,7 +243,15 @@ async def _acp_permission(
     return options[0]["optionId"]
 
 
-@app.command("acp", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+@app.command(
+    "acp",
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+        # Options after the agent executable belong to the agent, not to jrx.
+        "allow_interspersed_args": False,
+    },
+)
 def acp_run(
     ctx: typer.Context,
     task: str = typer.Option(..., "--task"),
@@ -253,7 +275,7 @@ def acp_run(
         from .workspace.state import WorkspaceError, validate_workspace
 
         root = validate_workspace(workspace)
-        loaded = load_config(config, scope=str(root))
+        loaded = _workspace_config(root, config)
         if loaded.mode != "enforce" or loaded.access is not None:
             raise WorkspaceError(
                 "ACP harness requires enforce mode without enterprise access configuration"
@@ -288,6 +310,8 @@ def acp_run(
         typer.echo(_display({"session_id": result.session_id, "stop_reason": result.stop_reason}))
         if result.stop_reason != "end_turn":
             raise typer.Exit(2)
+    except typer.Exit:
+        raise
     except KeyboardInterrupt:
         typer.echo("Cancelled ACP session.", err=True)
         raise typer.Exit(130) from None

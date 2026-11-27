@@ -9,6 +9,13 @@ from typing import Protocol
 from .git_inspection import inspect_git, status_paths
 from .models import EvaluationContext, ProposedAction
 
+TRUNCATION_MARKER = "...[truncated by jev-reflex]..."
+# Deterministic checks parse a proposed diff whole (protected paths, secrets, and
+# build hooks can sit anywhere in it); only the semantic state is cut to
+# ``max_diff_chars``. A diff beyond this hard memory bound is still cut, and the
+# tamper guard fails closed when it sees that cut.
+MAX_DETERMINISTIC_DIFF_CHARS = 8_000_000
+
 _HOST_PROVIDER_KEYS = (
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -48,7 +55,7 @@ def bounded_text(value: str | None, limit: int) -> str:
     value = value or ""
     if len(value) <= limit:
         return value
-    marker = "\n...[truncated by jev-reflex]...\n"
+    marker = f"\n{TRUNCATION_MARKER}\n"
     if limit <= len(marker):
         return value[:limit]
     available = limit - len(marker)
@@ -146,6 +153,14 @@ class RepositoryContextProvider:
             truncated = truncated or len(value) > limit
             return bounded_text(value, limit)
 
+        if stdin_diff or proposed_action.type == "observation":
+            # The diff is the proposal: keep it whole for the deterministic checks.
+            # The evaluator bounds the semantic copy to ``max_diff_chars``.
+            truncated = truncated or len(diff) > self.max_diff_chars
+            git_diff = bounded_text(diff, max(self.max_diff_chars, MAX_DETERMINISTIC_DIFF_CHARS))
+        else:
+            git_diff = bound(diff, self.max_diff_chars)
+
         return EvaluationContext(
             user_task=bound(user_task, self.max_context_chars),
             repository=bound(repository, 500),
@@ -153,7 +168,7 @@ class RepositoryContextProvider:
             working_directory=bound(str(self.working_directory), 1_000),
             proposed_action=proposed_action,
             changed_files=[bound(item, 1_000) for item in files[:500]],
-            git_diff=bound(diff, self.max_diff_chars),
+            git_diff=git_diff,
             proposed_diff=bool(stdin_diff),
             test_results=bound(test_results if self.include_tests else "", self.max_context_chars),
             recent_context=bound(recent_context, self.max_context_chars),

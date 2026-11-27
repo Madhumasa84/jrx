@@ -70,6 +70,63 @@ def _load_message(raw: bytes, *, exact_numbers: bool = False) -> Any:
     )
 
 
+def _encode_json(value: Any, parts: list[str]) -> None:
+    if isinstance(value, _JSONNumber):
+        parts.append(value.literal)
+    elif isinstance(value, dict):
+        parts.append("{")
+        for index, (key, item) in enumerate(value.items()):
+            if not isinstance(key, str):
+                raise TypeError("JSON object keys must be strings")
+            if index:
+                parts.append(",")
+            parts.append(json.dumps(key, ensure_ascii=True))
+            parts.append(":")
+            _encode_json(item, parts)
+        parts.append("}")
+    elif isinstance(value, list | tuple):
+        parts.append("[")
+        for index, item in enumerate(value):
+            if index:
+                parts.append(",")
+            _encode_json(item, parts)
+        parts.append("]")
+    else:
+        parts.append(json.dumps(value, ensure_ascii=True, allow_nan=False))
+
+
+def _encode_message(message: Any) -> bytes:
+    """Serialize one message as a compact ASCII line.
+
+    The gateway forwards only this re-serialization, never the bytes it
+    received. Every receiver then frames and parses exactly the message that
+    policy checked: no CR, U+2028, or other raw separator survives.
+    """
+
+    parts: list[str] = []
+    _encode_json(message, parts)
+    return "".join(parts).encode("ascii") + b"\n"
+
+
+def _id_key(value: object) -> str:
+    """Return the matching key for a JSON-RPC request ID.
+
+    Numbers match by value (``2``, ``2.0`` and ``2e0`` are one ID), as SDK
+    clients compare them. Strings never match numbers.
+    """
+
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=True)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError("invalid JSON-RPC request ID")
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return json.dumps(value)
+
+
+_MISSING = object()
+
+
 def _review_json(value: Any) -> str:
     if isinstance(value, _JSONNumber):
         return value.literal
@@ -154,6 +211,9 @@ class MCPGateway:
         self._pending_lock = threading.Lock()
         self._catalog_lock = threading.Lock()
         self._pending: dict[str, _PendingTool] = {}
+        # Every request forwarded upstream and not yet answered, keyed by _id_key,
+        # mapped to the ID exactly as the client sent it.
+        self._outstanding: dict[str, object] = {}
         self._upstream_closed = False
         self._expired_ids: set[str] = set()
         names = [(rule.server, rule.name) for rule in config.mcp.tools]
@@ -290,24 +350,76 @@ class MCPGateway:
                 return False
         return True
 
-    def _send(self, message: Mapping[str, Any]) -> None:
-        data = json.dumps(message, separators=(",", ":"), ensure_ascii=True).encode() + b"\n"
+    def _write(self, data: bytes) -> None:
         with self._output_lock:
             self.sink.write(data)
             self.sink.flush()
 
-    def _forward_upstream(self, process: subprocess.Popen[bytes], raw: bytes) -> None:
+    def _send(self, message: Mapping[str, Any]) -> None:
+        self._write(_encode_message(message))
+
+    def _forward_upstream(
+        self, process: subprocess.Popen[bytes], payload: bytes, *, tool_call: bool = False
+    ) -> None:
+        """Write one re-serialized message upstream; callers never pass client bytes."""
         # Only tools/call messages need action authorization; protocol initialization
         # must work before a tool call consumes a nonce.
-        if self.config.intent.enabled or self.config.authority.enabled:
-            if _load_message(raw).get("method") == "tools/call":
-                from .agent_controls import check_liveness
+        if tool_call and (self.config.intent.enabled or self.config.authority.enabled):
+            from .agent_controls import check_liveness
 
-                check_liveness(self.config)
+            check_liveness(self.config)
         if process.poll() is not None or process.stdin is None:
             raise ValueError("upstream MCP server is unavailable")
-        process.stdin.write(raw)
+        process.stdin.write(payload)
         process.stdin.flush()
+
+    def _forward_unanswered(self, process: subprocess.Popen[bytes], payload: bytes) -> None:
+        """Forward a notification or response; nothing can report its failure."""
+        try:
+            self._forward_upstream(process, payload)
+        except (OSError, ValueError):
+            pass
+
+    def _forward_request(
+        self,
+        process: subprocess.Popen[bytes],
+        message: dict[str, Any],
+        key: str,
+        client_id: object,
+        payload: bytes,
+    ) -> None:
+        error: tuple[int, str] | None = None
+        with self._catalog_lock, self._pending_lock:
+            if key in self._outstanding or key in self._expired_ids:
+                error = (-32600, "Duplicate request ID")
+            elif self._upstream_closed:
+                error = (-32603, "upstream MCP server is unavailable")
+            else:
+                self._outstanding[key] = client_id
+                if message["method"] == "tools/list":
+                    params = message.get("params")
+                    cursor = params.get("cursor") if isinstance(params, dict) else None
+                    generation: int | None
+                    if cursor is None:
+                        self._invalidate_catalog_locked()
+                        generation = self._catalog_generation
+                    elif isinstance(cursor, str):
+                        generation = self._catalog_cursors.get(cursor)
+                    else:
+                        generation = None
+                    self._catalog_requests[key] = generation
+        if error is not None:
+            self._send(_rpc_error(client_id, *error))
+            return
+        try:
+            self._forward_upstream(process, payload)
+        except (OSError, ValueError):
+            with self._pending_lock:
+                registered = self._outstanding.pop(key, _MISSING) is not _MISSING
+                self._catalog_requests.pop(key, None)
+            # The reader may already have answered it while shutting down.
+            if registered:
+                self._send(_rpc_error(client_id, -32603, "upstream MCP server is unavailable"))
 
     def _stop_upstream(self, process: subprocess.Popen[bytes]) -> int:
         """Stop the isolated upstream group, including children ignoring SIGTERM."""
@@ -342,10 +454,42 @@ class MCPGateway:
         with self._pending_lock:
             pending = self._pending.pop(key, None)
             if pending is not None:
+                self._outstanding.pop(key, None)
                 self._expired_ids.add(key)
         if pending is not None:
             self._send(pending.error("MCP tool execution time limit reached"))
             self._stop_upstream(process)
+
+    def _match_response(self, message: dict[str, Any]) -> dict[str, Any] | None:
+        """Return the response to send the client, or None to drop it.
+
+        Only a response to an outstanding forwarded request reaches the client,
+        and it carries that request's ID exactly as the client sent it. An ID
+        spelled differently (``2.0`` for ``2``) cannot pass a catalog page to
+        the client unvalidated.
+        """
+        try:
+            key = _id_key(message["id"])
+        except ValueError:
+            return None
+        with self._pending_lock:
+            if key in self._expired_ids:
+                # The request timed out and already received an error.
+                self._expired_ids.discard(key)
+                return None
+            client_id = self._outstanding.pop(key, _MISSING)
+            pending = self._pending.pop(key, None)
+            is_catalog_request = key in self._catalog_requests
+            catalog_generation = self._catalog_requests.pop(key, None)
+        if pending is not None:
+            pending.timer.cancel()
+        if client_id is _MISSING:
+            return None
+        if is_catalog_request:
+            mismatch = self._validate_tool_catalog(message, catalog_generation)
+            if mismatch:
+                return _rpc_error(client_id, -32002, mismatch)
+        return {**message, "id": client_id}
 
     def _read_upstream(self, process: subprocess.Popen[bytes]) -> None:
         assert process.stdout is not None
@@ -359,40 +503,39 @@ class MCPGateway:
                 except (ValueError, UnicodeDecodeError, RecursionError):
                     self._stop_upstream(process)
                     break
-                if (
-                    isinstance(message, dict)
-                    and message.get("method") == "notifications/tools/list_changed"
-                ):
+                if not isinstance(message, dict):
+                    continue
+                if message.get("method") == "notifications/tools/list_changed":
                     with self._catalog_lock:
                         self._invalidate_catalog_locked()
-                if isinstance(message, dict) and "id" in message and "method" not in message:
-                    key = json.dumps(message["id"], sort_keys=True)
-                    with self._pending_lock:
-                        pending = self._pending.pop(key, None)
-                        is_catalog_request = key in self._catalog_requests
-                        catalog_generation = self._catalog_requests.pop(key, None)
-                        expired = key in self._expired_ids
-                        self._expired_ids.discard(key)
-                    if pending is not None:
-                        pending.timer.cancel()
-                    elif expired:
-                        # The request timed out and already received an error.
+                if "id" in message and "method" not in message:
+                    response = self._match_response(message)
+                    if response is None:
                         continue
-                    if is_catalog_request:
-                        mismatch = self._validate_tool_catalog(message, catalog_generation)
-                        if mismatch:
-                            self._send(_rpc_error(message["id"], -32002, mismatch))
-                            continue
-                if isinstance(message, dict):
-                    self._send(message)
+                    message = response
+                try:
+                    data = _encode_message(message)
+                except (TypeError, ValueError, RecursionError):
+                    self._stop_upstream(process)
+                    break
+                self._write(data)
         finally:
             with self._pending_lock:
                 self._upstream_closed = True
-                outstanding = list(self._pending.values())
+                outstanding_tools = list(self._pending.values())
+                unanswered = [
+                    client_id
+                    for key, client_id in self._outstanding.items()
+                    if key not in self._pending
+                ]
                 self._pending.clear()
-            for pending in outstanding:
+                self._outstanding.clear()
+                self._catalog_requests.clear()
+            for pending in outstanding_tools:
                 pending.timer.cancel()
                 self._send(pending.error("upstream MCP server stopped"))
+            for client_id in unanswered:
+                self._send(_rpc_error(client_id, -32603, "upstream MCP server stopped"))
 
     def _authorize_tool(
         self, name: str, arguments: dict[str, Any], request_id: object, raw: bytes
@@ -473,28 +616,47 @@ class MCPGateway:
         process: subprocess.Popen[bytes],
         request_id: object,
         key: str,
-        raw: bytes,
+        payload: bytes,
         *,
         approved: bool,
+        tool_name: str,
     ) -> None:
         timeout = self.config.mcp.timeout_seconds
         if self.config.session.enabled:
             timeout = min(timeout, self.config.session.max_execution_seconds)
         timer = threading.Timer(timeout, self._expired, args=(process, key))
-        with self._pending_lock:
-            if self._upstream_closed:
-                message = "upstream MCP server is unavailable"
-                if approved:
-                    message += ". Approval spent."
-                self._send(_tool_error(request_id, message))
-                return
-            self._pending[key] = _PendingTool(request_id, timer, approved)
+        failure = None
+        # A catalog notification may arrive while evaluation or approval checks are
+        # running, so recheck the pin and register the call under the catalog lock.
+        # The write itself happens after the lock is released: the reader thread
+        # takes the lock to drain upstream output, and a write blocked on a full
+        # pipe while holding it would deadlock with an upstream blocked on output.
+        with self._catalog_lock:
+            expected = self._pinned_schemas.get(tool_name)
+            if expected is not None and self._validated_schemas.get(tool_name) != expected:
+                failure = "MCP tool schema has not been verified against policy"
+            else:
+                with self._pending_lock:
+                    if self._upstream_closed:
+                        failure = "upstream MCP server is unavailable"
+                    elif key in self._outstanding or key in self._expired_ids:
+                        failure = "Duplicate request ID"
+                    else:
+                        self._pending[key] = _PendingTool(request_id, timer, approved)
+                        self._outstanding[key] = request_id
+        if failure is not None:
+            if approved:
+                failure += ". Approval spent."
+            self._send(_tool_error(request_id, failure))
+            return
         timer.start()
         try:
-            self._forward_upstream(process, raw)
+            self._forward_upstream(process, payload, tool_call=True)
         except (OSError, ValueError):
             with self._pending_lock:
                 pending = self._pending.pop(key, None)
+                if pending is not None:
+                    self._outstanding.pop(key, None)
             if pending is not None:
                 pending.timer.cancel()
                 self._send(pending.error("upstream MCP server is unavailable"))
@@ -503,50 +665,63 @@ class MCPGateway:
         if len(raw) > self.config.mcp.max_message_bytes:
             self._send(_rpc_error(None, -32600, "MCP message exceeds configured limit"))
             return
+        line = raw[:-1] if raw.endswith(b"\n") else raw
+        if line.endswith(b"\r"):
+            line = line[:-1]
+        if b"\r" in line:
+            # CR is JSON whitespace, but universal-newline readers split on it.
+            self._send(_rpc_error(None, -32600, "MCP message contains a bare carriage return"))
+            return
         try:
-            message = _load_message(raw)
+            message = _load_message(line)
+            exact = _load_message(line, exact_numbers=True)
         except (ValueError, UnicodeDecodeError, RecursionError):
             self._send(_rpc_error(None, -32700, "Invalid JSON"))
             return
-        if not isinstance(message, dict):
+        if not isinstance(message, dict) or not isinstance(exact, dict):
             self._send(_rpc_error(None, -32600, "Invalid JSON-RPC message"))
             return
-        if message.get("method") != "tools/call":
-            if message.get("method") == "tools/list" and message.get("id") is not None:
-                params = message.get("params")
-                key = json.dumps(message["id"], sort_keys=True)
-                with self._catalog_lock, self._pending_lock:
-                    if key in self._catalog_requests or key in self._pending:
-                        self._send(_rpc_error(message["id"], -32600, "Duplicate request ID"))
-                        return
-                    cursor = params.get("cursor") if isinstance(params, dict) else None
-                    generation: int | None
-                    if cursor is None:
-                        self._invalidate_catalog_locked()
-                        generation = self._catalog_generation
-                    elif isinstance(cursor, str):
-                        generation = self._catalog_cursors.get(cursor)
-                    else:
-                        generation = None
-                    self._catalog_requests[key] = generation
-            self._forward_upstream(process, raw)
+        try:
+            payload = _encode_message(exact)
+        except (TypeError, ValueError, RecursionError):
+            self._send(_rpc_error(None, -32700, "Invalid JSON"))
             return
-        request_id = message.get("id")
-        if request_id is None:
+        method = message.get("method", _MISSING)
+        if method is not _MISSING and not isinstance(method, str):
+            self._send(_rpc_error(None, -32600, "Invalid JSON-RPC message"))
+            return
+        if method == "tools/call" and message.get("id") is None:
             self._send(_rpc_error(None, -32600, "Tool call requires a request ID"))
             return
-        key = json.dumps(request_id, sort_keys=True)
+        if "id" not in message or method is _MISSING:
+            if method is _MISSING and "id" not in message:
+                self._send(_rpc_error(None, -32600, "Invalid JSON-RPC message"))
+            else:
+                # A notification, or a response to a server-initiated request.
+                self._forward_unanswered(process, payload)
+            return
+        request_id = message["id"]
+        client_id = exact["id"]
+        try:
+            key = _id_key(request_id)
+        except ValueError:
+            self._send(_rpc_error(None, -32600, "Invalid JSON-RPC request ID"))
+            return
+        if method != "tools/call":
+            self._forward_request(process, message, key, client_id, payload)
+            return
         with self._pending_lock:
-            if key in self._pending or key in self._catalog_requests:
-                self._send(_rpc_error(request_id, -32600, "Duplicate request ID"))
-                return
+            duplicate = key in self._outstanding or key in self._expired_ids
+        if duplicate:
+            self._send(_rpc_error(client_id, -32600, "Duplicate request ID"))
+            return
         params = message.get("params")
         if (
             not isinstance(params, dict)
             or not isinstance(params.get("name"), str)
             or not isinstance(params.get("arguments", {}), dict)
         ):
-            self._send(_rpc_error(request_id, -32602, "Invalid tool call parameters"))
+            self._send(_rpc_error(client_id, -32602, "Invalid tool call parameters"))
             return
         try:
             if self.config.session.enabled:
@@ -559,7 +734,7 @@ class MCPGateway:
                 }
             )
             reason, approval_scope = self._authorize_tool(
-                params["name"], params.get("arguments", {}), request_id, raw
+                params["name"], params.get("arguments", {}), request_id, payload
             )
             if (
                 reason is not None
@@ -574,26 +749,25 @@ class MCPGateway:
                     ),
                 )
         except Exception:
-            self._send(_tool_error(request_id, "MCP policy or session check failed"))
+            self._send(_tool_error(client_id, "MCP policy or session check failed"))
             return
         if reason is not None:
-            self._send(_tool_error(request_id, reason))
+            self._send(_tool_error(client_id, reason))
             return
         schema_error = "MCP tool schema has not been verified against policy"
         if approval_scope is not None and not self._schema_is_verified(params["name"]):
-            self._send(_tool_error(request_id, schema_error))
+            self._send(_tool_error(client_id, schema_error))
             return
-        if not self._check_approval(request_id, approval_scope):
+        if not self._check_approval(client_id, approval_scope):
             return
-        # A catalog notification may arrive while evaluation or approval checks are running.
-        with self._catalog_lock:
-            expected = self._pinned_schemas.get(params["name"])
-            if expected is not None and self._validated_schemas.get(params["name"]) != expected:
-                if approval_scope is not None:
-                    schema_error += ". Approval spent."
-                self._send(_tool_error(request_id, schema_error))
-                return
-            self._dispatch_tool(process, request_id, key, raw, approved=approval_scope is not None)
+        self._dispatch_tool(
+            process,
+            client_id,
+            key,
+            payload,
+            approved=approval_scope is not None,
+            tool_name=params["name"],
+        )
 
     def _check_approval(self, request_id: object, scope: _ToolReview | None) -> bool:
         if scope is None:
